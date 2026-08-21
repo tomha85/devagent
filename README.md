@@ -66,12 +66,22 @@ XAI_API_KEY=
 
 ## Usage
 
+Primary command:
+
 ```bash
 python main.py fix \
   --repo /path/to/your-app \
   --task "Fix the bug where the user ID is missing" \
   --provider claude \
   --max-steps 8
+```
+
+For compatibility with the original DevAgent spec, `run` is an alias for `fix`:
+
+```bash
+python main.py run \
+  --repo /path/to/your-app \
+  --task "Fix the bug where the user ID is missing"
 ```
 
 `--provider` is optional. When omitted, DevAgent uses `DEFAULT_PROVIDER` from `.env`.
