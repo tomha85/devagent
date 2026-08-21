@@ -76,7 +76,7 @@ python main.py fix \
   --max-steps 8
 ```
 
-For compatibility with the original DevAgent spec, `run` is an alias for `fix`:
+The original DevAgent spec used `run`; this implementation supports that as a compatibility alias:
 
 ```bash
 python main.py run \
