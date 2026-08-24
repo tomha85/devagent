@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -36,10 +37,20 @@ class Workspace:
         candidates = [base] if base.is_file() else base.rglob("*")
         results: list[str] = []
         for candidate in candidates:
-            if len(results) >= min(limit, 1000):
+            if len(results) >= min(limit, 12_000):
                 break
             relative = candidate.relative_to(self.root)
-            if not candidate.is_file() or any(part in SKIP_DIRECTORIES for part in relative.parts) or is_secret_path(relative):
+            try:
+                resolved = candidate.resolve()
+                resolved_relative = resolved.relative_to(self.root)
+            except (OSError, ValueError):
+                continue
+            if (
+                not resolved.is_file()
+                or any(part in SKIP_DIRECTORIES for part in relative.parts)
+                or is_secret_path(relative)
+                or is_secret_path(resolved_relative)
+            ):
                 continue
             rendered = relative.as_posix()
             if fnmatch.fnmatch(candidate.name, pattern) or fnmatch.fnmatch(rendered, pattern):
@@ -61,7 +72,10 @@ class Workspace:
             raise SafetyError("Search query cannot be empty")
         matches: list[str] = []
         for relative in self.list_files(path, "*", limit=1000):
-            target = self.root / relative
+            try:
+                target = self.paths.resolve(relative, allow_missing=False)
+            except SafetyError:
+                continue
             if target.stat().st_size > 2_000_000:
                 continue
             try:
@@ -128,9 +142,42 @@ class Workspace:
             stderr = (exc.stderr or "")[-24_000:] if isinstance(exc.stderr, str) else ""
         duration = time.monotonic() - started
         classification = None if exit_code == 0 else classify_failure(stdout, stderr, timed_out)
-        result = VerificationResult(argv, exit_code, duration, stdout, stderr, classification, self.revision, phase, timed_out, baseline)
+        tests_run, tests_passed = _test_counts(stdout, stderr, exit_code)
+        result = VerificationResult(
+            command=argv,
+            exit_code=exit_code,
+            duration_seconds=duration,
+            stdout=stdout,
+            stderr=stderr,
+            classification=classification,
+            revision=self.revision,
+            phase=phase,
+            timed_out=timed_out,
+            baseline=baseline,
+            tests_run=tests_run,
+            tests_passed=tests_passed,
+        )
         self.artifacts.record("command_finished", result=result)
         return result
+
+
+def _test_counts(stdout: str, stderr: str, exit_code: int | None) -> tuple[int | None, int | None]:
+    text = f"{stdout}\n{stderr}"
+    summary = "\n".join(text.splitlines()[-8:])
+    counts: dict[str, int] = {}
+    for value, status in re.findall(
+        r"(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed)(?:\b|$)", summary, re.IGNORECASE
+    ):
+        normalized = "error" if status.casefold().startswith("error") else status.casefold()
+        counts[normalized] = max(counts.get(normalized, 0), int(value))
+    if counts:
+        tests_run = sum(counts.get(name, 0) for name in ("passed", "failed", "error", "skipped", "xfailed", "xpassed"))
+        return tests_run, counts.get("passed", 0)
+    unittest_match = re.search(r"Ran\s+(\d+)\s+tests?", text)
+    if unittest_match:
+        tests_run = int(unittest_match.group(1))
+        return tests_run, tests_run if exit_code == 0 else None
+    return None, None
 
 
 def classify_failure(stdout: str, stderr: str, timed_out: bool = False) -> FailureClass:

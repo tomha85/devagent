@@ -34,51 +34,222 @@ from devagent.workspace import Workspace
 from devagent.worktree import select_worktree
 
 
+_BUILTIN_GIT_VERIFICATION: dict[tuple[str, ...], str] = {
+    ("git", "diff", "--check"): "harness",
+}
+
+_NON_EMPTY_STRING = {"type": "string", "minLength": 1, "pattern": r"\S"}
+_STRING_LIST = {"type": "array", "items": _NON_EMPTY_STRING}
+_CONFIDENCE = {"type": "number", "minimum": 0.0, "maximum": 1.0}
+
+_REPLACE_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "replace_text"},
+        "arguments": {
+            "type": "object",
+            "properties": {
+                "path": _NON_EMPTY_STRING,
+                "old": _NON_EMPTY_STRING,
+                "new": {"type": "string"},
+            },
+            "required": ["path", "old", "new"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_COUNTED_REPLACE_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "replace_text"},
+        "arguments": {
+            "type": "object",
+            "properties": {
+                "path": _NON_EMPTY_STRING,
+                "old": _NON_EMPTY_STRING,
+                "new": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1},
+            },
+            "required": ["path", "old", "new", "count"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_WRITE_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "write_file"},
+        "arguments": {
+            "type": "object",
+            "properties": {"path": _NON_EMPTY_STRING, "content": {"type": "string"}},
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_ACTION = {"anyOf": [_REPLACE_ACTION, _COUNTED_REPLACE_ACTION, _WRITE_ACTION]}
+
 UNDERSTANDING_SCHEMA = {
     "type": "object",
+    "properties": {
+        "problem": _NON_EMPTY_STRING,
+        "expected_behavior": _NON_EMPTY_STRING,
+        "affected_paths": {**_STRING_LIST, "minItems": 1},
+        "root_cause": _NON_EMPTY_STRING,
+        "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "statement": _NON_EMPTY_STRING,
+                    "paths": {**_STRING_LIST, "minItems": 1},
+                    "confidence": _CONFIDENCE,
+                },
+                "required": ["statement", "paths", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "proposed_solution": {**_STRING_LIST, "minItems": 1},
+        "confidence": _CONFIDENCE,
+    },
     "required": ["problem", "expected_behavior", "affected_paths", "root_cause", "evidence", "proposed_solution", "confidence"],
+    "additionalProperties": False,
 }
-PLAN_SCHEMA = {"type": "object", "required": ["files_to_inspect", "implementation", "verification", "rationale"]}
-IMPLEMENT_SCHEMA = {"type": "object", "required": ["actions", "summary"]}
-DIAGNOSE_SCHEMA = {"type": "object", "required": ["decision", "updated_hypothesis", "actions"]}
-REVIEW_SCHEMA = {"type": "object", "required": ["approved", "issues", "summary"]}
+PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "files_to_inspect": {**_STRING_LIST, "minItems": 1},
+        "implementation": {**_STRING_LIST, "minItems": 1},
+        "verification": {
+            "type": "array",
+            "items": {"type": "array", "minItems": 1, "items": _NON_EMPTY_STRING},
+        },
+        "rationale": _NON_EMPTY_STRING,
+    },
+    "required": ["files_to_inspect", "implementation", "verification", "rationale"],
+    "additionalProperties": False,
+}
+IMPLEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "actions": {"type": "array", "minItems": 1, "items": _ACTION},
+        "summary": {"anyOf": [_NON_EMPTY_STRING, {**_STRING_LIST, "minItems": 1}]},
+    },
+    "required": ["actions", "summary"],
+    "additionalProperties": False,
+}
+DIAGNOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["fix", "replan", "block"]},
+        "updated_hypothesis": _NON_EMPTY_STRING,
+        "actions": {"type": "array", "items": _ACTION},
+    },
+    "required": ["decision", "updated_hypothesis", "actions"],
+    "additionalProperties": False,
+}
+REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "approved": {"type": "boolean"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+                    "reason": _NON_EMPTY_STRING,
+                    "path": {"anyOf": [_NON_EMPTY_STRING, {"type": "null"}]},
+                },
+                "required": ["severity", "reason", "path"],
+                "additionalProperties": False,
+            },
+        },
+        "summary": _NON_EMPTY_STRING,
+    },
+    "required": ["approved", "issues", "summary"],
+    "additionalProperties": False,
+}
 
 
 class OrchestrationError(RuntimeError):
     pass
 
 
-def _strings(value: Any, field: str) -> list[str]:
+def _strings(value: Any, field: str, role: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-        raise OrchestrationError(f"Provider field '{field}' must be a list of non-empty strings")
+        raise OrchestrationError(
+            f"Invalid {role} response field '{field}': expected array of non-empty strings; received {type(value).__name__}"
+        )
     return [item.strip() for item in value]
+
+
+def _non_empty_string(value: Any, role: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise OrchestrationError(f"Invalid {role} response field '{field}': expected non-empty string; received {type(value).__name__}")
+    return value.strip()
+
+
+def _bounded_confidence(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        safe_actual = repr(value) if isinstance(value, str) and value.lower() in {"low", "medium", "high"} else type(value).__name__
+        raise OrchestrationError(
+            f"Invalid understand response field '{field}': expected number from 0.0 through 1.0; received {safe_actual}"
+        )
+    confidence = float(value)
+    if not 0.0 <= confidence <= 1.0:
+        raise OrchestrationError(
+            f"Invalid understand response field '{field}': expected number from 0.0 through 1.0; received {value!r}"
+        )
+    return confidence
 
 
 def _understanding(response: dict[str, Any]) -> Understanding:
     try:
+        expected = {"problem", "expected_behavior", "affected_paths", "root_cause", "evidence", "proposed_solution", "confidence"}
+        if set(response) != expected:
+            raise TypeError(f"expected exactly fields {sorted(expected)!r}")
         raw_evidence = response["evidence"]
-        if not isinstance(raw_evidence, list):
-            raise TypeError
-        evidence = [
-            Evidence(str(item["statement"]), tuple(_strings(item["paths"], "evidence.paths")), float(item.get("confidence", 1.0)))
-            for item in raw_evidence
-            if isinstance(item, dict)
-        ]
+        if not isinstance(raw_evidence, list) or not raw_evidence:
+            raise TypeError("evidence must be a non-empty array")
+        evidence: list[Evidence] = []
+        for index, item in enumerate(raw_evidence):
+            if not isinstance(item, dict) or set(item) != {"statement", "paths", "confidence"}:
+                raise TypeError(f"evidence[{index}] must contain exactly statement, paths, and confidence")
+            evidence.append(
+                Evidence(
+                    _non_empty_string(item["statement"], "understand", f"evidence[{index}].statement"),
+                    tuple(_strings(item["paths"], f"evidence[{index}].paths", "understand")),
+                    _bounded_confidence(item["confidence"], f"evidence[{index}].confidence"),
+                )
+            )
         return Understanding(
-            problem=str(response["problem"]).strip(),
-            expected_behavior=str(response["expected_behavior"]).strip(),
-            affected_paths=_strings(response["affected_paths"], "affected_paths"),
-            root_cause=str(response["root_cause"]).strip(),
+            problem=_non_empty_string(response["problem"], "understand", "problem"),
+            expected_behavior=_non_empty_string(response["expected_behavior"], "understand", "expected_behavior"),
+            affected_paths=_strings(response["affected_paths"], "affected_paths", "understand"),
+            root_cause=_non_empty_string(response["root_cause"], "understand", "root_cause"),
             evidence=evidence,
-            proposed_solution=_strings(response["proposed_solution"], "proposed_solution"),
-            confidence=float(response["confidence"]),
+            proposed_solution=_strings(response["proposed_solution"], "proposed_solution", "understand"),
+            confidence=_bounded_confidence(response["confidence"], "confidence"),
         )
+    except OrchestrationError:
+        raise
     except (KeyError, TypeError, ValueError) as exc:
         raise OrchestrationError(f"Invalid understanding response: {exc}") from exc
 
 
 def _plan(response: dict[str, Any], fallback: Sequence[tuple[str, ...]]) -> EngineeringPlan:
     try:
+        expected = {"files_to_inspect", "implementation", "verification", "rationale"}
+        if set(response) != expected:
+            raise TypeError(f"expected exactly fields {sorted(expected)!r}")
         commands: list[tuple[str, ...]] = []
         raw_commands = response["verification"]
         if not isinstance(raw_commands, list):
@@ -88,33 +259,47 @@ def _plan(response: dict[str, Any], fallback: Sequence[tuple[str, ...]]) -> Engi
                 raise TypeError("verification commands must be argv arrays")
             commands.append(tuple(command))
         return EngineeringPlan(
-            _strings(response["files_to_inspect"], "files_to_inspect"),
-            _strings(response["implementation"], "implementation"),
+            _strings(response["files_to_inspect"], "files_to_inspect", "plan"),
+            _strings(response["implementation"], "implementation", "plan"),
             commands or list(fallback),
-            str(response["rationale"]).strip(),
+            _non_empty_string(response["rationale"], "plan", "rationale"),
         )
+    except OrchestrationError:
+        raise
     except (KeyError, TypeError) as exc:
         raise OrchestrationError(f"Invalid plan response: {exc}") from exc
 
 
 def _review(response: dict[str, Any]) -> ReviewDecision:
     try:
+        if set(response) != {"approved", "issues", "summary"}:
+            raise TypeError("expected exactly approved, issues, and summary")
         if not isinstance(response["approved"], bool) or not isinstance(response["issues"], list):
-            raise TypeError
-        issues = [
-            ReviewIssue(str(item["severity"]), str(item["reason"]), item.get("path"))
-            for item in response["issues"]
-            if isinstance(item, dict) and "severity" in item and "reason" in item
-        ]
+            raise TypeError("approved must be boolean and issues must be an array")
+        issues: list[ReviewIssue] = []
+        for index, item in enumerate(response["issues"]):
+            if not isinstance(item, dict) or set(item) != {"severity", "reason", "path"}:
+                raise TypeError(f"issues[{index}] must contain exactly severity, reason, and path")
+            severity = _non_empty_string(item["severity"], "review", f"issues[{index}].severity")
+            if severity not in {"low", "medium", "high", "critical"}:
+                raise TypeError(f"issues[{index}].severity is unsupported")
+            path = item["path"]
+            if path is not None:
+                path = _non_empty_string(path, "review", f"issues[{index}].path")
+            issues.append(ReviewIssue(severity, _non_empty_string(item["reason"], "review", f"issues[{index}].reason"), path))
         approved = response["approved"]
         if approved and issues:
             raise OrchestrationError("Reviewer cannot approve while returning issues")
-        return ReviewDecision(approved, issues, str(response.get("summary", "")).strip())
+        return ReviewDecision(approved, issues, _non_empty_string(response["summary"], "review", "summary"))
+    except OrchestrationError:
+        raise
     except (KeyError, TypeError) as exc:
-        raise OrchestrationError("Invalid review response") from exc
+        raise OrchestrationError(f"Invalid review response: {exc}") from exc
 
 
 def _execute_actions(workspace: Workspace, response: dict[str, Any], allowed_paths: set[str]) -> list[str]:
+    if not isinstance(response, dict) or set(response) != {"actions", "summary"}:
+        raise OrchestrationError("Invalid implement response: expected exactly actions and summary")
     actions = response.get("actions")
     if not isinstance(actions, list) or not actions:
         raise OrchestrationError("Implementation requires at least one structured action")
@@ -130,9 +315,14 @@ def _execute_actions(workspace: Workspace, response: dict[str, Any], allowed_pat
             raise OrchestrationError(f"Action path was not inspected/planned: {path}")
         if tool == "replace_text":
             required = {"path", "old", "new"}
-            if not required.issubset(arguments) or not all(isinstance(arguments[key], str) for key in required):
-                raise OrchestrationError("replace_text requires string path, old, and new")
-            workspace.replace_text(path, arguments["old"], arguments["new"], int(arguments.get("count", 1)))
+            if frozenset(arguments) not in {frozenset(required), frozenset({*required, "count"})}:
+                raise OrchestrationError("replace_text arguments must contain only path, old, new, and optional count")
+            if not all(isinstance(arguments[key], str) for key in required) or not arguments["old"]:
+                raise OrchestrationError("replace_text requires string path, non-empty old, and string new")
+            count = arguments.get("count", 1)
+            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                raise OrchestrationError("replace_text count must be an integer greater than zero")
+            workspace.replace_text(path, arguments["old"], arguments["new"], count)
         else:
             if set(arguments) != {"path", "content"} or not isinstance(arguments.get("content"), str):
                 raise OrchestrationError("write_file requires only string path and content")
@@ -186,6 +376,8 @@ def _default_commands(repository: Any) -> tuple[list[tuple[str, ...]], list[tupl
     targeted: list[tuple[str, ...]] = []
     broad: list[tuple[str, ...]] = []
     for capability in repository.capabilities:
+        if not capability.trusted:
+            continue
         destination = broad if capability.broad or capability.kind in {"build", "lint", "typecheck", "integration"} else targeted
         if capability.command not in destination:
             destination.append(capability.command)
@@ -194,8 +386,20 @@ def _default_commands(repository: Any) -> tuple[list[tuple[str, ...]], list[tupl
     return targeted[:3], broad[:5]
 
 
+def _builtin_verification_commands(repository: Any) -> list[tuple[str, ...]]:
+    if not repository.git_head:
+        return []
+    return list(_BUILTIN_GIT_VERIFICATION)
+
+
 def _command_kind(command: tuple[str, ...], repository: Any) -> str | None:
+    if repository.git_head:
+        builtin_kind = _BUILTIN_GIT_VERIFICATION.get(command)
+        if builtin_kind is not None:
+            return builtin_kind
     for capability in repository.capabilities:
+        if not capability.trusted:
+            continue
         if command == capability.command:
             return capability.kind
         if capability.command[:3] in {("python", "-m", "pytest"), ("python3", "-m", "pytest")} and command[:3] == capability.command[:3]:
@@ -245,6 +449,44 @@ def _run_commands(workspace: Workspace, commands: Sequence[tuple[str, ...]], pha
     return results
 
 
+def _context_supports_understanding(
+    understanding: Understanding, context: dict[str, object], working_root: Path
+) -> bool:
+    if not understanding.implementation_ready(working_root):
+        return False
+    snippets = context.get("snippets", {})
+    supplied_paths = set(snippets) if isinstance(snippets, dict) else set()
+    claimed_paths = {
+        path
+        for evidence in understanding.evidence
+        for path in evidence.paths
+    }
+    existing_affected_paths = {
+        path for path in understanding.affected_paths if (working_root / path).is_file()
+    }
+    return (
+        existing_affected_paths.issubset(supplied_paths)
+        and bool(claimed_paths)
+        and claimed_paths.issubset(supplied_paths)
+        and all((working_root / path).is_file() for path in claimed_paths)
+    )
+
+
+def _baseline_test_count_regressed(
+    baseline_results: Sequence[VerificationResult],
+    final_results: Sequence[VerificationResult],
+) -> tuple[VerificationResult, VerificationResult] | None:
+    for baseline in baseline_results:
+        if baseline.tests_run is None:
+            continue
+        for final in final_results:
+            if final.command == baseline.command and final.tests_run is not None:
+                if final.tests_run < baseline.tests_run:
+                    return baseline, final
+                break
+    return None
+
+
 class DevAgent:
     """Deterministic orchestration; model reasoning is bounded inside named states."""
 
@@ -258,7 +500,34 @@ class DevAgent:
     def _announce(self, artifacts: RunArtifacts, lifecycle: Lifecycle) -> None:
         artifacts.record("state", state=lifecycle.state)
         if self.verbose:
-            self.status(lifecycle.state.value)
+            self.status(f"[{lifecycle.state.value}]")
+
+    def _diagnostic(self, artifacts: RunArtifacts, category: str, message: str) -> None:
+        artifacts.record("diagnostic", category=category, message=message)
+        if self.verbose:
+            self.status(f"[{category}] {message}")
+
+    def _show_retrieval(self, artifacts: RunArtifacts, context: dict[str, object]) -> None:
+        diagnostics = context.get("diagnostics", {})
+        if not isinstance(diagnostics, dict):
+            return
+        self._diagnostic(
+            artifacts,
+            "RETRIEVAL",
+            (
+                f"lexical matches: {diagnostics.get('exact_lexical_matches', 0)} exact, "
+                f"{diagnostics.get('normalized_lexical_matches', 0)} normalized"
+            ),
+        )
+        self._diagnostic(
+            artifacts,
+            "RETRIEVAL",
+            f"fallback: {diagnostics.get('fallback', 'none')}",
+        )
+        selected = diagnostics.get("selected", [])
+        if isinstance(selected, list):
+            for path in selected:
+                self._diagnostic(artifacts, "RETRIEVAL", f"selected: {path}")
 
     def run(self, repository_root: Path | str, requirement: str) -> RunResult:
         root = Path(repository_root).expanduser().resolve()
@@ -271,7 +540,7 @@ class DevAgent:
         recommendations: list[str] = []
         understanding = Understanding("", "", [], "", [], [], 0.0)
         review: ReviewDecision | None = None
-        source_repository = discover_repository(root)
+        source_repository = discover_repository(root, probe_capabilities=False)
         selection = select_worktree(root, artifacts.run_id, enabled=self.isolate, git_head=source_repository.git_head, dirty_files=source_repository.dirty_files)
         working_root = selection.root
         repository = discover_repository(working_root)
@@ -283,26 +552,56 @@ class DevAgent:
         artifacts.write_json("metadata.json", {"run_id": artifacts.run_id, "task": task, "repository": repository})
         artifacts.record("worktree", source=str(root), working_root=str(working_root), isolated=selection.isolated, reason=selection.reason)
         self._announce(artifacts, lifecycle)
+        self._diagnostic(artifacts, "WORKTREE", f"source: {root}")
+        self._diagnostic(artifacts, "WORKTREE", f"isolated: {str(selection.isolated).lower()}")
+        self._diagnostic(artifacts, "WORKTREE", f"working_root: {working_root}")
 
         try:
+            if selection.creation_failed:
+                raise OrchestrationError(selection.reason)
             lifecycle.transition(AgentState.DISCOVER)
             self._announce(artifacts, lifecycle)
+            self._diagnostic(
+                artifacts,
+                "DISCOVER",
+                f"repository files: {repository.inventory_file_count}",
+            )
+            self._diagnostic(
+                artifacts,
+                "DISCOVER",
+                f"components: {len(repository.components)}",
+            )
+            for diagnostic in repository.capability_diagnostics:
+                self._diagnostic(artifacts, "VERIFICATION_DISCOVERY", diagnostic)
             memory = RepositoryMemory(root)
             memory.load_facts()
             memory.store_facts(repository.facts)
 
             lifecycle.transition(AgentState.UNDERSTAND)
             self._announce(artifacts, lifecycle)
-            context = retrieve_context(workspace, repository, task.goal)
+            context = retrieve_context(
+                workspace,
+                repository,
+                task.goal,
+                requires_tests=task.requires_tests,
+            )
+            self._show_retrieval(artifacts, context)
             for context_attempt in range(2):
                 response = self.provider.request(role="understand", payload={"task": jsonable(task), "repository": context}, schema=UNDERSTANDING_SCHEMA)
                 understanding = _understanding(response)
-                if understanding.implementation_ready(working_root) and all((working_root / path).is_file() for evidence in understanding.evidence for path in evidence.paths):
+                if _context_supports_understanding(understanding, context, working_root):
                     break
                 if context_attempt == 0:
                     lifecycle.transition(AgentState.GATHER_CONTEXT)
                     self._announce(artifacts, lifecycle)
-                    context = retrieve_context(workspace, repository, task.goal + " " + " ".join(understanding.affected_paths), max_chars=32_000)
+                    context = retrieve_context(
+                        workspace,
+                        repository,
+                        task.goal + " " + " ".join(understanding.affected_paths),
+                        max_chars=32_000,
+                        requires_tests=task.requires_tests,
+                    )
+                    self._show_retrieval(artifacts, context)
                     lifecycle.transition(AgentState.UNDERSTAND)
                     self._announce(artifacts, lifecycle)
             else:
@@ -322,13 +621,23 @@ class DevAgent:
             self._announce(artifacts, lifecycle)
             plan_response = self.provider.request(
                 role="plan",
-                payload={"task": jsonable(task), "understanding": jsonable(understanding), "capabilities": jsonable(repository.capabilities)},
+                payload={
+                    "task": jsonable(task),
+                    "understanding": jsonable(understanding),
+                    "capabilities": jsonable(repository.capabilities),
+                    "builtin_verification": jsonable(
+                        _builtin_verification_commands(repository)
+                    ),
+                },
                 schema=PLAN_SCHEMA,
             )
             plan = _plan(plan_response, targeted)
             unsupported = [command for command in plan.verification if _command_kind(command, repository) is None]
             if unsupported:
-                raise OrchestrationError(f"Plan requested verification not supported by repository evidence: {' '.join(unsupported[0])}")
+                raise OrchestrationError(
+                    "Plan requested verification not supported by repository evidence "
+                    f"or DevAgent built-ins: {' '.join(unsupported[0])}"
+                )
             if task.requires_tests and not any(_command_kind(command, repository) in {"test", "integration"} for command in plan.verification):
                 raise OrchestrationError("A task requiring tests must use an evidence-backed test command")
             allowed_paths = set(plan.files_to_inspect)
@@ -354,7 +663,7 @@ class DevAgent:
                 schema=IMPLEMENT_SCHEMA,
             )
             _execute_actions(workspace, implement_response, allowed_paths)
-            implementation.extend(_strings(implement_response.get("summary", []), "summary") if isinstance(implement_response.get("summary"), list) else [str(implement_response.get("summary", "Implemented planned change"))])
+            implementation.extend(_strings(implement_response.get("summary", []), "summary", "implement") if isinstance(implement_response.get("summary"), list) else [str(implement_response.get("summary", "Implemented planned change"))])
 
             corrections = 0
             failure_signatures: list[tuple[object, ...]] = []
@@ -392,12 +701,24 @@ class DevAgent:
                     self._announce(artifacts, lifecycle)
                     replanned = self.provider.request(
                         role="replan",
-                        payload={"task": jsonable(task), "understanding": jsonable(understanding), "failures": jsonable(target_results), "failed_hypotheses": recommendations},
+                        payload={
+                            "task": jsonable(task),
+                            "understanding": jsonable(understanding),
+                            "failures": jsonable(target_results),
+                            "failed_hypotheses": recommendations,
+                            "capabilities": jsonable(repository.capabilities),
+                            "builtin_verification": jsonable(
+                                _builtin_verification_commands(repository)
+                            ),
+                        },
                         schema=PLAN_SCHEMA,
                     )
                     plan = _plan(replanned, targeted)
                     if any(_command_kind(command, repository) is None for command in plan.verification):
-                        raise OrchestrationError("Replan selected verification unsupported by repository evidence")
+                        raise OrchestrationError(
+                            "Replan selected verification unsupported by repository "
+                            "evidence or DevAgent built-ins"
+                        )
                     allowed_paths.update(plan.files_to_inspect)
                     lifecycle.transition(AgentState.GATHER_CONTEXT)
                     self._announce(artifacts, lifecycle)
@@ -478,7 +799,7 @@ class DevAgent:
                 _is_test_path(path) for path in changes.paths
             ):
                 raise OrchestrationError("Required regression/feature coverage was not added or updated")
-            quality_commands = [("git", "diff", "--check")] if repository.git_head else []
+            quality_commands = _builtin_verification_commands(repository)
             quality_results = _run_commands(workspace, quality_commands, "quality")
             verification.extend(quality_results)
             if any(not result.passed for result in quality_results):
@@ -489,6 +810,17 @@ class DevAgent:
             final_commands = list(dict.fromkeys([*(plan.verification or targeted), *broad, *quality_commands]))
             final_results = _run_commands(workspace, final_commands, "final")
             verification.extend(final_results)
+            regression = _baseline_test_count_regressed(
+                [result for result in verification if result.baseline],
+                final_results,
+            )
+            if regression is not None:
+                baseline_result, final_result = regression
+                raise OrchestrationError(
+                    "Final verification collected fewer tests than baseline "
+                    f"for {' '.join(final_result.command)}: "
+                    f"{baseline_result.tests_run} -> {final_result.tests_run}"
+                )
             current_results = [result for result in final_results if result.revision == workspace.revision]
             if review is not None:
                 _support_acceptance_criteria(task, changes, current_results, review)

@@ -12,7 +12,11 @@ class SafetyError(RuntimeError):
 
 
 SKIP_DIRECTORIES = frozenset(
-    {".git", ".devagent", ".venv", "venv", "node_modules", "dist", "build", "target", "__pycache__"}
+    {
+        ".git", ".devagent", ".venv", "venv", "node_modules", "dist", "build",
+        "target", "__pycache__", "vendor", "coverage", "htmlcov", ".tox", ".nox",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".next", "site-packages",
+    }
 )
 
 _SECRET_PATTERNS = (
