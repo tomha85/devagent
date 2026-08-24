@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
+[![Production CI](https://github.com/tomha85/devagent/actions/workflows/ci.yml/badge.svg)](https://github.com/tomha85/devagent/actions/workflows/ci.yml)
 
 **A local, evidence-driven software engineering agent that turns a requirement into a tested, reviewed patch — while leaving commit, push, merge, and deploy decisions to the developer.**
 
