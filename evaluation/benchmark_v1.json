@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "name": "DevAgent Production Evaluation v1",
+  "primary_invariant": "false_verified == 0",
+  "cases": [
+    {
+      "id": "e2e-minimal-verified",
+      "category": "bug_fix",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_minimal_unknown_repository_is_discovered_probed_and_verified",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "e2e-no-publication",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_end_to_end_fixture_is_verified_without_source_control_publication",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "review-rejection-reverify",
+      "category": "review_loop",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_review_rejection_forces_edit_and_reverification",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "insufficient-evidence-block",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_insufficient_evidence_blocks_before_modification",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "failed-hypothesis-replan",
+      "category": "repair_loop",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_failed_hypothesis_can_replan_before_a_focused_fix",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "structured-confidence-repair",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_qualitative_confidence_gets_one_bounded_repair_and_parses",
+      "expected": "PASS"
+    },
+    {
+      "id": "structured-repair-bounded",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_structured_repair_is_exhausted_after_one_attempt",
+      "expected": "PASS"
+    },
+    {
+      "id": "no-edit-before-valid-plan",
+      "category": "evidence_gate",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_no_modification_occurs_before_valid_understanding_and_plan",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "openai-strict-schema",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_openai_sends_supplied_schema_as_strict_structured_output",
+      "expected": "PASS"
+    },
+    {
+      "id": "compatible-provider-fallback",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_compatible_provider_falls_back_when_json_object_format_is_unsupported",
+      "expected": "PASS"
+    },
+    {
+      "id": "anthropic-bounded-repair",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_anthropic_uses_local_validation_and_bounded_repair",
+      "expected": "PASS"
+    },
+    {
+      "id": "generated-state-allows-isolation",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_generated_only_untracked_state_preserves_worktree_isolation",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-untracked-source-protected",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_real_untracked_source_remains_protected",
+      "expected": "PASS"
+    },
+    {
+      "id": "tracked-modification-protected",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_modified_tracked_file_remains_protected",
+      "expected": "PASS"
+    },
+    {
+      "id": "builtin-git-verification-exact",
+      "category": "command_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_builtin_git_verification_is_an_exact_git_only_allowlist",
+      "expected": "PASS"
+    },
+    {
+      "id": "false-verified-detected",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_evaluation_harness.py::test_false_verified_is_explicitly_detected",
+      "expected": "PASS"
+    },
+    {
+      "id": "scope-regression-source-mutation-fail",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_evaluation_harness.py::test_scope_regression_and_source_mutation_are_hard_failures",
+      "expected": "PASS"
+    },
+    {
+      "id": "generated-eval-state-filtered",
+      "category": "evaluation_integrity",
+      "pytest_node": "tests/test_evaluation_harness.py::test_repository_snapshot_ignores_generated_state_but_detects_real_changes",
+      "expected": "PASS"
+    }
+  ]
+}
