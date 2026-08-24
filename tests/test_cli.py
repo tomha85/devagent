@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from devagent import __version__
 from devagent.cli import main
 
 
@@ -11,7 +12,7 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--version"])
     assert raised.value.code == 0
-    assert "0.2.1" in capsys.readouterr().out
+    assert __version__ in capsys.readouterr().out
 
 
 def test_setup_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
