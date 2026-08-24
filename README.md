@@ -1,65 +1,100 @@
 # DevAgent
 
-DevAgent is a local, evidence-driven software engineering agent. Give it a repository and an engineering requirement; it discovers the application, compiles acceptance criteria, establishes a bounded plan, makes a backed-up minimal patch, runs repository-supported verification, reviews the final diff independently, and reports one of `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 
-The model reasons inside individual lifecycle states. Python code—not model prose—owns transitions, path and command safety, modification tracking, verification validity, retry bounds, review enforcement, and the final status.
+**A local, evidence-driven software engineering agent that turns a requirement into a tested, reviewed patch — while leaving commit, push, merge, and deploy decisions to the developer.**
 
-## Ownership and licensing
+DevAgent runs against a local repository. It discovers the application, gathers source evidence, compiles acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, reviews the final diff, and returns one final engineering report.
 
-DevAgent was created and is maintained by **Tom Ha**.
+> **From requirement to verified local branch.**
+>
+> DevAgent can modify software. It does not publish software.
 
-Original project: https://github.com/tomha85/devagent
+## Why DevAgent?
 
-Copyright © 2026 Tom Ha. All rights reserved.
+Many coding agents optimize for generating code quickly. DevAgent is designed around a different question:
 
-This repository is **source-available, not open source**. Use, modification, redistribution, commercial use, hosted-service use, and attribution requirements are governed by the proprietary terms in [LICENSE](LICENSE). Copies or authorized modifications must retain the applicable copyright, ownership, attribution, LICENSE, and NOTICE information.
+**Can the change be supported by repository evidence and verified locally?**
 
-See [NOTICE](NOTICE) and [COPYRIGHT](COPYRIGHT) for attribution and ownership information.
+Core principles:
 
-## Install
+- **Local-first** — works against the developer's local repository and environment.
+- **Evidence before modification** — implementation is blocked when source evidence is insufficient.
+- **Minimal-change discipline** — prefer the smallest correct diff over broad refactors.
+- **Backups before edits** — existing files are backed up before first modification.
+- **Repository-native verification** — use commands supported by manifests, package scripts, tests, and CI evidence.
+- **Independent review** — the final diff is reviewed separately from implementation.
+- **Provider choice** — OpenAI, Anthropic/Claude, xAI/Grok, and OpenAI-compatible local endpoints.
+- **No automatic publishing** — DevAgent does not commit, push, merge, rebase, or deploy.
+- **Evidence-backed outcomes** — final status is `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
+
+## Quick start
+
+### Install
+
+Using `pipx`:
 
 ```bash
 pipx install git+https://github.com/tomha85/devagent.git
-# or, from a checkout
-pip install .
 ```
 
-Development:
+Or from a checkout:
 
 ```bash
+git clone https://github.com/tomha85/devagent.git
+cd devagent
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
 ```
 
-## Configure a provider
+### Configure an AI provider
+
+OpenAI example:
 
 ```bash
-devagent setup --provider openai --model gpt-5
+devagent setup --provider openai --model YOUR_MODEL
 export OPENAI_API_KEY=...
+devagent doctor
 ```
 
-Supported providers are OpenAI, Anthropic/Claude, xAI/Grok, and OpenAI-compatible local endpoints. For a local server:
+Anthropic example:
 
 ```bash
-devagent setup --provider compatible \
+devagent setup --provider anthropic --model YOUR_MODEL
+export ANTHROPIC_API_KEY=...
+devagent doctor
+```
+
+OpenAI-compatible local endpoint:
+
+```bash
+devagent setup \
+  --provider compatible \
   --model local-model \
   --base-url http://127.0.0.1:11434/v1
 ```
 
-Configuration stores the provider, model, endpoint, and API-key environment-variable name. It does not store the key itself.
+DevAgent stores provider configuration and the **name** of the API-key environment variable. It does not store the API key itself.
 
-## Use
+### Run
 
-From the application repository:
+From the application repository you want DevAgent to work on:
 
 ```bash
 devagent "Fix websocket reconnect bug and add regression tests"
+```
+
+Other inputs:
+
+```bash
 devagent "Add CSV export to reports"
-pytest 2>&1 | devagent
 devagent --input error.log
-devagent                         # interactive when attached to a terminal
+pytest 2>&1 | devagent
+devagent
 ```
 
 Useful commands:
@@ -72,45 +107,191 @@ devagent doctor
 devagent status
 ```
 
-Normal output is quiet apart from the final engineering report. `--verbose` shows lifecycle states, not hidden chain-of-thought.
+Normal mode stays quiet apart from state updates and the final engineering report. `--verbose` exposes operational diagnostics, not hidden chain-of-thought.
 
-## Deterministic lifecycle
+## What DevAgent does
+
+A normal engineering run follows a deterministic lifecycle:
 
 ```text
-PREFLIGHT → DISCOVER → UNDERSTAND → TASK_SPEC → BASELINE → PLAN
-→ GATHER_CONTEXT → REPRODUCE → IMPLEMENT → VERIFY_TARGETED
-→ DIAGNOSE/REPLAN when needed → VERIFY_BROAD → REVIEW
-→ QUALITY_CHECK → FINAL_VERIFY → LEARN → REPORT
+PREFLIGHT
+  ↓
+DISCOVER
+  ↓
+UNDERSTAND
+  ↓
+TASK_SPEC / ACCEPTANCE CRITERIA
+  ↓
+BASELINE
+  ↓
+PLAN
+  ↓
+GATHER_CONTEXT
+  ↓
+REPRODUCE
+  ↓
+IMPLEMENT MINIMAL PATCH
+  ↓
+VERIFY_TARGETED
+  ↓
+DIAGNOSE / REPLAN when needed
+  ↓
+VERIFY_BROAD
+  ↓
+INDEPENDENT REVIEW
+  ↓
+QUALITY_CHECK
+  ↓
+FINAL_VERIFY
+  ↓
+LEARN
+  ↓
+REPORT
 ```
 
-The evidence gate rejects implementation unless the affected path, likely root cause, expected behavior, source evidence, proposed minimal solution, and confidence are present. Verification commands must derive from discovered repository capabilities. A modification increments the workspace revision and invalidates earlier successful verification.
+Python owns deterministic state transitions, safety gates, filesystem operations, verification validity, retry bounds, and final status. The model reasons inside bounded roles.
 
-## Repository intelligence
+## Evidence gate
 
-Discovery builds an evidence-backed repository/component model from source languages, manifests, package scripts, test locations, and CI workflow commands. It supports multi-component repositories and recognizes Python, JavaScript/TypeScript, Go, Rust, Java/Gradle/Maven, C/CMake, .NET, Make, and related capabilities without requiring one parser.
+DevAgent does not treat model confidence as evidence.
 
-Context retrieval starts with task terms, filenames, exact text matches, test locations, and bounded source snippets. It does not upload the whole repository.
+Before implementation, it expects enough repository evidence to support:
+
+- the engineering problem,
+- expected behavior,
+- affected paths,
+- likely root cause or design location,
+- a minimal proposed solution,
+- source evidence tying those claims to the repository.
+
+If the evidence is insufficient, `BLOCKED` is the correct result.
+
+## Verification model
+
+Verification is evidence-driven and revision-aware.
+
+Depending on the repository, DevAgent can run:
+
+- baseline tests,
+- targeted tests,
+- broader unit/component tests,
+- functional or integration checks,
+- build commands,
+- lint/type checks,
+- `git diff --check`,
+- final current-revision verification.
+
+Each verification result records the command, exit code, duration, output, failure classification, phase, and workspace revision.
+
+A code modification invalidates prior successful verification for the old revision.
+
+## Outcome contract
+
+### `VERIFIED`
+
+Used only when the current implementation has sufficient acceptance evidence, applicable verification passes, no known new regression remains, scope is acceptable, and independent review approves the final diff.
+
+### `PARTIALLY_VERIFIED`
+
+Used when implementation evidence exists but meaningful verification cannot be completed, commonly because of environmental, hardware, VPN, credential, or external-service limitations.
+
+### `BLOCKED`
+
+Used when DevAgent cannot safely understand, implement, or verify the task.
+
+DevAgent is intentionally conservative: a truthful `BLOCKED` is better than a false `VERIFIED`.
 
 ## Safety boundary
 
-- Clean Git repositories run in a retained detached local worktree under `.devagent/worktrees/<run-id>/` by default. The report prints the exact review path.
-- Dirty repositories use a conservative in-place fallback; pre-existing dirty files cannot be overwritten.
-- Every existing file is copied once to `.devagent/runs/<run-id>/backups/` before its first edit.
-- Resolved paths cannot escape the workspace, including through symlinks.
-- `.env*`, keys, credentials, secrets, SSH, AWS, generated, VCS, and dependency directories are excluded from automatic reads.
-- Commands execute as argv without a shell and with a credential-scrubbed environment and isolated `HOME`.
-- Publishing, destructive Git, deletion, privilege, network-transfer, inline-interpreter, and package-install commands are blocked.
-- DevAgent never commits, pushes, merges, rebases, or deploys.
+DevAgent uses defense-in-depth controls around repository modification and command execution.
 
-DevAgent is defense in depth, not an operating-system sandbox. Review the report and diff before committing.
+- Clean Git repositories use a retained detached worktree by default.
+- Pre-existing dirty developer files are protected.
+- Existing files are backed up before their first modification.
+- Workspace paths are confined and checked against symlink escape.
+- Secret-like paths such as `.env*`, private keys, SSH/AWS credentials, and generated dependency trees are excluded from automatic reads.
+- Commands run as argv without a shell.
+- Credential environment variables are scrubbed from verification subprocesses where appropriate.
+- Publishing and destructive operations are blocked.
+- DevAgent never automatically commits, pushes, merges, rebases, or deploys.
 
-## Verification and review
+DevAgent is **not** an operating-system sandbox. Always review the final report and diff before publishing changes.
 
-Verification is adaptive: baseline, targeted tests, broader component checks, builds, lint/type checks, `git diff --check`, and final current-revision reruns where repository evidence supports them. Results store argv, exit code, duration, output, classification, phase, and revision. Success is based on exit codes—not words such as “passed.”
+## Repository intelligence
 
-The independent reviewer receives the requirement, acceptance criteria, conventions, bounded final diff (including newly created files), tests, and process results. A rejection returns to implementation within a small correction budget, followed by required re-verification and a fresh review.
+DevAgent discovers repository structure from source files and repository-native evidence such as:
 
-## Local run data and memory
+- `README` / contribution documentation,
+- `pyproject.toml`, `requirements.txt`, `pytest.ini`,
+- `package.json`, lockfiles, TypeScript configuration,
+- `Cargo.toml`, `go.mod`,
+- Maven and Gradle files,
+- CMake / Make / Meson,
+- `.sln` / `.csproj`,
+- Docker and Compose files,
+- GitHub Actions, Jenkins, GitLab CI, and Azure Pipelines.
+
+Current discovery supports Python, JavaScript/TypeScript, React-style projects, Go, Rust, Java, C/C++, .NET, Make-based projects, and multi-component repositories.
+
+CI is treated as executable documentation when it provides safe, bounded command evidence.
+
+## Provider architecture
+
+The engineering workflow is model-independent. Providers implement a common request contract.
+
+Currently supported:
+
+| Provider | Configuration |
+| --- | --- |
+| OpenAI | `--provider openai` |
+| Anthropic / Claude | `--provider anthropic` |
+| xAI / Grok | `--provider xai` |
+| Local / compatible | `--provider compatible --base-url ...` |
+
+The goal is to let developers choose the model that fits their accuracy, privacy, latency, and cost requirements without changing the core engineering workflow.
+
+## Example final report
+
+```text
+DEVAGENT REPORT
+
+STATUS
+VERIFIED
+
+TASK
+Handle division by zero safely and add a regression test.
+
+ROOT CAUSE
+The divide path did not explicitly handle a zero divisor.
+
+IMPLEMENTATION
+- Added bounded zero-divisor handling
+- Added regression coverage
+
+FILES CHANGED
+calculator.py
+test_calculator.py
+
+VERIFICATION
+PASS  targeted tests
+PASS  broader tests
+PASS  git diff --check
+
+NEW REGRESSIONS
+None detected
+
+SOURCE CONTROL
+No commit
+No push
+No merge
+
+DEVELOPER ACTION
+Review the diff before publishing.
+```
+
+## Local run data
+
+DevAgent keeps run artifacts under the target repository's `.devagent/` state:
 
 ```text
 .devagent/
@@ -126,14 +307,69 @@ The independent reviewer receives the requirement, acceptance criteria, conventi
     └── strategies.json
 ```
 
-Repository facts include evidence-file SHA-256 fingerprints and are discarded when evidence changes. Strategy memory is bounded to concrete repository commands and their sources. DevAgent never modifies its own installed source during an application task.
+Repository facts are tied to evidence fingerprints and can be invalidated when their source changes.
 
-## Evaluation
+## Development
 
-Tests use `ScriptedFakeProvider`; automated runs never spend API credits. The suite covers path/secret/command safety, dirty work, backup ordering, discovery and monorepos, task and acceptance compilation, exit-code truth, failure classification, verification invalidation, review rejection, memory invalidation, CLI behavior, and a disposable division-by-zero end-to-end repository. The discovery matrix includes Python, TypeScript, Node, React-style, Go, Rust, C++, Java, and a monorepo. `devagent.evaluation.evaluate` records outcome, acceptance support, regressions, patch size, lifecycle iterations, model/tool calls, and runtime.
+Run the test suite:
 
-## Outcome contract
+```bash
+python -m compileall devagent
+pytest -q
+git diff --check
+```
 
-`VERIFIED` requires current-revision verification, applicable broader/static/build checks, accepted scope, acceptance evidence, clean diff validation, and reviewer approval. `PARTIALLY_VERIFIED` means implementation evidence exists but meaningful local verification is unavailable or failed for an environmental reason. `BLOCKED` means DevAgent cannot safely prove or complete the task.
+Install the current checkout in editable mode:
 
-The developer retains the final source-control decision.
+```bash
+pip install -e ".[dev]"
+```
+
+Automated tests use a deterministic fake provider and do not consume cloud-model credits.
+
+## Project status
+
+DevAgent is currently **alpha software**. The core evidence-driven workflow is functional, but real-provider behavior and repository coverage are still being hardened through disposable end-to-end engineering fixtures.
+
+Near-term focus:
+
+- real-provider contract hardening,
+- stronger repository context retrieval,
+- safer verification-capability discovery,
+- worktree lifecycle improvements,
+- more realistic multi-language evaluation fixtures,
+- packaging and release quality.
+
+The project intentionally prioritizes trustworthy outcomes over feature count.
+
+## Contributing
+
+Contributions are welcome.
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In particular, changes to DevAgent's safety or verification behavior should include regression tests and must not weaken the no-publish boundary.
+
+For bugs and feature requests, use the [GitHub issue tracker](https://github.com/tomha85/devagent/issues).
+
+## Security
+
+Please do not publish sensitive vulnerability details in a public issue.
+
+See [SECURITY.md](SECURITY.md) for the current reporting process and security scope.
+
+## License
+
+DevAgent is open source under the [MIT License](LICENSE).
+
+```text
+Copyright (c) 2026 Tom Ha
+```
+
+The MIT license permits use, copying, modification, merging, publishing, distribution, sublicensing, and sale of copies, provided the copyright and permission notice are retained as required by the license.
+
+## Author and original project
+
+DevAgent was created by **Tom Ha**.
+
+Original repository: **https://github.com/tomha85/devagent**
+
+See [NOTICE](NOTICE) and [COPYRIGHT](COPYRIGHT) for project attribution.
