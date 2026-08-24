@@ -132,7 +132,12 @@ def _run(argv: Sequence[str]) -> int:
         from devagent.orchestrator import DevAgent
         from devagent.report import render_report
 
-        result = DevAgent(create_provider(config), isolate=not args.no_isolation, verbose=args.verbose, status=lambda state: print(f"[{state}]")).run(args.repo, requirement)
+        result = DevAgent(
+            create_provider(config),
+            isolate=not args.no_isolation,
+            verbose=args.verbose,
+            status=print,
+        ).run(args.repo, requirement)
         report = render_report(result)
         print(report)
         return {Outcome.VERIFIED: 0, Outcome.PARTIALLY_VERIFIED: 2, Outcome.BLOCKED: 1}[result.outcome]

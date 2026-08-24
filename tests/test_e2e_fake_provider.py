@@ -100,6 +100,197 @@ def _responses(review_approved: bool = True) -> list[dict[str, object]]:
     return responses
 
 
+def _minimal_fixture(root: Path) -> str:
+    (root / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n",
+        encoding="utf-8",
+    )
+    (root / "test_calculator.py").write_text(
+        "from calculator import divide\n\n"
+        "def test_divide():\n"
+        "    assert divide(10, 2) == 5\n",
+        encoding="utf-8",
+    )
+    return commit_all(root)
+
+
+def _minimal_responses() -> list[dict[str, object]]:
+    return [
+        {
+            "_role": "understand",
+            "problem": "The division function does not handle a zero divisor.",
+            "expected_behavior": "A zero divisor returns None and normal division remains unchanged.",
+            "affected_paths": ["calculator.py", "test_calculator.py"],
+            "root_cause": "calculator.py directly evaluates a / b without a zero-divisor guard.",
+            "evidence": [
+                {
+                    "statement": "divide directly returns a / b.",
+                    "paths": ["calculator.py"],
+                    "confidence": 1.0,
+                },
+                {
+                    "statement": "The existing test covers only a non-zero divisor.",
+                    "paths": ["test_calculator.py"],
+                    "confidence": 1.0,
+                },
+            ],
+            "proposed_solution": [
+                "Add a minimal zero-divisor guard.",
+                "Add a focused regression test.",
+            ],
+            "confidence": 0.99,
+        },
+        {
+            "_role": "plan",
+            "files_to_inspect": ["calculator.py", "test_calculator.py"],
+            "implementation": ["Add the regression test.", "Add the zero-divisor guard."],
+            "verification": [
+                ["python", "-m", "pytest", "-q"],
+                ["git", "diff", "--check"],
+            ],
+            "rationale": "The source and its importing test are the complete affected working set.",
+        },
+        {
+            "_role": "implement",
+            "actions": [
+                {
+                    "tool": "replace_text",
+                    "arguments": {
+                        "path": "test_calculator.py",
+                        "old": (
+                            "def test_divide():\n"
+                            "    assert divide(10, 2) == 5\n"
+                        ),
+                        "new": (
+                            "def test_divide():\n"
+                            "    assert divide(10, 2) == 5\n\n"
+                            "def test_divide_by_zero():\n"
+                            "    assert divide(10, 0) is None\n"
+                        ),
+                    },
+                },
+                {
+                    "tool": "replace_text",
+                    "arguments": {
+                        "path": "calculator.py",
+                        "old": "def divide(a, b):\n    return a / b\n",
+                        "new": (
+                            "def divide(a, b):\n"
+                            "    if b == 0:\n"
+                            "        return None\n"
+                            "    return a / b\n"
+                        ),
+                    },
+                },
+            ],
+            "summary": ["Handled a zero divisor.", "Added regression coverage."],
+        },
+        {
+            "_role": "review",
+            "approved": True,
+            "issues": [],
+            "summary": "The patch is minimal, evidence-backed, and fully verified.",
+        },
+    ]
+
+
+def test_minimal_unknown_repository_is_discovered_probed_and_verified(
+    git_repo: Path,
+) -> None:
+    original_head = _minimal_fixture(git_repo)
+    messages: list[str] = []
+
+    provider = ScriptedFakeProvider(_minimal_responses())
+    result = DevAgent(
+        provider,
+        verbose=True,
+        status=messages.append,
+    ).run(
+        git_repo,
+        (
+            "Handle division by zero safely without changing normal division behavior. "
+            "Add a regression test and verify the application."
+        ),
+    )
+
+    assert result.outcome is Outcome.VERIFIED
+    assert result.changes.paths == ["calculator.py", "test_calculator.py"]
+    expected_states = [
+        AgentState.DISCOVER,
+        AgentState.UNDERSTAND,
+        AgentState.BASELINE,
+        AgentState.PLAN,
+        AgentState.IMPLEMENT,
+        AgentState.VERIFY_TARGETED,
+        AgentState.VERIFY_BROAD,
+        AgentState.REVIEW,
+        AgentState.FINAL_VERIFY,
+        AgentState.SUCCESS,
+    ]
+    positions = [result.state_history.index(state) for state in expected_states]
+    assert positions == sorted(positions)
+    baseline = next(
+        item
+        for item in result.verification
+        if item.phase == "baseline" and item.command == ("python", "-m", "pytest", "-q")
+    )
+    final = next(
+        item
+        for item in result.verification
+        if item.phase == "final" and item.command == ("python", "-m", "pytest", "-q")
+    )
+    assert baseline.passed and baseline.tests_run == 1 and baseline.tests_passed == 1
+    assert final.passed and final.tests_run == 2 and final.tests_passed == 2
+    targeted_diff_check = next(
+        item
+        for item in result.verification
+        if item.phase == "targeted"
+        and item.command == ("git", "diff", "--check")
+    )
+    final_diff_check = next(
+        item
+        for item in result.verification
+        if item.phase == "final"
+        and item.command == ("git", "diff", "--check")
+    )
+    assert targeted_diff_check.passed
+    assert final_diff_check.passed
+    assert final_diff_check.revision == max(
+        item.revision for item in result.verification
+    )
+    assert all(
+        capability.command != ("git", "diff", "--check")
+        for capability in result.repository.capabilities
+    )
+    plan_payload = next(
+        call["payload"] for call in provider.calls if call["role"] == "plan"
+    )
+    assert plan_payload["builtin_verification"] == [["git", "diff", "--check"]]
+    working_root = Path(result.working_root)
+    assert working_root != git_repo
+    assert not working_root.is_relative_to(git_repo)
+    assert "if b == 0" in (working_root / "calculator.py").read_text(encoding="utf-8")
+    assert (git_repo / "calculator.py").read_text(encoding="utf-8") == (
+        "def divide(a, b):\n    return a / b\n"
+    )
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == original_head
+    )
+    assert any("[RETRIEVAL] fallback: small-repository inventory" in item for item in messages)
+    assert any(
+        "[VERIFICATION_DISCOVERY]" in item and "capability promoted" in item
+        for item in messages
+    )
+    assert any("[WORKTREE] isolated: true" in item for item in messages)
+
+
 def test_end_to_end_fixture_is_verified_without_source_control_publication(git_repo: Path) -> None:
     original_head = _fixture(git_repo)
     provider = ScriptedFakeProvider(_responses())

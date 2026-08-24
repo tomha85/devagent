@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import shlex
 import subprocess
+import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from devagent.models import Capability, Component, RepositoryFact, RepositoryModel
+from devagent.models import Capability, CapabilityProvenance, Component, RepositoryFact, RepositoryModel
 from devagent.safety import SKIP_DIRECTORIES, is_secret_path
 
 
@@ -68,7 +72,16 @@ def _walk(root: Path, limit: int = 12_000) -> list[Path]:
         relative = path.relative_to(root)
         if any(part in SKIP_DIRECTORIES for part in relative.parts):
             continue
-        if path.is_file() and not is_secret_path(relative):
+        try:
+            resolved = path.resolve()
+            resolved_relative = resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if (
+            resolved.is_file()
+            and not is_secret_path(relative)
+            and not is_secret_path(resolved_relative)
+        ):
             files.append(path)
             if len(files) >= limit:
                 break
@@ -83,6 +96,17 @@ def _git(root: Path, *args: str) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _is_safe_generated_untracked_path(path: str) -> bool:
+    parts = Path(path).parts
+    return (
+        path == ".devagent"
+        or path.startswith(".devagent/")
+        or "__pycache__" in parts
+        or ".pytest_cache" in parts
+        or path.endswith(".pyc")
+    )
 
 
 def _package_capabilities(path: Path, relative: str) -> tuple[list[str], list[Capability]]:
@@ -213,7 +237,170 @@ def _test_locations(files: Iterable[Path], root: Path, component: Path) -> list[
     return sorted(locations)[:30]
 
 
-def discover_repository(root: Path | str) -> RepositoryModel:
+def _python_test_files(files: Iterable[Path], component: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for path in files:
+        if path.suffix.casefold() != ".py":
+            continue
+        try:
+            relative = path.relative_to(component)
+        except ValueError:
+            continue
+        lowered_parts = tuple(part.casefold() for part in relative.parts)
+        name = path.name.casefold()
+        if (
+            any(part in {"test", "tests"} for part in lowered_parts)
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+        ):
+            candidates.append(path)
+    return sorted(candidates)
+
+
+def _probe_environment(home: Path) -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV", "PYTHONPATH", "SYSTEMROOT", "WINDIR"}
+    }
+    environment.update(
+        {
+            "HOME": str(home),
+            "CI": "true",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        }
+    )
+    return environment
+
+
+def _run_probe(root: Path, argv: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
+    try:
+        with tempfile.TemporaryDirectory(prefix="devagent-probe-") as temporary:
+            return subprocess.run(
+                argv,
+                cwd=root,
+                env=_probe_environment(Path(temporary)),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _pytest_collected_count(output: str) -> int:
+    matches = re.findall(r"(\d+)\s+tests?\s+collected", output, re.IGNORECASE)
+    if matches:
+        return int(matches[-1])
+    node_ids = [line for line in output.splitlines() if "::" in line and not line.lstrip().startswith(("<", "="))]
+    return len(node_ids)
+
+
+def _uses_unittest_conventions(paths: Iterable[Path]) -> bool:
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if re.search(r"(?:from\s+unittest\s+import|import\s+unittest|unittest\.TestCase)", text):
+            return True
+    return False
+
+
+def _probe_python_test_capability(
+    root: Path, component: str, test_files: list[Path]
+) -> tuple[Capability | None, list[str]]:
+    if not test_files:
+        return None, []
+    relative_tests = [path.relative_to(root).as_posix() for path in test_files]
+    target = () if component == "." else (component,)
+    diagnostics = [f"pytest candidate detected from {len(test_files)} Python test file(s)"]
+    pytest_probe = (
+        sys.executable,
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        *target,
+    )
+    completed = _run_probe(root, pytest_probe)
+    collected = _pytest_collected_count(
+        f"{completed.stdout}\n{completed.stderr}" if completed is not None else ""
+    )
+    if completed is not None and completed.returncode == 0 and collected > 0:
+        command = ("python", "-m", "pytest", "-q", *target)
+        detail = (
+            f"probed from Python test files and successful pytest collection ({collected} collected)"
+        )
+        diagnostics.append(
+            f"pytest collection probe: PASS; tests collected: {collected}; capability promoted"
+        )
+        return (
+            Capability(
+                "test",
+                command,
+                relative_tests[0],
+                component,
+                False,
+                CapabilityProvenance.PROBED,
+                detail,
+                collected,
+            ),
+            diagnostics,
+        )
+    result = "unavailable" if completed is None else f"exit {completed.returncode}"
+    diagnostics.append(f"pytest collection probe: not promoted ({result})")
+    if not _uses_unittest_conventions(test_files):
+        return None, diagnostics
+
+    diagnostics.append("unittest candidate detected from explicit unittest conventions")
+    unittest_command = (
+        ("python", "-m", "unittest", "discover")
+        if component == "."
+        else ("python", "-m", "unittest", "discover", "-s", component)
+    )
+    unittest_probe = (
+        sys.executable,
+        "-m",
+        "unittest",
+        "discover",
+        "-v",
+        *(("-s", component) if component != "." else ()),
+    )
+    completed = _run_probe(root, unittest_probe)
+    output = f"{completed.stdout}\n{completed.stderr}" if completed is not None else ""
+    match = re.search(r"Ran\s+(\d+)\s+tests?", output)
+    discovered = int(match.group(1)) if match else 0
+    if completed is not None and completed.returncode in {0, 1} and discovered > 0:
+        detail = (
+            f"probed from unittest conventions and local discovery ({discovered} discovered)"
+        )
+        diagnostics.append(
+            f"unittest discovery probe: PASS; tests discovered: {discovered}; capability promoted"
+        )
+        return (
+            Capability(
+                "test",
+                unittest_command,
+                relative_tests[0],
+                component,
+                False,
+                CapabilityProvenance.PROBED,
+                detail,
+                discovered,
+            ),
+            diagnostics,
+        )
+    diagnostics.append("unittest discovery probe: not promoted")
+    return None, diagnostics
+
+
+def discover_repository(root: Path | str, *, probe_capabilities: bool = True) -> RepositoryModel:
     root_path = Path(root).expanduser().resolve()
     files = _walk(root_path)
     ci_files = [
@@ -229,6 +416,7 @@ def discover_repository(root: Path | str) -> RepositoryModel:
             component_paths.add(manifest.parent)
     components: list[Component] = []
     fact_sources: dict[str, set[str]] = {}
+    capability_diagnostics: list[str] = []
 
     for component_path in sorted(component_paths):
         owned_files = [path for path in files if path == component_path or component_path in path.parents]
@@ -244,6 +432,18 @@ def discover_repository(root: Path | str) -> RepositoryModel:
             for ci_file in ci_files:
                 capabilities.extend(_ci_capabilities(ci_file, root_path))
         relative_component = component_path.relative_to(root_path).as_posix() or "."
+        if probe_capabilities and not any(capability.kind == "test" and capability.trusted for capability in capabilities):
+            probed, diagnostics = _probe_python_test_capability(
+                root_path,
+                relative_component,
+                _python_test_files(owned_files, component_path),
+            )
+            capability_diagnostics.extend(
+                f"{relative_component}: {diagnostic}" for diagnostic in diagnostics
+            )
+            if probed is not None:
+                capabilities.append(probed)
+                frameworks.append("pytest" if "pytest" in probed.command else "unittest")
         component = Component(
             path=relative_component,
             languages=[name for name, _ in language_counts.most_common()],
@@ -268,11 +468,18 @@ def discover_repository(root: Path | str) -> RepositoryModel:
                 fingerprints[source] = _fingerprint(source_path)
         facts.append(RepositoryFact(statement, 1.0, tuple(sorted(sources)), fingerprints, now))
 
-    dirty = {
+    tracked_dirty = {
         path
-        for command in (("diff", "--name-only"), ("diff", "--cached", "--name-only"), ("ls-files", "--others", "--exclude-standard"))
+        for command in (("diff", "--name-only"), ("diff", "--cached", "--name-only"))
         for path in (_git(root_path, *command) or "").splitlines()
-        if path and not path.startswith(".devagent/")
+        if path
+    }
+    untracked_dirty = {
+        path
+        for path in (
+            _git(root_path, "ls-files", "--others", "--exclude-standard") or ""
+        ).splitlines()
+        if path and not _is_safe_generated_untracked_path(path)
     }
     return RepositoryModel(
         root=str(root_path),
@@ -281,7 +488,9 @@ def discover_repository(root: Path | str) -> RepositoryModel:
         facts=facts,
         git_branch=_git(root_path, "branch", "--show-current"),
         git_head=_git(root_path, "rev-parse", "HEAD"),
-        dirty_files=sorted(dirty),
+        dirty_files=sorted(tracked_dirty | untracked_dirty),
+        inventory_file_count=len(files),
+        capability_diagnostics=capability_diagnostics,
     )
 
 

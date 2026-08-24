@@ -68,6 +68,12 @@ class FailureClass(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class CapabilityProvenance(str, Enum):
+    EXPLICIT = "EXPLICIT"
+    PROBED = "PROBED"
+    INFERRED = "INFERRED"
+
+
 @dataclass(frozen=True)
 class Evidence:
     statement: str
@@ -91,6 +97,13 @@ class Capability:
     source: str
     component: str = "."
     broad: bool = False
+    provenance: CapabilityProvenance = CapabilityProvenance.EXPLICIT
+    provenance_detail: str = "declared by repository configuration"
+    tests_collected: int | None = None
+
+    @property
+    def trusted(self) -> bool:
+        return self.provenance in {CapabilityProvenance.EXPLICIT, CapabilityProvenance.PROBED}
 
 
 @dataclass
@@ -112,6 +125,8 @@ class RepositoryModel:
     git_branch: str | None = None
     git_head: str | None = None
     dirty_files: list[str] = field(default_factory=list)
+    inventory_file_count: int = 0
+    capability_diagnostics: list[str] = field(default_factory=list)
 
     @property
     def capabilities(self) -> list[Capability]:
@@ -173,6 +188,8 @@ class VerificationResult:
     phase: str
     timed_out: bool = False
     baseline: bool = False
+    tests_run: int | None = None
+    tests_passed: int | None = None
 
     @property
     def passed(self) -> bool:
@@ -232,4 +249,3 @@ def jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     return value
-

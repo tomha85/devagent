@@ -11,7 +11,7 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--version"])
     assert raised.value.code == 0
-    assert "0.2.0" in capsys.readouterr().out
+    assert "0.2.1" in capsys.readouterr().out
 
 
 def test_setup_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -26,4 +26,3 @@ def test_setup_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsy
 def test_status_without_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["status", "--repo", str(tmp_path)]) == 0
     assert "No DevAgent runs" in capsys.readouterr().out
-
