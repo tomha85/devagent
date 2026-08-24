@@ -1,0 +1,50 @@
+DevAgent Source-Available Proprietary License, Version 1.0
+
+Copyright © 2026 Tom Ha. All rights reserved.
+
+1. Ownership
+
+DevAgent, including its source code, documentation, design, and related materials (the “Software”), is owned by Tom Ha unless a third-party component is expressly identified as having a different owner or license. No ownership rights are transferred by making the Software available in a public repository.
+
+2. Limited Permission
+
+Subject to this License, you may download, install, run, inspect, and modify the Software solely for personal evaluation, internal development and testing, and non-production research.
+
+3. Restrictions
+
+Except with prior written permission from the copyright holder, you may not:
+
+- sell, sublicense, relicense, rent, lease, or commercially distribute the Software;
+- publish or redistribute the Software, modified copies, or substantial portions of it as a separate product or service;
+- offer the Software or a modified version as a hosted or commercial service;
+- use the Software as the basis of a competing commercial product;
+- remove, obscure, or alter copyright, ownership, attribution, LICENSE, NOTICE, or other proprietary notices;
+- represent yourself or another party as the original creator or owner of DevAgent.
+
+4. Attribution
+
+Any copy or modification that you are otherwise authorized to make must retain the copyright and ownership notices and identify the original project as:
+
+https://github.com/tomha85/devagent
+
+5. No Trademark or Patent License
+
+No rights to the DevAgent name, trademarks, service marks, logos, or patents are granted except as expressly agreed in writing.
+
+6. Third-Party Components
+
+Third-party components remain subject to their respective licenses. This License applies only to rights held by the DevAgent copyright holder.
+
+7. Termination
+
+Your permission under this License terminates automatically if you violate its terms. Upon termination, you must stop using and distributing any copies that are not otherwise authorized by law or written agreement.
+
+8. Disclaimer
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+9. Commercial Licensing
+
+Commercial, redistribution, production, hosted-service, or other rights may be granted separately in writing by the copyright holder.
+
+Original project: https://github.com/tomha85/devagent
