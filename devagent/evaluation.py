@@ -5,7 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from devagent.models import Outcome, RunResult, jsonable
 from devagent.orchestrator import DevAgent
@@ -94,7 +94,13 @@ class _CountingProvider:
         self.inner = inner
         self.calls = 0
 
-    def request(self, *, role: str, payload: dict[str, object], schema: dict[str, object]) -> dict[str, object]:
+    def request(
+        self,
+        *,
+        role: str,
+        payload: dict[str, Any],
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
         self.calls += 1
         return self.inner.request(role=role, payload=payload, schema=schema)
 
@@ -106,7 +112,10 @@ def _generated_status_path(path: str) -> bool:
         normalized == ".devagent"
         or normalized.startswith(".devagent/")
         or normalized.endswith(".pyc")
-        or any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} for part in parts)
+        or any(
+            part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+            for part in parts
+        )
     )
 
 
@@ -168,6 +177,33 @@ def _final_verification_passed(result: RunResult) -> bool:
     return bool(final) and all(item.passed for item in final)
 
 
+def _known_new_regressions(result: RunResult) -> int | None:
+    """Count only regressions supported by comparable baseline/final evidence."""
+    baseline_by_command = {
+        item.command: item.passed
+        for item in result.verification
+        if item.baseline or item.phase == "baseline"
+    }
+    final = [item for item in result.verification if item.phase == "final"]
+    if not final:
+        return None
+
+    regressions = 0
+    unknown_failure = False
+    for item in final:
+        if item.passed:
+            continue
+        baseline_passed = baseline_by_command.get(item.command)
+        if baseline_passed is True:
+            regressions += 1
+        elif baseline_passed is None:
+            unknown_failure = True
+
+    if unknown_failure and regressions == 0:
+        return None
+    return regressions
+
+
 def evaluate(
     repository: Path,
     requirement: str,
@@ -192,7 +228,7 @@ def evaluate(
         acceptance_criteria_supported=supported,
         acceptance_criteria_total=total,
         acceptance_coverage=coverage,
-        new_regressions=0 if result.outcome is Outcome.VERIFIED else None,
+        new_regressions=_known_new_regressions(result),
         files_changed=result.changes.files_changed,
         lines_changed=result.changes.lines_added + result.changes.lines_deleted,
         iterations=sum(
@@ -243,6 +279,8 @@ def score_evaluation(
             violations.append("verified_without_approved_review")
         if expected.require_final_verification and not metrics.final_verification_passed:
             violations.append("verified_without_final_verification")
+        if expected.require_no_new_regressions and metrics.new_regressions is None:
+            violations.append("verified_with_unknown_regression_status")
 
     if (
         expected.require_no_new_regressions
