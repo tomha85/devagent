@@ -4,6 +4,18 @@ DevAgent is a local, evidence-driven software engineering agent. Give it a repos
 
 The model reasons inside individual lifecycle states. Python code—not model prose—owns transitions, path and command safety, modification tracking, verification validity, retry bounds, review enforcement, and the final status.
 
+## Ownership and licensing
+
+DevAgent was created and is maintained by **Tom Ha**.
+
+Original project: https://github.com/tomha85/devagent
+
+Copyright © 2026 Tom Ha. All rights reserved.
+
+This repository is **source-available, not open source**. Use, modification, redistribution, commercial use, hosted-service use, and attribution requirements are governed by the proprietary terms in [LICENSE](LICENSE). Copies or authorized modifications must retain the applicable copyright, ownership, attribution, LICENSE, and NOTICE information.
+
+See [NOTICE](NOTICE) and [COPYRIGHT](COPYRIGHT) for attribution and ownership information.
+
 ## Install
 
 ```bash
