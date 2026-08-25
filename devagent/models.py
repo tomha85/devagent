@@ -218,6 +218,23 @@ class ChangeMetrics:
     paths: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class CodeSymbol:
+    path: str
+    name: str
+    kind: str
+    line: int | None = None
+    change: str = "MODIFIED"
+
+
+@dataclass
+class DeveloperReviewEvidence:
+    changed_symbols: list[CodeSymbol] = field(default_factory=list)
+    test_cases: list[CodeSymbol] = field(default_factory=list)
+    test_files: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
 @dataclass
 class SourceControlResult:
     requested: bool = False
@@ -247,6 +264,7 @@ class RunResult:
     recommendations: list[str]
     state_history: list[AgentState]
     working_root: str
+    developer_review: DeveloperReviewEvidence = field(default_factory=DeveloperReviewEvidence)
     source_control: SourceControlResult = field(default_factory=SourceControlResult)
 
 
