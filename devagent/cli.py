@@ -11,7 +11,7 @@ from typing import Sequence
 
 from devagent import __version__
 from devagent.config import ProviderConfig, config_path, load_config, save_config
-from devagent.models import Outcome, jsonable
+from devagent.models import Outcome, SourceControlResult, jsonable
 from devagent.providers import ProviderError, create_provider
 from devagent.safety import is_secret_path
 from devagent.source_control import publish_verified_branch
@@ -32,16 +32,21 @@ def _top_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--publish",
         action="store_true",
-        help="After VERIFIED, commit and push to a new remote branch; never creates a PR or merges",
+        help="Explicitly request the default automatic VERIFIED-branch publication behavior",
+    )
+    parser.add_argument(
+        "--no-publish",
+        action="store_true",
+        help="Do not commit or push after the engineering report",
     )
     parser.add_argument(
         "--publish-branch",
-        help="New branch name to commit and push after VERIFIED; implies --publish",
+        help="New branch name to commit and push after a VERIFIED report",
     )
     parser.add_argument(
         "--publish-remote",
         default="origin",
-        help="Git remote used by --publish (default: origin)",
+        help="Git remote used for automatic branch publication (default: origin)",
     )
     return parser
 
@@ -126,6 +131,29 @@ def _requirement(args: argparse.Namespace) -> str:
     return input("Engineering requirement: ").strip()
 
 
+def _publication_receipt(source: SourceControlResult) -> str:
+    if source.pushed:
+        status = "PUSHED"
+    elif source.error:
+        status = "NOT PUBLISHED"
+    else:
+        status = "SKIPPED"
+    lines = [
+        "SOURCE CONTROL PUBLICATION RECEIPT",
+        f"Status: {status}",
+        f"Remote: {source.remote or '(none)'}",
+        f"Branch: {source.branch or '(none)'}",
+        f"Commit: {source.commit or 'NOT CREATED'}",
+        f"Committed: {'YES' if source.committed else 'NO'}",
+        f"Pushed: {'YES' if source.pushed else 'NO'}",
+        "Pull request: NOT CREATED",
+        "Merge: NOT PERFORMED",
+    ]
+    if source.error:
+        lines.append(f"Publication error: {source.error}")
+    return "\n".join(lines)
+
+
 def _run(argv: Sequence[str]) -> int:
     args = _top_parser().parse_args(argv)
     try:
@@ -134,8 +162,13 @@ def _run(argv: Sequence[str]) -> int:
             raise ValueError("Engineering requirement cannot be empty")
         if not args.repo.resolve().is_dir():
             raise ValueError(f"Repository does not exist: {args.repo}")
-        if (args.publish or args.publish_branch) and args.no_isolation:
-            raise ValueError("Branch publishing requires isolation; remove --no-isolation")
+        if args.no_publish and (args.publish or args.publish_branch):
+            raise ValueError("--no-publish cannot be combined with --publish or --publish-branch")
+
+        publish_requested = not args.no_publish
+        if publish_requested and args.no_isolation:
+            raise ValueError("Automatic branch publishing requires isolation; use isolation or add --no-publish")
+
         configured = load_config()
         selected_provider = args.provider or configured.provider
         if args.provider and args.provider != configured.provider:
@@ -162,20 +195,33 @@ def _run(argv: Sequence[str]) -> int:
 
         result.developer_review = analyze_developer_review(result.working_root, result.changes.paths)
 
-        publish_requested = bool(args.publish or args.publish_branch)
+        target_branch = args.publish_branch or f"devagent/{result.run_id}"
         if publish_requested:
-            result.source_control = publish_verified_branch(
-                result,
-                branch=args.publish_branch,
+            result.source_control = SourceControlResult(
+                requested=True,
                 remote=args.publish_remote,
+                branch=target_branch,
             )
 
+        # The full engineering report is intentionally emitted before any Git commit/push.
         result.recommendations = recommendations_for(result)
+        print(render_report(result))
+
+        if publish_requested:
+            print("\nEngineering report complete. Starting deterministic branch publication...")
+            result.source_control = publish_verified_branch(
+                result,
+                branch=target_branch,
+                remote=args.publish_remote,
+            )
+            result.recommendations = recommendations_for(result)
+            print(_publication_receipt(result.source_control))
+
+        # Persist the final machine-readable state after publication so the report records
+        # the exact branch, commit SHA, push result, and any source-control failure.
         report_path = Path(result.run_dir) / "report.json"
         report_path.write_text(json.dumps(jsonable(result), indent=2) + "\n", encoding="utf-8")
 
-        report = render_report(result)
-        print(report)
         if result.outcome is Outcome.VERIFIED and publish_requested and not result.source_control.pushed:
             return 3
         return {Outcome.VERIFIED: 0, Outcome.PARTIALLY_VERIFIED: 2, Outcome.BLOCKED: 1}[result.outcome]
