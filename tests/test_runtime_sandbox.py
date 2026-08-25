@@ -24,6 +24,10 @@ def test_linux_bwrap_network_is_denied_by_default(tmp_path: Path, monkeypatch: p
     assert "--bind" in argv
     assert "--unshare-net" in argv
     assert argv[-2:] == ("python", "--version")
+    tmpfs_index = argv.index("--tmpfs")
+    bind_index = argv.index("--bind")
+    assert argv[tmpfs_index + 1] == "/tmp"
+    assert tmpfs_index < bind_index
 
 
 def test_linux_bwrap_can_explicitly_inherit_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,6 +55,7 @@ def test_linux_bwrap_rebinds_external_run_state_writable(tmp_path: Path, monkeyp
     bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--bind"]
     assert ("--bind", str(worktree.resolve()), str(worktree.resolve())) in bind_triplets
     assert ("--bind", str(run_home.resolve()), str(run_home.resolve())) in bind_triplets
+    assert argv.index("--tmpfs") < argv.index("--bind")
 
 
 def test_bwrap_loopback_failure_has_actionable_fail_closed_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
