@@ -55,15 +55,15 @@ def test_rough_terminal_prompt_becomes_repository_aware_engineering_brief() -> N
     enrich_acceptance_contract(task, _repo())
 
     assert task.goal.startswith("Add login google\n\nDEVAGENT REQUIREMENT INTELLIGENCE")
-    assert "USER REQUIREMENTS\n- add login google" in task.goal
+    assert "USER REQUIREMENTS\n- Add login google" in task.goal
     assert "SAFE ENGINEERING DEFAULTS" in task.goal
     assert "existing architecture and naming conventions" in task.goal
     assert "never hardcode credentials" in task.goal
     assert "Frameworks: FastAPI" in task.goal
     assert "Languages: python" in task.goal
     assert "Evidence-backed verification: python -m pytest -q" in task.goal
-    assert "Do not invent pricing, retry counts, authorization policy" in task.goal
-    assert _user_criteria(task) == ["add login google"]
+    assert "Do not invent material product, business, security" in task.goal
+    assert _user_criteria(task) == ["Add login google"]
 
 
 def test_terminal_and_file_path_feed_identical_requirement_intelligence(tmp_path: Path) -> None:
@@ -132,14 +132,23 @@ def test_requirement_intelligence_does_not_invent_payment_policy() -> None:
     enrich_acceptance_contract(task, _repo())
     lowered = task.goal.lower()
 
-    # The design brief explicitly forbids silently choosing business policy. It does
-    # not turn vague payment behavior into a retry count, fee, cancellation rule, or
-    # other fabricated acceptance criterion.
-    assert "do not invent pricing, retry counts" in lowered
-    assert _user_criteria(task) == ["handle payment failure"]
+    # Payment-specific safety guidance is added only because the request is about
+    # payment. It guides implementation without becoming a fabricated USER criterion.
+    assert "do not invent retry counts, fees, cancellation policy" in lowered
+    assert _user_criteria(task) == ["Handle payment failure"]
     assert not any("three retries" in item.lower() for item in _user_criteria(task))
     assert not any("cancel" in item.lower() for item in _user_criteria(task))
     assert not any("fee" in item.lower() for item in _user_criteria(task))
+
+
+def test_generic_prompt_does_not_gain_unrelated_domain_retrieval_terms() -> None:
+    task = compile_task("add report search")
+    enrich_acceptance_contract(task, _repo())
+    lowered = task.goal.lower()
+
+    assert "retry counts" not in lowered
+    assert "oauth scopes" not in lowered
+    assert "payment state transitions" not in lowered
 
 
 def test_performance_shorthand_gets_safe_design_without_fake_target() -> None:
