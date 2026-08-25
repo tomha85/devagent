@@ -87,12 +87,18 @@ def verify_browser(
         policy = RuntimePolicy.from_environment()
     except RuntimePolicyError as exc:
         raise BrowserVerificationError(str(exc)) from exc
+
+    runtime = RuntimeExecutor(workspace, policy)
     if uses_localhost and policy.network is not NetworkMode.INHERIT:
         raise BrowserVerificationError(
             "Localhost browser verification requires DEVAGENT_NETWORK=inherit; browser egress remains constrained"
         )
+    if not uses_localhost and policy.network is NetworkMode.DENY and not runtime.os_sandboxed:
+        raise BrowserVerificationError(
+            "Offline browser verification requires the Linux OS sandbox; refusing to render repository HTML "
+            "with unenforced network denial"
+        )
 
-    runtime = RuntimeExecutor(workspace, policy)
     output_dir = workspace / ".devagent" / "browser"
     profile_dir = output_dir / "profile"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +113,8 @@ def verify_browser(
         "--disable-component-update",
         "--disable-default-apps",
         "--disable-sync",
+        "--disable-quic",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
         "--metrics-recording-only",
         "--no-first-run",
         f"--user-data-dir={profile_dir}",
@@ -118,9 +126,8 @@ def verify_browser(
         # namespace. The outer read-only-root/write-scoped repository boundary remains.
         command.append("--no-sandbox")
     if uses_localhost:
-        # Permit the local application while forcing all non-local HTTP(S) traffic to
-        # an unused loopback port. This keeps UI verification from becoming a general
-        # browser/network escape hatch when host networking is explicitly inherited.
+        # Permit the local application while forcing non-local HTTP(S)/WebSocket traffic
+        # to an unused loopback port. QUIC and non-proxied WebRTC UDP are disabled above.
         command.extend(
             (
                 "--proxy-server=http://127.0.0.1:9",
@@ -157,6 +164,9 @@ def verify_browser(
         timeout=max(1, min(int(timeout), 300)),
         check=False,
     )
+    runtime_failure = runtime.infrastructure_failure(completed.stderr) if completed.returncode != 0 else None
+    if runtime_failure:
+        raise BrowserVerificationError(runtime_failure)
     return completed.returncode, completed.stdout[-24_000:], completed.stderr[-24_000:], screenshot
 
 
