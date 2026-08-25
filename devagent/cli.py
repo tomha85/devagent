@@ -18,12 +18,21 @@ from devagent.source_control import PublicationPlan, prepare_publication, publis
 from devagent.technical_review import analyze_developer_review
 
 
+_MAX_INPUT_BYTES = 2_000_000
+
+
 def _top_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="devagent", description="Evidence-driven local software engineering agent")
     parser.add_argument("--version", action="version", version=f"DevAgent {__version__}")
     parser.add_argument("task", nargs="?", help="Engineering requirement; reads stdin or prompts when omitted")
     parser.add_argument("--repo", "-r", type=Path, default=Path.cwd(), help="Target repository (default: current directory)")
-    parser.add_argument("--input", "-i", type=Path, help="Read the requirement/error context from a file")
+    parser.add_argument(
+        "--input",
+        "-i",
+        type=Path,
+        metavar="PATH",
+        help="Read the requirement from any local UTF-8 text file path; extension is unrestricted",
+    )
     parser.add_argument("--provider", choices=("openai", "anthropic", "claude", "xai", "grok", "compatible"))
     parser.add_argument("--model")
     parser.add_argument("--base-url")
@@ -117,13 +126,35 @@ def _status(repo: Path) -> int:
     return 0
 
 
+def _read_requirement_file(path: Path) -> str:
+    """Read a bounded textual requirement from any local path, regardless of extension."""
+
+    candidate = path.expanduser()
+    resolved = candidate.resolve(strict=False)
+    if is_secret_path(candidate) or is_secret_path(resolved):
+        raise ValueError("Refusing to read a sensitive input file")
+    if not resolved.is_file():
+        raise ValueError(f"Input path is not a readable file: {candidate}")
+
+    try:
+        with resolved.open("rb") as handle:
+            content = handle.read(_MAX_INPUT_BYTES + 1)
+    except OSError as exc:
+        raise ValueError(f"Could not read input file: {candidate}: {exc}") from exc
+
+    if len(content) > _MAX_INPUT_BYTES:
+        raise ValueError(f"Input text file exceeds {_MAX_INPUT_BYTES} bytes: {candidate}")
+    if b"\x00" in content:
+        raise ValueError(f"Input file appears to be binary, not text: {candidate}")
+    try:
+        return content.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Input file must contain readable UTF-8 text: {candidate}") from exc
+
+
 def _requirement(args: argparse.Namespace) -> str:
     if args.input:
-        if is_secret_path(args.input):
-            raise ValueError("Refusing to read a sensitive input file")
-        if not args.input.is_file() or args.input.stat().st_size > 2_000_000:
-            raise ValueError("Input must be a bounded local text file")
-        return args.input.read_text(encoding="utf-8").strip()
+        return _read_requirement_file(args.input)
     if args.task:
         return args.task.strip()
     if not sys.stdin.isatty():
