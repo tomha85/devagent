@@ -58,6 +58,7 @@ jobs:
         run: |
           devagent --version
           devagent --help >/dev/null
+          devagent benchmark --help >/dev/null
 
       - name: Validate installed dependencies
         run: python -m pip check
@@ -97,15 +98,15 @@ jobs:
       - name: Run production qualification catalog
         run: |
           python -m devagent.qualification \
-            --catalog evaluation/benchmark_v3.json \
-            --report .devagent/production-qualification-v3.json
+            --catalog evaluation/benchmark_v4.json \
+            --report .devagent/production-qualification-v4.json
 
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: production-qualification-v3
-          path: .devagent/production-qualification-v3.json
+          name: production-qualification-v4
+          path: .devagent/production-qualification-v4.json
           if-no-files-found: error
 
   package:
@@ -134,4 +135,5 @@ jobs:
           /tmp/devagent-wheel-smoke/bin/python -m pip install dist/*.whl
           /tmp/devagent-wheel-smoke/bin/devagent --version
           /tmp/devagent-wheel-smoke/bin/devagent --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent benchmark --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/python -m pip check
