@@ -4,8 +4,12 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+
+_WORKTREE_CREATE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -86,64 +90,69 @@ def select_worktree(
     destination = (
         base / "devagent" / "worktrees" / _repository_identifier(source_root) / run_id
     ).resolve()
-    active_worktrees, enumeration_error = _active_worktrees(source_root)
-    if enumeration_error is not None:
-        return WorktreeSelection(
-            source_root,
-            False,
-            f"isolation unavailable: cannot enumerate active worktrees: {enumeration_error}",
-            True,
-        )
-    if any(
-        destination == active or destination.is_relative_to(active)
-        for active in active_worktrees
-    ):
-        return WorktreeSelection(
-            source_root,
-            False,
-            "isolation unavailable: retained worktree destination is inside an active worktree",
-            True,
-        )
-    if destination.exists():
-        return WorktreeSelection(
-            source_root,
-            False,
-            "isolation unavailable: retained worktree destination already exists",
-            True,
-        )
-    try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return WorktreeSelection(
-            source_root,
-            False,
-            f"isolation unavailable: cannot create retained worktree parent: {exc}",
-            True,
-        )
-    try:
-        completed = subprocess.run(
-            ["git", "worktree", "add", "--detach", str(destination), git_head],
-            cwd=source_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return WorktreeSelection(
-            source_root,
-            False,
-            f"isolation unavailable: git worktree add failed safely: {exc}",
-            True,
-        )
-    if completed.returncode != 0:
-        reason = completed.stderr.strip() or completed.stdout.strip() or "git worktree add failed"
-        return WorktreeSelection(
-            source_root,
-            False,
-            f"isolation unavailable: {reason}",
-            True,
-        )
+
+    # Multiple in-process agents may request worktrees at the same time. Serialize
+    # only Git worktree metadata mutation; agent execution remains parallel after
+    # each detached worktree is created.
+    with _WORKTREE_CREATE_LOCK:
+        active_worktrees, enumeration_error = _active_worktrees(source_root)
+        if enumeration_error is not None:
+            return WorktreeSelection(
+                source_root,
+                False,
+                f"isolation unavailable: cannot enumerate active worktrees: {enumeration_error}",
+                True,
+            )
+        if any(
+            destination == active or destination.is_relative_to(active)
+            for active in active_worktrees
+        ):
+            return WorktreeSelection(
+                source_root,
+                False,
+                "isolation unavailable: retained worktree destination is inside an active worktree",
+                True,
+            )
+        if destination.exists():
+            return WorktreeSelection(
+                source_root,
+                False,
+                "isolation unavailable: retained worktree destination already exists",
+                True,
+            )
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return WorktreeSelection(
+                source_root,
+                False,
+                f"isolation unavailable: cannot create retained worktree parent: {exc}",
+                True,
+            )
+        try:
+            completed = subprocess.run(
+                ["git", "worktree", "add", "--detach", str(destination), git_head],
+                cwd=source_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return WorktreeSelection(
+                source_root,
+                False,
+                f"isolation unavailable: git worktree add failed safely: {exc}",
+                True,
+            )
+        if completed.returncode != 0:
+            reason = completed.stderr.strip() or completed.stdout.strip() or "git worktree add failed"
+            return WorktreeSelection(
+                source_root,
+                False,
+                f"isolation unavailable: {reason}",
+                True,
+            )
     return WorktreeSelection(
         destination,
         True,

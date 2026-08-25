@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "name": "DevAgent Production Qualification v5 - Autonomy",
+  "primary_invariant": "false_verified == 0",
+  "qualification_rule": "The complete v4 catalog and every v5 autonomy case must pass before v0.8 may merge.",
+  "required_categories": [
+    "autonomy",
+    "worktree_pool",
+    "skills",
+    "automations",
+    "provider_benchmark"
+  ],
+  "cases": [
+    {
+      "id": "parallel-pool-bounded-order",
+      "category": "worktree_pool",
+      "pytest_node": "tests/test_v080_autonomy.py::test_parallel_coordinator_bounds_concurrency_and_preserves_input_order",
+      "expected": "parallel execution never exceeds configured capacity and result order is deterministic"
+    },
+    {
+      "id": "parallel-dirty-source-blocked",
+      "category": "autonomy",
+      "pytest_node": "tests/test_v080_autonomy.py::test_parallel_coordinator_rejects_dirty_source_before_spawning",
+      "expected": "parallel autonomy fails closed before spawning when real source changes exist"
+    },
+    {
+      "id": "parallel-real-devagent-isolation",
+      "category": "autonomy",
+      "pytest_node": "tests/test_v080_autonomy.py::test_two_real_devagents_run_in_distinct_isolated_worktrees",
+      "expected": "two DevAgent runs are VERIFIED in distinct isolated worktrees while source remains unchanged"
+    },
+    {
+      "id": "skills-bounded-relevance",
+      "category": "skills",
+      "pytest_node": "tests/test_v080_skills_automations.py::test_skill_registry_is_bounded_safe_and_requirement_relevant",
+      "expected": "only bounded relevant repository skills are selected"
+    },
+    {
+      "id": "skills-provider-injection",
+      "category": "skills",
+      "pytest_node": "tests/test_v080_skills_automations.py::test_skill_aware_provider_injects_only_matched_repo_skill",
+      "expected": "matched repository skill context is injected without changing provider authority"
+    },
+    {
+      "id": "automation-due-outcome",
+      "category": "automations",
+      "pytest_node": "tests/test_v080_skills_automations.py::test_automation_store_schedules_due_work_and_records_outcomes",
+      "expected": "due automation executes through bounded coordinator and advances only after observed outcome"
+    },
+    {
+      "id": "provider-benchmark-dedup",
+      "category": "provider_benchmark",
+      "pytest_node": "tests/test_v080_provider_benchmark.py::test_provider_benchmark_deduplicates_same_provider_model_endpoint",
+      "expected": "equivalent provider/model/base-url targets are benchmarked once"
+    },
+    {
+      "id": "provider-benchmark-live-contract",
+      "category": "provider_benchmark",
+      "pytest_node": "tests/test_v080_provider_benchmark.py::test_provider_benchmark_executes_strict_live_contract_with_factory",
+      "expected": "strict live structured provider contract is executed and measured"
+    },
+    {
+      "id": "provider-benchmark-secret-redaction",
+      "category": "provider_benchmark",
+      "pytest_node": "tests/test_v080_provider_benchmark.py::test_provider_benchmark_redacts_secret_values_from_errors",
+      "expected": "benchmark reports do not persist environment secret values"
+    }
+  ]
+}
