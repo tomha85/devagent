@@ -28,6 +28,7 @@ jobs:
           python .devagent-v051-patch.py
           python .devagent-v051-version-fix.py
           python .devagent-v051-routing-test-fix.py
+          python .devagent-v051-eof-fix.py
 
       - name: Install development package
         run: |
