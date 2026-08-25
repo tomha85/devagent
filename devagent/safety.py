@@ -87,7 +87,6 @@ class CommandPolicy:
     }
     _READ_ONLY_GIT = {"diff", "status", "rev-parse", "log", "show", "ls-files", "grep"}
     _SHELL_PROGRAMS = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh"}
-    _INSTALLERS = {("pip", "install"), ("pip3", "install"), ("npm", "install"), ("npm", "i"), ("pnpm", "add"), ("yarn", "add")}
 
     @classmethod
     def parse(cls, command: str | Sequence[str]) -> tuple[str, ...]:
@@ -103,7 +102,106 @@ class CommandPolicy:
         return tokens
 
     @classmethod
-    def validate(cls, command: str | Sequence[str]) -> tuple[str, ...]:
+    def is_dependency_install(cls, command: str | Sequence[str]) -> bool:
+        tokens = cls.parse(command)
+        executable = Path(tokens[0]).name.lower()
+        lowered = tuple(token.lower() for token in tokens)
+        if executable in {"pip", "pip3"}:
+            return len(lowered) > 1 and lowered[1] == "install"
+        if executable in {"python", "python3"}:
+            return len(lowered) > 3 and lowered[1:4] == ("-m", "pip", "install")
+        if executable == "npm":
+            return len(lowered) > 1 and lowered[1] in {"ci", "install", "i"}
+        if executable == "pnpm":
+            return len(lowered) > 1 and lowered[1] in {"install", "i", "add"}
+        if executable == "yarn":
+            return len(lowered) > 1 and lowered[1] in {"install", "add"}
+        return False
+
+    @classmethod
+    def _safe_dependency_install(cls, tokens: tuple[str, ...]) -> tuple[str, ...]:
+        executable = Path(tokens[0]).name.lower()
+        lowered = tuple(token.lower() for token in tokens)
+        if executable in {"python", "python3"}:
+            prefix = tokens[:4]
+            args = list(tokens[4:])
+            kind = "pip"
+        elif executable in {"pip", "pip3"}:
+            prefix = tokens[:2]
+            args = list(tokens[2:])
+            kind = "pip"
+        else:
+            prefix = tokens[:2]
+            args = list(tokens[2:])
+            kind = executable
+
+        forbidden_flags = {
+            "-e", "--editable", "--index-url", "--extra-index-url", "--trusted-host",
+            "--find-links", "--registry", "--global", "-g",
+        }
+        for token in args:
+            normalized = token.lower()
+            if normalized in forbidden_flags or normalized.startswith(
+                ("--index-url=", "--extra-index-url=", "--trusted-host=", "--find-links=", "--registry=")
+            ):
+                raise SafetyError(f"Dependency install option is not allowed: {token}")
+            if normalized.startswith(("http://", "https://", "ftp://", "git+", "ssh://")):
+                raise SafetyError("Direct dependency URLs are blocked")
+
+        if kind == "pip":
+            requirement_index = next(
+                (index for index, token in enumerate(args) if token.lower() in {"-r", "--requirement"}),
+                None,
+            )
+            if requirement_index is None or requirement_index + 1 >= len(args):
+                raise SafetyError("Safe pip installation requires -r/--requirement with a repository file")
+            requirement = args[requirement_index + 1]
+            if requirement.startswith("-") or is_secret_path(Path(requirement)):
+                raise SafetyError("Safe pip installation requires a non-sensitive requirement file")
+            normalized = list(prefix) + args
+            if "--no-input" not in lowered:
+                normalized.append("--no-input")
+            if "--disable-pip-version-check" not in lowered:
+                normalized.append("--disable-pip-version-check")
+            return tuple(normalized)
+
+        if kind == "npm":
+            if lowered[1] != "ci":
+                raise SafetyError("Safe npm installation requires `npm ci`, not a lockfile-mutating install")
+            normalized = list(prefix) + args
+            if "--ignore-scripts" not in lowered:
+                normalized.append("--ignore-scripts")
+            return tuple(normalized)
+
+        if kind == "pnpm":
+            if lowered[1] not in {"install", "i"}:
+                raise SafetyError("Safe pnpm installation does not allow adding arbitrary packages")
+            normalized = list(prefix) + args
+            if "--frozen-lockfile" not in lowered:
+                normalized.append("--frozen-lockfile")
+            if "--ignore-scripts" not in lowered:
+                normalized.append("--ignore-scripts")
+            return tuple(normalized)
+
+        if kind == "yarn":
+            if lowered[1] != "install":
+                raise SafetyError("Safe yarn installation does not allow adding arbitrary packages")
+            normalized = list(prefix) + args
+            if "--frozen-lockfile" not in lowered and "--immutable" not in lowered:
+                normalized.append("--frozen-lockfile")
+            if "--ignore-scripts" not in lowered:
+                normalized.append("--ignore-scripts")
+            return tuple(normalized)
+
+        raise SafetyError("Unsupported dependency installer")
+
+    @classmethod
+    def validate(
+        cls,
+        command: str | Sequence[str],
+        *,
+        allow_dependency_install: bool = False,
+    ) -> tuple[str, ...]:
         tokens = cls.parse(command)
         executable = Path(tokens[0]).name.lower()
         lowered = tuple(token.lower() for token in tokens)
@@ -116,10 +214,13 @@ class CommandPolicy:
             token in {"-c", "-e", "--eval"} for token in lowered[1:]
         ):
             raise SafetyError("Inline interpreter execution is blocked")
-        if executable in {"python", "python3"} and len(lowered) > 2 and lowered[1:3] == ("-m", "pip"):
-            raise SafetyError("Package installation and pip execution are blocked during a run")
-        if len(lowered) > 1 and (executable, lowered[1]) in cls._INSTALLERS:
-            raise SafetyError(f"Package installation is blocked during an engineering run: {' '.join(tokens[:2])}")
+
+        dependency_install = cls.is_dependency_install(tokens)
+        if dependency_install:
+            if not allow_dependency_install:
+                raise SafetyError("Package installation is blocked during an engineering run")
+            tokens = cls._safe_dependency_install(tokens)
+
         for token in tokens:
             lowered_token = token.lower()
             if is_secret_path(Path(lowered_token)):
