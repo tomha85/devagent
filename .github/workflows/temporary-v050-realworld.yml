@@ -40,7 +40,7 @@ jobs:
           make --version | head -1
 
       - name: Apply v0.5 candidate patch
-        run: python .devagent-v050-patch.py
+        run: python .devagent-v050-patch-wrapper.py
 
       - name: Install development package
         run: |
