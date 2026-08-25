@@ -235,7 +235,7 @@ class Workspace:
         )
         try:
             try:
-                execution_argv = self.runtime.prepare(argv)
+                execution_argv = self.runtime.prepare(argv, writable_paths=(sandbox_home,))
             except RuntimePolicyError as exc:
                 raise SafetyError(str(exc)) from exc
             completed = subprocess.run(
