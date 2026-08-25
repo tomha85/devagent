@@ -58,6 +58,32 @@ def test_linux_bwrap_rebinds_external_run_state_writable(tmp_path: Path, monkeyp
     assert argv.index("--tmpfs") < argv.index("--bind")
 
 
+def test_linux_bwrap_reopens_linked_git_common_metadata_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = tmp_path / "source" / ".git"
+    git_dir = common / "worktrees" / "worktree"
+    git_dir.mkdir(parents=True)
+    (git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(worktree, RuntimePolicy(sandbox=SandboxMode.REQUIRED))
+
+    argv = runtime.prepare(("git", "status", "--short"))
+
+    ro_bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--ro-bind"]
+    bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--bind"]
+    common_triplet = ("--ro-bind", str(common.resolve()), str(common.resolve()))
+    root_triplet = ("--bind", str(worktree.resolve()), str(worktree.resolve()))
+    assert common_triplet in ro_bind_triplets
+    assert root_triplet in bind_triplets
+    assert argv.index(common_triplet[1]) < argv.index(root_triplet[1])
+
+
 def test_bwrap_loopback_failure_has_actionable_fail_closed_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
     monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
