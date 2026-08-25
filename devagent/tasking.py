@@ -20,7 +20,7 @@ _CLASSIFIERS: tuple[tuple[TaskType, tuple[str, ...]], ...] = (
     (TaskType.PERFORMANCE, ("performance", "optimize", "slow", "latency", "n+1")),
     (TaskType.REFACTOR, ("refactor", "restructure", "cleanup")),
     (TaskType.UNIT_TEST, ("add unit test", "write tests", "test coverage")),
-    (TaskType.BUG_FIX, ("fix", "bug", "incorrect", "broken", "regression")),
+    (TaskType.BUG_FIX, ("fix", "bug", "incorrect", "broken", "regression failure", "regression bug")),
     (TaskType.FEATURE, ("add ", "implement", "support ", "feature")),
 )
 
@@ -39,7 +39,24 @@ _HIGH_RISK = {
     "concurrency",
 }
 
-_REQUIREMENT_SECTIONS = {"requirements", "required changes", "acceptance criteria", "acceptance"}
+_REQUIREMENT_SECTIONS = {
+    "requirements",
+    "required changes",
+    "acceptance criteria",
+    "acceptance",
+    "tests",
+    "verification",
+    "constraints",
+}
+_KNOWN_SECTIONS = _REQUIREMENT_SECTIONS | {
+    "goal",
+    "context",
+    "current behavior",
+    "current behaviour",
+    "non-goals",
+    "non goals",
+    "notes",
+}
 _DIRECTIVE = re.compile(
     r"^(?:add|implement|support|preserve|keep|ensure|require|must|should|when|do not|don't|"
     r"verify|run|return|raise|allow|prevent|maintain|migrate|refactor|update|fix|handle)\b",
@@ -81,23 +98,52 @@ def _dedupe(items: list[str]) -> list[str]:
     return result
 
 
+def _section_header(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    markdown = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+    if markdown:
+        return markdown.group(1).strip().rstrip(":").lower(), ""
+    colon = re.match(r"^([A-Za-z][A-Za-z0-9 _/-]{0,80})\s*:\s*(.*)$", stripped)
+    if colon and colon.group(1).strip().lower() in _KNOWN_SECTIONS:
+        return colon.group(1).strip().lower(), colon.group(2).strip()
+    return None
+
+
 def _user_acceptance_items(requirement: str) -> list[str]:
     lines = requirement.splitlines()
     explicit: list[str] = []
-    active = False
+    active_section: str | None = None
     for raw in lines:
         stripped = raw.strip()
         if not stripped:
             continue
-        heading = stripped.rstrip(":").strip().lower()
-        if stripped.endswith(":"):
-            active = heading in _REQUIREMENT_SECTIONS
+
+        bullet = re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", stripped)
+        if bullet:
+            if active_section in _REQUIREMENT_SECTIONS:
+                explicit.append(_clean_requirement_item(stripped))
             continue
-        if active and re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", stripped):
-            explicit.append(_clean_requirement_item(stripped))
+
+        header = _section_header(stripped)
+        if header is not None:
+            name, inline = header
+            active_section = name if name in _REQUIREMENT_SECTIONS else None
+            if active_section is not None and inline:
+                explicit.append(_clean_requirement_item(inline))
+            continue
+
+        if active_section in _REQUIREMENT_SECTIONS:
+            item = _clean_requirement_item(stripped)
+            if (
+                active_section in {"tests", "verification", "constraints"}
+                or _DIRECTIVE.match(item)
+                or re.search(r"\b(?:must|should|shall)\b", item, re.IGNORECASE)
+            ):
+                explicit.append(item)
+
     explicit = _dedupe(explicit)
     if explicit:
-        return explicit[:24]
+        return explicit
 
     candidates = re.split(r"(?<=[.!?;])\s+|\n+", requirement)
     directives: list[str] = []
@@ -110,7 +156,7 @@ def _user_acceptance_items(requirement: str) -> list[str]:
             directives.append(item)
     directives = _dedupe(directives)
     if directives:
-        return directives[:24]
+        return directives
     return [re.sub(r"\s+", " ", requirement).strip()]
 
 

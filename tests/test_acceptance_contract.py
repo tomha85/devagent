@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from devagent.models import (
     AcceptanceCriterion,
     AcceptanceSource,
@@ -314,3 +316,134 @@ def test_without_changing_preservation_requires_baseline_and_final_evidence() ->
     baseline = _result(("python", "-m", "pytest", "-q"), baseline=True, tests=1)
     _support_acceptance_criteria(verification=[baseline, final], **common)
     assert task.acceptance_criteria[0].status is AcceptanceStatus.SATISFIED
+
+
+def test_feature_with_regression_test_language_is_not_misclassified_as_bug_fix() -> None:
+    spec = compile_task(
+        "Add average(values). Preserve divide behavior. Add a regression test and verify the application."
+    )
+    assert spec.task_type is TaskType.FEATURE
+
+
+def test_markdown_sections_keep_tests_verification_constraints_and_more_than_24_items() -> None:
+    requirement_lines = [
+        "# Customer requirement",
+        "## Context",
+        "- Existing service is in production.",
+        "## Requirements",
+        *[f"- Add behavior_{index}()" for index in range(30)],
+        "## Tests",
+        "- Add a regression test for behavior_0().",
+        "## Verification",
+        "- All relevant automated tests must pass.",
+        "## Constraints",
+        "- Do not modify unrelated APIs.",
+        "## Non-goals",
+        "- Replace the entire application.",
+    ]
+    spec = compile_task("\n".join(requirement_lines))
+    user = [item.description for item in spec.acceptance_criteria if item.source is AcceptanceSource.USER]
+    assert len([item for item in user if item.startswith("Add behavior_")]) == 30
+    assert "Add a regression test for behavior_0()" in user
+    assert "All relevant automated tests must pass" in user
+    assert "Do not modify unrelated APIs" in user
+    assert "Replace the entire application" not in user
+
+
+def test_named_preservation_requires_deterministic_baseline_subject(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    git("init")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    (tmp_path / "calculator.py").write_text("def divide(a, b):\n    return a / b\n", encoding="utf-8")
+    (tmp_path / "test_calculator.py").write_text(
+        "from calculator import divide\n\ndef test_divide():\n    assert divide(8, 2) == 4\n",
+        encoding="utf-8",
+    )
+    git("add", ".")
+    git("commit", "-m", "baseline")
+
+    # Final tree can add multiply and a matching test, but that cannot prove it was existing.
+    (tmp_path / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\ndef multiply(a, b):\n    return a * b\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_calculator.py").write_text(
+        "from calculator import divide, multiply\n\ndef test_divide():\n    assert divide(8, 2) == 4\n\ndef test_multiply():\n    assert multiply(2, 3) == 6\n",
+        encoding="utf-8",
+    )
+    task = TaskSpec(
+        task_type=TaskType.FEATURE,
+        goal="Preserve existing multiply behavior",
+        requires_code_change=True,
+        requires_tests=True,
+        acceptance_criteria=[
+            AcceptanceCriterion("Preserve existing multiply behavior", source=AcceptanceSource.USER)
+        ],
+        risk=compile_task("Add feature").risk,
+    )
+    baseline = _result(("python", "-m", "pytest", "-q"), baseline=True, tests=1)
+    final = _result(("python", "-m", "pytest", "-q"), tests=2)
+    review_evidence = DeveloperReviewEvidence(
+        changed_symbols=[CodeSymbol("calculator.py", "multiply", "function", 4, "ADDED")],
+        test_cases=[
+            CodeSymbol("test_calculator.py", "test_divide", "function", 3, "UNCHANGED"),
+            CodeSymbol("test_calculator.py", "test_multiply", "function", 6, "ADDED"),
+        ],
+        test_files=["test_calculator.py"],
+    )
+    understanding = Understanding(
+        problem="Add requested calculator behavior.",
+        expected_behavior="Complete the requested calculator task.",
+        affected_paths=["calculator.py", "test_calculator.py"],
+        root_cause="Requested behavior needs an implementation change.",
+        evidence=[Evidence("Calculator files are relevant.", ("calculator.py", "test_calculator.py"), 1.0)],
+        proposed_solution=["Implement and test the requested change."],
+        confidence=0.99,
+    )
+    _support_acceptance_criteria(
+        task,
+        _repo(),
+        understanding,
+        ChangeMetrics(2, 6, 0, ["calculator.py", "test_calculator.py"]),
+        [baseline, final],
+        [final],
+        ReviewDecision(True, [], "approved"),
+        review_evidence,
+        ["Added multiply"],
+        "+def multiply(a, b):\n+    return a * b\n",
+        tmp_path,
+    )
+    criterion = task.acceptance_criteria[0]
+    assert criterion.status is AcceptanceStatus.UNPROVEN
+    assert "not present in deterministic baseline" in (criterion.reason or "")
+
+
+def test_refactor_policy_accepts_existing_baseline_regression_suite_without_test_edits() -> None:
+    task = compile_task("Refactor parser internals")
+    criterion = next(
+        item
+        for item in task.acceptance_criteria
+        if item.description == "Regression coverage protects the refactored behavior"
+    )
+    baseline = _result(("python", "-m", "pytest", "-q"), baseline=True, tests=20)
+    final = _result(("python", "-m", "pytest", "-q"), tests=20)
+    _support_acceptance_criteria(
+        task,
+        _repo(),
+        _understanding(),
+        ChangeMetrics(1, 3, 3, ["parser.py"]),
+        [baseline, final],
+        [final],
+        ReviewDecision(True, [], "approved"),
+        DeveloperReviewEvidence(changed_symbols=[CodeSymbol("parser.py", "parse", "function", 1, "MODIFIED")]),
+        ["Refactor parser internals without changing behavior"],
+        "-old\n+new\n",
+    )
+    assert criterion.status is AcceptanceStatus.SATISFIED

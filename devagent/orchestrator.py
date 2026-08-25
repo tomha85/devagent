@@ -27,6 +27,7 @@ from devagent.models import (
     Understanding,
     VerificationResult,
     jsonable,
+    preserved_subjects,
 )
 from devagent.providers import ModelProvider, ProviderError
 from devagent.report import render_report
@@ -495,6 +496,46 @@ def _set_acceptance(
     criterion.reason = reason
 
 
+def _baseline_subject_evidence(root: Path, subject: str, paths: Sequence[str]) -> list[str]:
+    """Find a named preservation subject in the exact Git baseline for affected paths."""
+
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(subject)}(?![A-Za-z0-9_])",
+        re.IGNORECASE,
+    )
+    evidence: list[str] = []
+    for path in sorted(set(paths)):
+        completed = subprocess.run(
+            ["git", "show", f"HEAD:{path}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if completed.returncode == 0 and pattern.search(completed.stdout):
+            evidence.append(f"baseline {path} contains named subject {subject}")
+    return evidence
+
+
+def _final_contract_evidence(root: Path, contract: str, paths: Sequence[str]) -> list[str]:
+    """Find an exact quoted user contract in bounded final relevant files."""
+
+    needle = contract.lower()
+    evidence: list[str] = []
+    for path in sorted(set(paths)):
+        target = root / path
+        if not target.is_file():
+            continue
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if needle in text.lower():
+            evidence.append(f"final {path} contains exact quoted contract")
+    return evidence
+
+
 def _support_acceptance_criteria(
     task: Any,
     repository: Any,
@@ -506,6 +547,7 @@ def _support_acceptance_criteria(
     developer_review: DeveloperReviewEvidence,
     implementation: Sequence[str],
     diff_text: str,
+    working_root: Path | None = None,
 ) -> None:
     passing_tests = [
         result
@@ -615,8 +657,12 @@ def _support_acceptance_criteria(
                     *("final: " + " ".join(item.command) for item in passing_tests),
                 ]
             elif lowered == "regression coverage protects the refactored behavior":
-                satisfied = bool(changed_tests and passing_tests)
-                evidence = [*changed_tests, *(" ".join(item.command) for item in passing_tests)]
+                satisfied = review.approved and bool(baseline_tests and passing_tests)
+                evidence = [
+                    "Independent reviewer approved refactor regression coverage",
+                    *("baseline: " + " ".join(item.command) for item in baseline_tests),
+                    *("final: " + " ".join(item.command) for item in passing_tests),
+                ]
             elif lowered == "migration preserves compatibility with the current supported application contract":
                 satisfied = review.approved and bool(baseline_tests and passing_tests)
                 evidence = [
@@ -626,7 +672,7 @@ def _support_acceptance_criteria(
                 ]
             elif lowered == "migration has an explicit forward and rollback or safe non-reversible strategy":
                 strategy_terms = ("rollback", "downgrade", "reversible", "non-reversible", "expand", "contract")
-                present = [term for term in strategy_terms if term in implementation_text or term in lower_diff]
+                present = [term for term in strategy_terms if term in lower_diff]
                 satisfied = review.approved and bool(present)
                 evidence = ["Independent reviewer approved migration strategy", *(f"strategy evidence: {item}" for item in present)]
             elif lowered == "migration behavior is covered against representative existing state":
@@ -653,7 +699,21 @@ def _support_acceptance_criteria(
         quoted_contracts = [
             item for item in re.findall(r'["\']([^"\']{4,})["\']', criterion.description)
         ]
-        quoted_missing = [item for item in quoted_contracts if item.lower() not in lower_diff]
+        relevant_paths = [*understanding.affected_paths, *changes.paths]
+        quoted_evidence: list[str] = []
+        quoted_missing: list[str] = []
+        for contract in quoted_contracts:
+            hits = (
+                _final_contract_evidence(working_root, contract, relevant_paths)
+                if working_root is not None
+                else []
+            )
+            if hits:
+                quoted_evidence.extend(hits)
+            elif contract.lower() in lower_diff:
+                quoted_evidence.append("Final diff contains exact quoted contract")
+            else:
+                quoted_missing.append(contract)
         conflict = next((subject for subject in conflicts if subject in lowered), None)
         if conflict:
             _set_acceptance(
@@ -709,6 +769,25 @@ def _support_acceptance_criteria(
         if preservation and not matched_tests:
             criterion.reason = "Preservation requirement has no matching regression-test inventory evidence"
             continue
+        named_subjects = preserved_subjects(criterion.description) if preservation else set()
+        named_baseline_evidence: list[str] = []
+        if named_subjects:
+            if working_root is None:
+                criterion.reason = "Named preservation requirement has no deterministic baseline repository root"
+                continue
+            missing_subjects: list[str] = []
+            for subject in sorted(named_subjects):
+                hits = _baseline_subject_evidence(working_root, subject, understanding.affected_paths)
+                if hits:
+                    named_baseline_evidence.extend(hits)
+                else:
+                    missing_subjects.append(subject)
+            if missing_subjects:
+                criterion.reason = (
+                    "Named preservation subject is not present in deterministic baseline affected-path evidence: "
+                    + ", ".join(missing_subjects)
+                )
+                continue
         if preservation and not baseline_tests:
             criterion.reason = "Preservation requirement has no passing baseline test evidence for comparison"
             continue
@@ -721,7 +800,7 @@ def _support_acceptance_criteria(
         if task.requires_tests and not passing_tests:
             criterion.reason = "User criterion cannot be satisfied because no final evidence-backed tests passed"
             continue
-        evidence = [*matched]
+        evidence = [*matched, *quoted_evidence, *named_baseline_evidence]
         if diff_tokens:
             evidence.append("Final diff semantic tokens: " + ", ".join(sorted(diff_tokens)))
         if preservation:
@@ -1123,7 +1202,7 @@ class DevAgent:
             changes = _metrics(working_root, workspace.modified_paths)
             if changes.files_changed > 8 or changes.lines_added + changes.lines_deleted > 500:
                 raise OrchestrationError("Minimal-diff gate rejected unexpectedly broad scope")
-            if task.requires_tests and task.task_type not in {TaskType.TEST_FAILURE, TaskType.UNIT_TEST} and not any(
+            if task.requires_tests and task.task_type not in {TaskType.TEST_FAILURE, TaskType.UNIT_TEST, TaskType.REFACTOR} and not any(
                 _is_test_path(path) for path in changes.paths
             ):
                 raise OrchestrationError("Required regression/feature coverage was not added or updated")
@@ -1164,6 +1243,7 @@ class DevAgent:
                     developer_review,
                     implementation,
                     final_diff,
+                    working_root,
                 )
             contradicted_criteria = [
                 criterion.description

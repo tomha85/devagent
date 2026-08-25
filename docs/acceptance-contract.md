@@ -20,3 +20,7 @@ Structured requirement files may provide bullet items under `Requirements`, `Req
 `REFACTOR` requires tests and behavior-preservation/regression evidence. `MIGRATION` is high risk, requires tests, and adds compatibility, migration-strategy, and representative-existing-state criteria. Existing high-risk behavior still prevents full verification when no broad/static repository verification capability is available.
 
 The independent reviewer can supplement evidence but cannot override a deterministic contradiction or turn unrelated passing tests into proof of a user criterion.
+
+Structured Markdown headings are supported for `Requirements`, `Required Changes`, `Acceptance Criteria`, `Tests`, `Verification`, and `Constraints`. DevAgent does not silently truncate explicit user criteria. Context and non-goal sections are not promoted to required acceptance criteria.
+
+For named preservation claims such as `preserve existing multiply behavior`, final verification also searches the exact Git baseline across the evidence-backed affected paths. A newly added symbol/test cannot be used as proof that the named behavior existed before the run.

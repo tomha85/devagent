@@ -218,7 +218,7 @@ _PRESERVATION_GENERIC_WORDS = frozenset(
 )
 
 
-def _preserved_subjects(text: str) -> set[str]:
+def preserved_subjects(text: str) -> set[str]:
     subjects: set[str] = set()
     for pattern in _PRESERVATION_PATTERNS:
         for match in pattern.finditer(text):
@@ -275,7 +275,7 @@ class Understanding:
         )
         return sorted(
             subject
-            for subject in _preserved_subjects(corpus)
+            for subject in preserved_subjects(corpus)
             if _explicitly_absent(corpus, subject)
         )
 

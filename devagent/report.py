@@ -93,7 +93,7 @@ def _completeness_lines(result: RunResult) -> list[str]:
 
     return [
         f"Outcome: {result.outcome.value}",
-        f"Required acceptance criteria evidenced: {acceptance_done}/{acceptance_total}",
+        f"Required acceptance criteria satisfied: {acceptance_done}/{acceptance_total}",
         f"Final/current verification checks: {final_passed} passed, {final_failed} failed",
         f"Independent review: {review_status}",
         f"Changed files: {result.changes.files_changed}",
@@ -159,7 +159,7 @@ def _implementation_logic_summary(result: RunResult) -> list[str]:
     lines.extend(
         [
             "Why this result is considered sufficient / insufficient:",
-            f"- Required acceptance evidence: {acceptance_done}/{acceptance_total}",
+            f"- Required acceptance criteria satisfied: {acceptance_done}/{acceptance_total}",
             f"- Final/current verification: {final_passed} passed, {final_failed} failed",
             f"- Independent review: {review_status}",
             f"- Outcome decision: {result.outcome.value}",
