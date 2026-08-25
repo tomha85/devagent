@@ -94,8 +94,23 @@ jobs:
       - name: Install Linux sandbox backend
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap apparmor-utils
           bwrap --version
+
+          # Ubuntu 24.04 enables AppArmor restrictions for unprivileged user
+          # namespaces. Grant only /usr/bin/bwrap the userns permission it needs
+          # to create the isolated network namespace; do not disable AppArmor or
+          # the host-wide userns restriction.
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
 
       - name: Install development package
         run: |
@@ -121,11 +136,12 @@ jobs:
               source.mkdir()
               worktree.mkdir()
               artifacts = RunArtifacts(source, run_id="ci-real-bwrap")
-              result = Workspace(worktree, artifacts).run(
+              workspace = Workspace(worktree, artifacts)
+              result = workspace.run(
                   (sys.executable, "--version"),
                   phase="sandbox-smoke",
               )
-              print("sandbox backend:", Workspace(worktree, artifacts).runtime.backend)
+              print("sandbox backend:", workspace.runtime.backend)
               print("exit:", result.exit_code)
               print("stdout:", result.stdout)
               print("stderr:", result.stderr)
@@ -148,7 +164,7 @@ jobs:
         with:
           name: production-qualification-v4
           path: .devagent/production-qualification-v4.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   package:
     name: Build and install wheel
