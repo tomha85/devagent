@@ -1,0 +1,52 @@
+name: v0.3.2 Post-Report Publish Verification
+
+on:
+  push:
+    branches: [feat/branch-publish-reporting-v032]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v032-post-report-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m compileall -q devagent
+      - run: python -m pytest -q --cov=devagent --cov-report=term-missing --cov-fail-under=75
+      - run: git diff --check
+      - run: devagent --version
+      - run: devagent --help >/dev/null
+      - run: python -m pip check
+
+  package:
+    name: Build and install wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - run: |
+          python -m venv /tmp/devagent-wheel-smoke
+          /tmp/devagent-wheel-smoke/bin/python -m pip install --upgrade pip
+          /tmp/devagent-wheel-smoke/bin/python -m pip install dist/*.whl
+          /tmp/devagent-wheel-smoke/bin/devagent --version
+          /tmp/devagent-wheel-smoke/bin/devagent --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/python -m pip check
