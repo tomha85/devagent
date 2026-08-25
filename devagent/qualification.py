@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -87,9 +88,12 @@ def run_qualification(
 
     for case in cases:
         started = time.monotonic()
+        environment = os.environ.copy()
+        environment["DEVAGENT_PRODUCTION_QUALIFICATION"] = "1"
         completed = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", case.pytest_node],
             cwd=root,
+            env=environment,
             capture_output=True,
             text=True,
             check=False,
@@ -153,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--catalog",
         type=Path,
-        default=Path("evaluation/benchmark_v2.json"),
+        default=Path("evaluation/benchmark_v3.json"),
         help="Qualification catalog path",
     )
     parser.add_argument(

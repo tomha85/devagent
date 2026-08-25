@@ -337,8 +337,22 @@ def create_provider(config: ProviderConfig) -> ModelProvider:
     provider = config.provider.lower()
     if provider in {"anthropic", "claude"}:
         return AnthropicProvider(config)
-    if provider in {"openai", "xai", "grok", "compatible"}:
+    if provider in {"openai", "xai", "grok", "gemini", "google", "compatible"}:
         if provider in {"xai", "grok"} and not config.base_url:
-            config = ProviderConfig(provider, config.model, "https://api.x.ai/v1", config.api_key_env, config.timeout_seconds)
+            config = ProviderConfig(
+                provider,
+                config.model,
+                "https://api.x.ai/v1",
+                config.api_key_env,
+                config.timeout_seconds,
+            )
+        elif provider in {"gemini", "google"} and not config.base_url:
+            config = ProviderConfig(
+                provider,
+                config.model,
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                config.api_key_env,
+                config.timeout_seconds,
+            )
         return OpenAICompatibleProvider(config)
     raise ProviderError(f"Unsupported provider: {provider}")

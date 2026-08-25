@@ -29,7 +29,7 @@ from devagent.technical_review import analyze_developer_review
 
 
 _MAX_INPUT_BYTES = 2_000_000
-_PROVIDER_CHOICES = ("openai", "anthropic", "claude", "xai", "grok", "compatible")
+_PROVIDER_CHOICES = ("openai", "anthropic", "claude", "xai", "grok", "gemini", "google", "compatible")
 
 
 def _top_parser() -> argparse.ArgumentParser:

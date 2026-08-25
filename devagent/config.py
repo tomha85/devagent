@@ -20,6 +20,8 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
     "claude": ("claude-sonnet-4-20250514", "ANTHROPIC_API_KEY"),
     "xai": ("grok-4", "XAI_API_KEY"),
     "grok": ("grok-4", "XAI_API_KEY"),
+    "gemini": ("gemini-3.7-flash", "GEMINI_API_KEY"),
+    "google": ("gemini-3.7-flash", "GEMINI_API_KEY"),
     "compatible": ("local-model", "DEVAGENT_API_KEY"),
     "fake": ("fake", ""),
 }
