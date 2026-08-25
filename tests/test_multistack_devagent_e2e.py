@@ -263,7 +263,24 @@ def test_real_multistack_devagent_feature_patch_is_verified(
         ),
     )
 
-    assert result.outcome is Outcome.VERIFIED
+    diagnostic = {
+        "stack": stack,
+        "outcome": result.outcome.value,
+        "states": [state.value for state in result.state_history],
+        "not_run": result.not_run,
+        "verification": [
+            {
+                "command": list(item.command),
+                "phase": item.phase,
+                "exit": item.exit_code,
+                "classification": item.classification.value if item.classification else None,
+                "stderr": item.stderr[-2000:],
+                "stdout": item.stdout[-2000:],
+            }
+            for item in result.verification
+        ],
+    }
+    assert result.outcome is Outcome.VERIFIED, diagnostic
     assert result.review and result.review.approved
     assert all(
         criterion.status is AcceptanceStatus.SATISFIED
