@@ -243,6 +243,15 @@ class Workspace:
             )
             exit_code: int | None = completed.returncode
             stdout, stderr = completed.stdout[-24_000:], completed.stderr[-24_000:]
+            runtime_failure = self.runtime.infrastructure_failure(stderr) if exit_code != 0 else None
+            if runtime_failure:
+                self.artifacts.record(
+                    "runtime_blocked",
+                    backend=self.runtime.backend,
+                    network=self.runtime_policy.network.value,
+                    error=runtime_failure,
+                )
+                raise SafetyError(runtime_failure)
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             exit_code = None
@@ -305,7 +314,10 @@ def classify_failure(stdout: str, stderr: str, timed_out: bool = False) -> Failu
         (FailureClass.ASSERTION_FAILURE, ("assertionerror", "assertion failed", " failed")),
         (FailureClass.DEPENDENCY_ERROR, ("command not found", "could not resolve", "package is not installed")),
         (FailureClass.BUILD_ERROR, ("build failed", "compilation failed", "linker")),
-        (FailureClass.ENVIRONMENT_ERROR, ("permission denied", "connection refused", "credentials", "not installed")),
+        (
+            FailureClass.ENVIRONMENT_ERROR,
+            ("permission denied", "operation not permitted", "connection refused", "credentials", "not installed"),
+        ),
     )
     for classification, needles in patterns:
         if any(needle in text for needle in needles):
