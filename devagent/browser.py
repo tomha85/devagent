@@ -104,6 +104,8 @@ def verify_browser(
     output_dir.mkdir(parents=True, exist_ok=True)
     profile_dir.mkdir(parents=True, exist_ok=True)
     screenshot = output_dir / "latest.png"
+    # A prior successful capture must never satisfy the current verification attempt.
+    screenshot.unlink(missing_ok=True)
 
     command: list[str] = [
         browser,
