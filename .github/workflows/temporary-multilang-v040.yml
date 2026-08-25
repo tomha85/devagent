@@ -70,6 +70,7 @@ jobs:
           git add \
             devagent/orchestrator.py \
             devagent/technical_review.py \
+            devagent/workspace.py \
             evaluation/benchmark_v3.json \
             tests/test_functional_qualification.py \
             README.md \
