@@ -37,6 +37,22 @@ def test_linux_bwrap_can_explicitly_inherit_network(tmp_path: Path, monkeypatch:
     assert argv[-2:] == ("pytest", "-q")
 
 
+def test_linux_bwrap_rebinds_external_run_state_writable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    worktree = tmp_path / "worktree"
+    run_home = tmp_path / "source" / ".devagent" / "runs" / "run-1" / "command-home"
+    worktree.mkdir()
+    run_home.mkdir(parents=True)
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(worktree, RuntimePolicy(sandbox=SandboxMode.AUTO))
+
+    argv = runtime.prepare(("pytest", "-q"), writable_paths=(run_home,))
+
+    bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--bind"]
+    assert ("--bind", str(worktree.resolve()), str(worktree.resolve())) in bind_triplets
+    assert ("--bind", str(run_home.resolve()), str(run_home.resolve())) in bind_triplets
+
+
 def test_required_sandbox_fails_closed_when_bwrap_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
     monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: None)
