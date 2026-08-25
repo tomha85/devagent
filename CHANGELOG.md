@@ -2,6 +2,18 @@
 
 All notable changes to DevAgent are documented here.
 
+## 0.3.2 — 2026-08-24
+
+### Verified branch publishing and reporting
+
+- Added explicit opt-in branch publishing with `--publish` or `--publish-branch` after a run reaches `VERIFIED`.
+- Publishing is performed by deterministic harness code, not by the model or engineering command runner.
+- Publishing requires the default isolated worktree, refuses protected branches such as `main` and `master`, refuses existing remote branches, stages only reviewed changed paths, creates one commit, and pushes to the selected remote branch.
+- DevAgent still never creates pull requests or performs merges, rebases, deployments, force pushes, or destructive Git operations.
+- Expanded final reports with per-command verification phase, exit code, duration, test counts, failure classifications, bounded stdout/stderr for failed checks, independent-review details, and deterministic recommendations.
+- Added machine-readable source-control results including requested remote/branch, commit SHA, commit status, push status, and publication error.
+- Added local bare-remote regression tests proving successful branch push and rejection of protected/non-VERIFIED publication attempts.
+
 ## 0.3.1 — 2026-08-24
 
 ### Packaging and distribution
@@ -34,7 +46,7 @@ All notable changes to DevAgent are documented here.
 - Generated-state filtering while preserving protection for real developer changes.
 - Exact built-in `git diff --check` verification.
 - Evidence-first outcome contract: `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
-- No automatic commit, push, merge, rebase, or deploy.
+- No automatic commit, push, merge, rebase, or deploy by default.
 
 ## 0.2.1 — 2026-08-24
 
