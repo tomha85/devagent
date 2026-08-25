@@ -103,6 +103,77 @@ def _completeness_lines(result: RunResult) -> list[str]:
     ]
 
 
+def _implementation_logic_summary(result: RunResult) -> list[str]:
+    acceptance_done, acceptance_total = _acceptance_summary(result)
+    final = _final_verification(result)
+    final_passed = sum(1 for verification in final if verification.passed)
+    final_failed = sum(1 for verification in final if not verification.passed)
+
+    lines = [
+        f"Requirement: {result.task.goal}",
+        f"Problem / design gap: {result.root_cause or 'Not established'}",
+        "Chosen implementation logic:",
+    ]
+    lines.extend(f"- {item}" for item in result.implementation or ["No implementation completed"])
+
+    lines.append("Code-level effect:")
+    if result.developer_review.changed_symbols:
+        for symbol in result.developer_review.changed_symbols[:8]:
+            location = f"{symbol.path}:{symbol.line}" if symbol.line is not None else symbol.path
+            lines.append(f"- {symbol.change} {symbol.kind} {symbol.name} at {location}")
+        if len(result.developer_review.changed_symbols) > 8:
+            lines.append(f"- ... plus {len(result.developer_review.changed_symbols) - 8} additional changed symbol(s); see detailed inventory below")
+    else:
+        lines.append(f"- {result.changes.files_changed} changed file(s); no Python symbol-level delta was identified")
+
+    lines.append("Test / verification logic:")
+    if result.developer_review.test_cases:
+        changed_tests = [test for test in result.developer_review.test_cases if test.change != "UNCHANGED"]
+        tests_to_show = changed_tests or result.developer_review.test_cases
+        for test in tests_to_show[:8]:
+            location = f"{test.path}:{test.line}" if test.line is not None else test.path
+            lines.append(f"- {test.change} test {test.name} at {location}")
+        if len(tests_to_show) > 8:
+            lines.append(f"- ... plus {len(tests_to_show) - 8} additional test case(s); see detailed inventory below")
+    else:
+        lines.append("- No changed Python test case names were identified")
+
+    final_commands = [" ".join(verification.command) for verification in final]
+    if final_commands:
+        lines.append("- Final/current revision checks: " + "; ".join(final_commands))
+    else:
+        lines.append("- No final/current revision verification command was recorded")
+
+    preserved = [
+        criterion.description
+        for criterion in result.task.acceptance_criteria
+        if any(token in criterion.description.lower() for token in ("preserve", "existing", "remain", "unchanged", "regression"))
+    ]
+    lines.append("Preserved behavior / scope constraints:")
+    if preserved:
+        lines.extend(f"- {description}" for description in preserved)
+    else:
+        lines.append("- No explicit preserve/backward-compatibility acceptance criterion was recorded; developer should confirm unchanged behavior outside the listed scope")
+
+    review_status = "approved" if result.review and result.review.approved else "not approved"
+    lines.extend(
+        [
+            "Why this result is considered sufficient / insufficient:",
+            f"- Required acceptance evidence: {acceptance_done}/{acceptance_total}",
+            f"- Final/current verification: {final_passed} passed, {final_failed} failed",
+            f"- Independent review: {review_status}",
+            f"- Outcome decision: {result.outcome.value}",
+        ]
+    )
+    if result.outcome is Outcome.VERIFIED:
+        lines.append("- VERIFIED means the final revision satisfied DevAgent's required evidence, verification, scope, and independent-review gates; human merge approval is still required")
+    elif result.outcome is Outcome.PARTIALLY_VERIFIED:
+        lines.append("- PARTIALLY_VERIFIED means some implementation evidence exists but the final change is not fully proven")
+    else:
+        lines.append("- BLOCKED means DevAgent could not safely prove the implementation and it should not be integrated")
+    return lines
+
+
 def render_report(result: RunResult) -> str:
     passed = [verification for verification in result.verification if verification.passed]
     failed = [verification for verification in result.verification if not verification.passed]
@@ -112,22 +183,29 @@ def render_report(result: RunResult) -> str:
         "STATUS",
         result.outcome.value,
         "",
-        "TASK",
-        result.task.goal,
-        f"Task type: {result.task.task_type.value}",
-        f"Risk: {result.task.risk.value}",
-        "",
-        "REPOSITORY",
-        result.repository.root,
-        f"Source branch: {result.repository.git_branch or '(not a Git branch)'}",
-        f"Source HEAD: {result.repository.git_head or '(unknown)'}",
-        f"Working root: {result.working_root}",
-        "",
-        "WHY THIS CHANGE",
-        result.root_cause or "Root cause/design reason was not established",
-        "",
-        "IMPLEMENTATION DECISIONS",
+        "IMPLEMENTATION LOGIC SUMMARY",
     ]
+    lines.extend(_implementation_logic_summary(result))
+    lines.extend(
+        [
+            "",
+            "TASK",
+            result.task.goal,
+            f"Task type: {result.task.task_type.value}",
+            f"Risk: {result.task.risk.value}",
+            "",
+            "REPOSITORY",
+            result.repository.root,
+            f"Source branch: {result.repository.git_branch or '(not a Git branch)'}",
+            f"Source HEAD: {result.repository.git_head or '(unknown)'}",
+            f"Working root: {result.working_root}",
+            "",
+            "WHY THIS CHANGE",
+            result.root_cause or "Root cause/design reason was not established",
+            "",
+            "IMPLEMENTATION DECISIONS",
+        ]
+    )
     lines.extend(f"- {item}" for item in result.implementation or ["No implementation completed"])
 
     lines.extend(
