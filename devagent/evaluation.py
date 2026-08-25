@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from devagent.models import Outcome, RunResult, jsonable
+from devagent.models import AcceptanceStatus, Outcome, RunResult, jsonable
 from devagent.orchestrator import DevAgent
 from devagent.providers import ModelProvider
 
@@ -177,6 +177,15 @@ def _final_verification_passed(result: RunResult) -> bool:
     return bool(final) and all(item.passed for item in final)
 
 
+def _acceptance_satisfaction(criteria: Iterable[Any]) -> tuple[int, int]:
+    required = [criterion for criterion in criteria if criterion.required]
+    satisfied = sum(
+        criterion.status is AcceptanceStatus.SATISFIED
+        for criterion in required
+    )
+    return satisfied, len(required)
+
+
 def _known_new_regressions(result: RunResult) -> int | None:
     """Count only regressions supported by comparable baseline/final evidence."""
     baseline_by_command = {
@@ -220,8 +229,7 @@ def evaluate(
     runtime = time.monotonic() - started
     source_after = _repository_snapshot(repository)
 
-    supported = sum(bool(criterion.evidence) for criterion in result.task.acceptance_criteria)
-    total = len(result.task.acceptance_criteria)
+    supported, total = _acceptance_satisfaction(result.task.acceptance_criteria)
     coverage = supported / total if total else 1.0
     metrics = EvaluationMetrics(
         task_success=result.outcome is Outcome.VERIFIED,
@@ -260,10 +268,7 @@ def score_evaluation(
         allowed = ",".join(item.value for item in expected.expected_outcomes)
         violations.append(f"unexpected_outcome:{metrics.outcome.value}:expected={allowed}")
 
-    false_verified = (
-        metrics.outcome is Outcome.VERIFIED
-        and Outcome.VERIFIED not in expected.expected_outcomes
-    )
+    false_verified = False
     unexpected_blocked = (
         metrics.outcome is Outcome.BLOCKED
         and Outcome.BLOCKED not in expected.expected_outcomes
@@ -305,6 +310,24 @@ def score_evaluation(
         violations.append(
             f"lines_changed:{metrics.lines_changed}:max={expected.max_lines_changed}"
         )
+
+    false_verified_markers = (
+        "verified_without_complete_acceptance_evidence",
+        "verified_without_approved_review",
+        "verified_without_final_verification",
+        "verified_with_unknown_regression_status",
+        "new_regressions:",
+        "source_head_changed",
+        "source_status_changed",
+    )
+    false_verified = metrics.outcome is Outcome.VERIFIED and (
+        Outcome.VERIFIED not in expected.expected_outcomes
+        or any(
+            violation == marker or violation.startswith(marker)
+            for violation in violations
+            for marker in false_verified_markers
+        )
+    )
 
     return EvaluationCaseResult(
         name=name,
@@ -376,7 +399,7 @@ def write_suite_report(
     items = list(results)
     summary = aggregate_results(items)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "summary": jsonable(summary),
         "cases": jsonable(items),
     }
