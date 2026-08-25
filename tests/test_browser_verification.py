@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -62,3 +63,25 @@ def test_localhost_browser_check_requires_explicit_network_inherit(
 
     with pytest.raises(BrowserVerificationError, match="DEVAGENT_NETWORK=inherit"):
         verify_browser(tmp_path, "http://localhost:4173")
+
+
+def test_browser_removes_stale_screenshot_before_current_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale = tmp_path / ".devagent" / "browser" / "latest.png"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale image")
+    monkeypatch.setattr("devagent.browser.find_browser", lambda: "/usr/bin/chromium")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    monkeypatch.setattr(
+        "devagent.browser.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="<html></html>", stderr=""),
+    )
+
+    exit_code, _stdout, _stderr, screenshot = verify_browser(tmp_path, "http://localhost:4173")
+
+    assert exit_code == 0
+    assert screenshot == stale
+    assert not screenshot.exists()
