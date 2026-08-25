@@ -150,7 +150,7 @@ def _run(argv: Sequence[str]) -> int:
         )
         print("DevAgent is working...")
         from devagent.orchestrator import DevAgent
-        from devagent.report import render_report
+        from devagent.report import recommendations_for, render_report
 
         result = DevAgent(
             create_provider(config),
@@ -166,8 +166,10 @@ def _run(argv: Sequence[str]) -> int:
                 branch=args.publish_branch,
                 remote=args.publish_remote,
             )
-            report_path = Path(result.run_dir) / "report.json"
-            report_path.write_text(json.dumps(jsonable(result), indent=2) + "\n", encoding="utf-8")
+
+        result.recommendations = recommendations_for(result)
+        report_path = Path(result.run_dir) / "report.json"
+        report_path.write_text(json.dumps(jsonable(result), indent=2) + "\n", encoding="utf-8")
 
         report = render_report(result)
         print(report)
