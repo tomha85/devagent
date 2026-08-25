@@ -93,7 +93,7 @@ def test_required_sandbox_fails_closed_when_bwrap_is_missing(tmp_path: Path, mon
         runtime.prepare(("pytest", "-q"))
 
 
-def test_safe_pip_install_requires_requirement_file() -> None:
+def test_safe_pip_install_requires_requirement_file_and_binary_wheels() -> None:
     with pytest.raises(SafetyError, match="requires -r"):
         CommandPolicy.validate(("pip", "install", "requests"), allow_dependency_install=True)
 
@@ -104,6 +104,7 @@ def test_safe_pip_install_requires_requirement_file() -> None:
     assert normalized[:4] == ("pip", "install", "-r", "requirements.txt")
     assert "--no-input" in normalized
     assert "--disable-pip-version-check" in normalized
+    assert "--only-binary=:all:" in normalized
 
 
 def test_safe_node_install_requires_lockfile_preserving_command() -> None:
@@ -122,6 +123,20 @@ def test_workspace_dependency_install_requires_explicit_network(tmp_path: Path, 
     tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="dependency-network-deny"))
 
     with pytest.raises(SafetyError, match="DEVAGENT_NETWORK=inherit"):
+        tools.run(("pip", "install", "-r", "requirements.txt"), phase="dependency")
+
+
+def test_workspace_rejects_direct_sources_inside_requirement_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "safe-package==1.2.3\nmalicious @ https://example.invalid/pkg.whl\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="dependency-source-block"))
+
+    with pytest.raises(SafetyError, match="Direct dependency source"):
         tools.run(("pip", "install", "-r", "requirements.txt"), phase="dependency")
 
 
@@ -147,4 +162,5 @@ def test_workspace_runs_normalized_dependency_install_when_explicitly_enabled(
     assert result.passed
     assert captured["argv"][:4] == ("pip", "install", "-r", "requirements.txt")
     assert "--no-input" in captured["argv"]
+    assert "--only-binary=:all:" in captured["argv"]
     assert captured["env"]["DEVAGENT_NETWORK_MODE"] == "inherit"
