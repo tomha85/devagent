@@ -98,6 +98,39 @@ class RuntimeExecutor:
             "dependency_install": self.policy.allow_dependency_install,
         }
 
+    def infrastructure_failure(self, stderr: str) -> str | None:
+        """Translate known bwrap host-policy failures into actionable fail-closed errors."""
+        if not self.os_sandboxed:
+            return None
+        text = stderr.strip()
+        lowered = text.casefold()
+        if not lowered.startswith("bwrap:"):
+            return None
+        if "failed rtm_newaddr" in lowered or "loopback:" in lowered:
+            return (
+                "Linux sandbox network isolation is blocked by the host security policy. "
+                "bubblewrap could not configure loopback in its private network namespace. "
+                "On Ubuntu 24.04+ this commonly requires an AppArmor profile granting "
+                "`userns` to /usr/bin/bwrap. DevAgent refuses to fall back to unrestricted "
+                "network access while DEVAGENT_NETWORK=deny."
+            )
+        if any(
+            marker in lowered
+            for marker in (
+                "setting up uid map",
+                "creating new namespace",
+                "no permissions to creating new namespace",
+                "operation not permitted",
+                "permission denied",
+            )
+        ):
+            return (
+                "Linux sandbox initialization is blocked by the host user-namespace/security "
+                "policy. Configure the host to permit bubblewrap user namespaces or use a "
+                "supported sandbox host; DevAgent will not silently bypass the OS sandbox."
+            )
+        return None
+
     def prepare(
         self,
         argv: Sequence[str],
