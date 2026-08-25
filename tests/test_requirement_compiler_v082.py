@@ -141,3 +141,45 @@ def test_compiled_matrix_contract_links_to_exact_final_symbol_and_tests() -> Non
     user = [item for item in required if item.source is AcceptanceSource.USER]
     assert user[0].evidence
     assert any("add_matrices_2x2" in item for item in user[0].evidence)
+
+
+def test_compiled_contract_does_not_accept_wrong_operation() -> None:
+    task = compile_task("add new function addition 2 matrix 2x2")
+    repository = _repo()
+    enrich_acceptance_contract(task, repository)
+
+    pytest_result = _result(("python", "-m", "pytest", "-q"), tests=3)
+    diff_check = _result(("git", "diff", "--check"))
+    understanding = Understanding(
+        problem="Matrix addition is missing.",
+        expected_behavior="Add two 2x2 matrices element by element.",
+        affected_paths=["calculator.py", "test_calculator.py"],
+        root_cause="No matrix addition function exists.",
+        evidence=[Evidence("calculator.py contains the current calculator implementation.", ("calculator.py",), 1.0)],
+        proposed_solution=["Add matrix behavior and tests."],
+        confidence=1.0,
+    )
+    wrong_review_evidence = DeveloperReviewEvidence(
+        changed_symbols=[CodeSymbol("calculator.py", "subtract_matrices_2x2", "function", 5, "ADDED")],
+        test_cases=[
+            CodeSymbol("test_calculator.py", "test_subtract_matrices_2x2", "function", 8, "ADDED"),
+        ],
+        test_files=["test_calculator.py"],
+    )
+    _support_acceptance_criteria(
+        task,
+        repository,
+        understanding,
+        ChangeMetrics(2, 12, 0, ["calculator.py", "test_calculator.py"]),
+        [pytest_result, diff_check],
+        [pytest_result, diff_check],
+        ReviewDecision(True, [], "approved"),
+        wrong_review_evidence,
+        ["Added a matrix function and tests"],
+        "+def subtract_matrices_2x2(a, b):\n+    return [[a[r][c] - b[r][c] for c in range(2)] for r in range(2)]\n",
+    )
+
+    user = [item for item in task.acceptance_criteria if item.source is AcceptanceSource.USER]
+    assert user[0].status is AcceptanceStatus.UNPROVEN
+    assert user[0].evidence == []
+    assert "semantically matches" in (user[0].reason or "")
