@@ -90,6 +90,9 @@ jobs:
           cargo --version
           c++ --version | head -1
           make --version | head -1
+          java -version
+          mvn -version | head -1
+          dotnet --version
 
       - name: Install Linux sandbox backend
         run: |

@@ -99,7 +99,58 @@ _WRITE_ACTION = {
     "required": ["tool", "arguments"],
     "additionalProperties": False,
 }
-_ACTION = {"anyOf": [_REPLACE_ACTION, _COUNTED_REPLACE_ACTION, _WRITE_ACTION]}
+_DELETE_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "delete_file"},
+        "arguments": {
+            "type": "object",
+            "properties": {"path": _NON_EMPTY_STRING},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_MOVE_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "move_file"},
+        "arguments": {
+            "type": "object",
+            "properties": {"source": _NON_EMPTY_STRING, "destination": _NON_EMPTY_STRING},
+            "required": ["source", "destination"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_RENAME_ACTION = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "const": "rename_file"},
+        "arguments": {
+            "type": "object",
+            "properties": {"source": _NON_EMPTY_STRING, "destination": _NON_EMPTY_STRING},
+            "required": ["source", "destination"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["tool", "arguments"],
+    "additionalProperties": False,
+}
+_ACTION = {
+    "anyOf": [
+        _REPLACE_ACTION,
+        _COUNTED_REPLACE_ACTION,
+        _WRITE_ACTION,
+        _DELETE_ACTION,
+        _MOVE_ACTION,
+        _RENAME_ACTION,
+    ]
+}
 
 UNDERSTANDING_SCHEMA = {
     "type": "object",
@@ -310,12 +361,35 @@ def _execute_actions(workspace: Workspace, response: dict[str, Any], allowed_pat
     if not isinstance(actions, list) or not actions:
         raise OrchestrationError("Implementation requires at least one structured action")
     changed: list[str] = []
+    allowed_tools = {"replace_text", "write_file", "delete_file", "move_file", "rename_file"}
     for action in actions:
         if not isinstance(action, dict) or set(action) != {"tool", "arguments"} or not isinstance(action["arguments"], dict):
             raise OrchestrationError("Every action must contain only tool and arguments")
         tool, arguments = action["tool"], action["arguments"]
-        if tool not in {"replace_text", "write_file"}:
+        if tool not in allowed_tools:
             raise OrchestrationError(f"Implementation tool is not allowed: {tool}")
+
+        if tool in {"move_file", "rename_file"}:
+            if set(arguments) != {"source", "destination"}:
+                raise OrchestrationError(f"{tool} requires only string source and destination")
+            source = arguments.get("source")
+            destination = arguments.get("destination")
+            if (
+                not isinstance(source, str)
+                or not isinstance(destination, str)
+                or source not in allowed_paths
+                or destination not in allowed_paths
+            ):
+                raise OrchestrationError(
+                    f"Structural source/destination was not inspected/planned: {source} -> {destination}"
+                )
+            if tool == "move_file":
+                workspace.move_file(source, destination)
+            else:
+                workspace.rename_file(source, destination)
+            changed.extend((source, destination))
+            continue
+
         path = arguments.get("path")
         if not isinstance(path, str) or path not in allowed_paths:
             raise OrchestrationError(f"Action path was not inspected/planned: {path}")
@@ -329,12 +403,16 @@ def _execute_actions(workspace: Workspace, response: dict[str, Any], allowed_pat
             if isinstance(count, bool) or not isinstance(count, int) or count < 1:
                 raise OrchestrationError("replace_text count must be an integer greater than zero")
             workspace.replace_text(path, arguments["old"], arguments["new"], count)
-        else:
+        elif tool == "write_file":
             if set(arguments) != {"path", "content"} or not isinstance(arguments.get("content"), str):
                 raise OrchestrationError("write_file requires only string path and content")
             workspace.write_file(path, arguments["content"])
+        else:
+            if set(arguments) != {"path"}:
+                raise OrchestrationError("delete_file requires only string path")
+            workspace.delete_file(path)
         changed.append(path)
-    return changed
+    return list(dict.fromkeys(changed))
 
 
 def _diff(root: Path, workspace: Workspace, max_chars: int = 40_000) -> str:

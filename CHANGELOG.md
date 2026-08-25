@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 - Engineering breadth
+
+- Add backup-first structural `delete_file`, `move_file`, and `rename_file` actions with strict planning, dirty-file, path-containment, no-overwrite, and symlink safety.
+- Promote structural operations into the strict provider action contract and verify rename/delete refactors end to end in isolated worktrees.
+- Add first-class Java Maven/Gradle and .NET solution/project discovery, including C#, F#, Visual Basic, Maven Wrapper, and Gradle Kotlin DSL manifests.
+- Add real Java/Maven and .NET build qualification on the production runner.
+- Add a real SQLite migration E2E that proves forward migration, representative existing-state preservation, and rollback behavior.
+- Recover tracked high-value manifests through the Git index when the normal 12,000-file inventory frontier is reached, with a real >12k-file monorepo stress case.
+- Bump the package version to 0.7.0.
+
 ## 0.6.0 - Runtime and sandbox hardening
 
 - Add an explicit runtime policy with `auto`, `required`, and `off` sandbox modes.

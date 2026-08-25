@@ -140,6 +140,68 @@ def test_rust_stack_is_discovered_and_executes_test_and_build(tmp_path: Path) ->
     assert "rust" in _languages(tmp_path)
 
 
+def test_java_maven_stack_is_discovered_and_executes(tmp_path: Path) -> None:
+    _production_only()
+    _require_tool("java")
+    _require_tool("mvn")
+    (tmp_path / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
+        '  <modelVersion>4.0.0</modelVersion>\n'
+        '  <groupId>example</groupId><artifactId>qualification-java</artifactId><version>0.0.1</version>\n'
+        '  <properties><maven.compiler.source>17</maven.compiler.source><maven.compiler.target>17</maven.compiler.target></properties>\n'
+        '  <dependencies>\n'
+        '    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.10.2</version><scope>test</scope></dependency>\n'
+        '  </dependencies>\n'
+        '  <build><plugins>\n'
+        '    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version></plugin>\n'
+        '  </plugins></build>\n'
+        '</project>\n',
+        encoding="utf-8",
+    )
+    source = tmp_path / "src" / "main" / "java" / "example"
+    source.mkdir(parents=True)
+    (source / "Calculator.java").write_text(
+        "package example; public final class Calculator { public static int add(int a, int b) { return a + b; } }\n",
+        encoding="utf-8",
+    )
+    tests = tmp_path / "src" / "test" / "java" / "example"
+    tests.mkdir(parents=True)
+    (tests / "CalculatorTest.java").write_text(
+        "package example; import static org.junit.jupiter.api.Assertions.assertEquals; "
+        "import org.junit.jupiter.api.Test; final class CalculatorTest { "
+        "@Test void adds() { assertEquals(5, Calculator.add(2, 3)); } }\n",
+        encoding="utf-8",
+    )
+
+    command = _run_capability(tmp_path, "test")
+
+    assert command == ("mvn", "test")
+    repository = discover_repository(tmp_path, probe_capabilities=False)
+    assert "java" in _languages(tmp_path)
+    assert "maven" in {framework for component in repository.components for framework in component.frameworks}
+
+
+def test_dotnet_stack_is_discovered_and_executes_build(tmp_path: Path) -> None:
+    _production_only()
+    _require_tool("dotnet")
+    (tmp_path / "Qualification.csproj").write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+        '<TargetFramework>net8.0</TargetFramework><OutputType>Library</OutputType>'
+        '</PropertyGroup></Project>\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "Calculator.cs").write_text(
+        "namespace Qualification; public static class Calculator { public static int Add(int a, int b) => a + b; }\n",
+        encoding="utf-8",
+    )
+
+    command = _run_capability(tmp_path, "build")
+
+    assert command[:3] == ("dotnet", "build", "Qualification.csproj")
+    assert "c#" in _languages(tmp_path)
+
+
+
 def test_cpp_make_stack_is_discovered_and_executes(tmp_path: Path) -> None:
     _production_only()
     _require_tool("make")
