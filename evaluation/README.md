@@ -35,7 +35,7 @@ A suite may contain legitimate `BLOCKED` or `PARTIALLY_VERIFIED` cases. Those ar
 
 `benchmark_v1.json` preserves the original seed benchmark. `benchmark_v2.json` is the 40-case deterministic functional qualification catalog introduced for the v0.4 development line. `benchmark_v3.json` is the production qualification catalog used for the 0.4.0 release gate.
 
-Production qualification v3 contains 50 required cases covering:
+Production qualification v3 contains 52 required cases covering:
 
 - end-to-end engineering behavior
 - false-`VERIFIED` truthfulness and acceptance contracts

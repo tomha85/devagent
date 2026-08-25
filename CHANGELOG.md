@@ -7,7 +7,7 @@ All notable changes to DevAgent are documented here.
 ### Production hardening and qualification
 
 - Promoted the package metadata from Alpha to Beta after expanding the release qualification surface and validating the release candidate on supported CI toolchains.
-- Added the production qualification v3 catalog with 50 required cases. The catalog retains the `false_verified == 0` invariant and now covers provider parity, actual multi-language toolchain execution, and release integrity in addition to the existing end-to-end, acceptance, safety, review, repair, reporting, and evaluation contracts.
+- Added the production qualification v3 catalog with 52 required cases. The catalog retains the `false_verified == 0` invariant and now covers provider parity, actual multi-language toolchain execution, and release integrity in addition to the existing end-to-end, acceptance, safety, review, repair, reporting, and evaluation contracts.
 - Added real executable qualification fixtures for Python/pytest, Node with TypeScript repository discovery, Go, Rust/Cargo, and C++/Make. Production qualification fails when a required toolchain is unavailable or its discovered repository-native command fails.
 - Kept expensive real-toolchain fixtures out of the normal unit-test path while making the dedicated production qualification runner explicitly enable and execute them.
 - Added Google Gemini / Google provider aliases through Google's OpenAI-compatible Gemini endpoint, reusing DevAgent's existing bounded structured-response handling and deterministic local schema validation.

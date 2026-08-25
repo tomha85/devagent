@@ -207,6 +207,12 @@ def _pattern_symbols(text: str, path: str) -> list[_PatternSymbol]:
             )
             if match:
                 add(match.group(1), "function", index, is_test=test_file)
+            match = re.search(
+                r"\b(?:exports|module\.exports)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>",
+                line,
+            )
+            if match:
+                add(match.group(1), "function", index, is_test=test_file)
             match = re.search(r"\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b", line)
             if match:
                 add(match.group(1), "class", index, is_test=test_file)

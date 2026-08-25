@@ -253,7 +253,7 @@ Verification can include baseline tests, targeted tests, component/broad checks,
 
 ## Production qualification
 
-DevAgent 0.4.0 adds **production qualification v3**. The release catalog contains 50 required cases and preserves the primary invariant:
+DevAgent 0.4.0 adds **production qualification v3**. The release catalog contains 52 required cases and preserves the primary invariant:
 
 ```text
 false_verified == 0

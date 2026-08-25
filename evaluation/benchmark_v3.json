@@ -305,6 +305,18 @@
       "expected": "PASS"
     },
     {
+      "id": "multilang-review-symbol-test-evidence",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multilang_technical_review.py::test_multilang_review_extracts_changed_symbols_and_test_cases",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-multistack-devagent-e2e",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_devagent_e2e.py::test_real_multistack_devagent_feature_patch_is_verified",
+      "expected": "VERIFIED"
+    },
+    {
       "id": "release-version-consistency",
       "category": "release_integrity",
       "pytest_node": "tests/test_production_v040.py::test_release_version_is_semver_and_consistent",
