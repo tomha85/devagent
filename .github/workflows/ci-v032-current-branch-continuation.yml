@@ -26,6 +26,9 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -e ".[dev]"
 
+      - name: Normalize patch input
+        run: python .devagent-prepatch-current-branch.py
+
       - name: Apply current-branch continuation patch
         run: python .devagent-patch-current-branch.py
 
@@ -40,6 +43,7 @@ jobs:
 
       - name: Remove temporary patch machinery
         run: |
+          rm .devagent-prepatch-current-branch.py
           rm .devagent-patch-current-branch.py
           rm .github/workflows/ci-v032-current-branch-continuation.yml
 
