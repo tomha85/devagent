@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -158,6 +159,71 @@ class EngineeringPlan:
     rationale: str
 
 
+_PRESERVATION_PATTERNS = (
+    re.compile(r"\bpreserv(?:e|es|ed|ing)\s+(?:the\s+)?existing\s+([^.;\n]+)", re.IGNORECASE),
+    re.compile(
+        r"\bexisting\s+([^.;\n]+?)\s+(?:behavior|behaviour|functionality|semantics)\b",
+        re.IGNORECASE,
+    ),
+)
+_PRESERVATION_GENERIC_WORDS = frozenset(
+    {
+        "and",
+        "or",
+        "the",
+        "a",
+        "an",
+        "current",
+        "normal",
+        "same",
+        "existing",
+        "behavior",
+        "behaviour",
+        "functionality",
+        "semantics",
+        "code",
+        "system",
+        "application",
+        "tests",
+        "test",
+    }
+)
+
+
+def _preserved_subjects(text: str) -> set[str]:
+    subjects: set[str] = set()
+    for pattern in _PRESERVATION_PATTERNS:
+        for match in pattern.finditer(text):
+            clause = re.split(
+                r"\b(?:while|but|and\s+(?:add|implement|verify|create|update|fix))\b",
+                match.group(1),
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+            clause = re.sub(
+                r"\b(?:behavior|behaviour|functionality|semantics)\b",
+                " ",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.-]*", clause):
+                lowered = token.lower()
+                if len(lowered) > 2 and lowered not in _PRESERVATION_GENERIC_WORDS:
+                    subjects.add(lowered)
+    return subjects
+
+
+def _explicitly_absent(text: str, subject: str) -> bool:
+    escaped = re.escape(subject)
+    patterns = (
+        rf"\bno\s+(?:existing\s+)?{escaped}\b",
+        rf"\b{escaped}\s+(?:does\s+not|doesn't)\s+exist\b",
+        rf"\b{escaped}\s+(?:is\s+)?(?:absent|missing|not\s+present)\b",
+        rf"\bwithout\s+(?:an?\s+)?{escaped}\b",
+    )
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
 @dataclass
 class Understanding:
     problem: str
@@ -168,10 +234,29 @@ class Understanding:
     proposed_solution: list[str]
     confidence: float
 
+    def preservation_conflicts(self) -> list[str]:
+        """Return preserved subjects that the same grounded understanding says are absent."""
+
+        corpus = "\n".join(
+            [
+                self.problem,
+                self.expected_behavior,
+                self.root_cause,
+                *(item.statement for item in self.evidence),
+            ]
+        )
+        return sorted(
+            subject
+            for subject in _preserved_subjects(corpus)
+            if _explicitly_absent(corpus, subject)
+        )
+
     def implementation_ready(self, root: Path) -> bool:
         if self.confidence < 0.6 or not self.root_cause.strip() or not self.proposed_solution:
             return False
         if not self.affected_paths or not self.evidence:
+            return False
+        if self.preservation_conflicts():
             return False
         return all((root / path).resolve().is_relative_to(root.resolve()) for path in self.affected_paths)
 
