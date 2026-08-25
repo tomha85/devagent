@@ -27,6 +27,7 @@ jobs:
         run: |
           python .devagent-v051-patch.py
           python .devagent-v051-version-fix.py
+          python .devagent-v051-routing-test-fix.py
 
       - name: Install development package
         run: |
@@ -73,6 +74,7 @@ jobs:
             devagent/source_control.py \
             devagent/__init__.py \
             tests/test_cli.py \
+            tests/test_model_routing.py \
             tests/test_source_control_publish.py \
             tests/test_production_v040.py \
             evaluation/benchmark_v4.json \
