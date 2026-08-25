@@ -21,7 +21,7 @@ Include, when possible:
 - reproduction steps,
 - expected versus observed behavior,
 - security impact,
-- whether the issue can escape the target workspace, expose secrets, run an unsafe command, modify protected developer work, or falsely report `VERIFIED`.
+- whether the issue can escape the target workspace, expose secrets, run an unsafe command, modify protected developer work, publish to an unauthorized branch, or falsely report `VERIFIED`.
 
 ## High-priority security areas
 
@@ -31,7 +31,11 @@ Reports are especially important when they involve:
 - secret or credential exposure,
 - unsafe shell or subprocess execution,
 - destructive Git operations,
-- automatic commit, push, merge, rebase, or deploy behavior,
+- publication before the engineering report is emitted,
+- publication of a non-`VERIFIED` run,
+- publication to protected, unexpected, or diverged remote branches,
+- pull-request, merge, rebase, force-push, or deploy automation,
+- staging paths that were not part of the reviewed verified change,
 - modification of pre-existing dirty developer files,
 - bypass of backup-before-edit guarantees,
 - malicious repository content influencing unsafe tool execution,
@@ -40,9 +44,13 @@ Reports are especially important when they involve:
 
 ## Security model
 
-DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a strict no-publish boundary.
+DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a bounded publication boundary.
 
-These controls reduce risk but do not make DevAgent an operating-system sandbox. Run DevAgent only in environments and repositories you are prepared to inspect, and review the final diff before publishing changes.
+Engineering/model-facing command execution continues to block Git write operations. For a normal isolated run, DevAgent prints the complete engineering review report first. Only after that report is emitted may the separate deterministic publication path commit and push a `VERIFIED` result. A current local non-protected development branch may be continued, but its remote HEAD is captured before model execution and checked again before publication; diverged or unexpectedly moved branches are blocked. When the developer is on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead of publishing to the protected branch. The publication path stages only reviewed changed paths and uses normal fast-forward push semantics without force push. Developers can disable publication with `--no-publish`.
+
+DevAgent does not create pull requests or perform merges, rebases, force pushes, or deployments.
+
+These controls reduce risk but do not make DevAgent an operating-system sandbox. Review the engineering report and the resulting pushed branch before integrating changes.
 
 ## Disclosure
 

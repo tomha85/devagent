@@ -2,6 +2,21 @@
 
 All notable changes to DevAgent are documented here.
 
+## 0.3.2 — 2026-08-24
+
+### Developer review reporting and verified branch publishing
+
+- Added automatic post-report branch publication for `VERIFIED` runs: DevAgent prints the full engineering review report first, then deterministic harness code commits and pushes the verified change. The current local non-protected development branch is continued by default; `main`, `master`, and `trunk` still cause creation of a new safe branch.
+- Added `--no-publish` for developers who want a local review-only run; `--publish-branch` explicitly starts a new target branch instead of continuing the current development branch.
+- Publishing is performed by deterministic harness code, not by the model or engineering command runner.
+- Publishing requires the default isolated worktree, refuses direct publication to `main`, `master`, and `trunk`, supports safe continuation of the current local development branch, stages only reviewed changed paths, creates one commit, re-checks the expected remote HEAD, and uses normal fast-forward push semantics.
+- DevAgent still never creates pull requests or performs merges, rebases, deployments, force pushes, or destructive Git operations.
+- Expanded final reports with an implementation-logic summary first, exact Python function/class/test-symbol inventory, acceptance-criteria evidence, per-command verification phase/revision/exit code/duration/test counts, failure classifications, bounded stdout/stderr for failed checks, independent-review details, completeness assessment, and deterministic recommendations.
+- Added a post-report source-control publication receipt with remote, branch, commit SHA, commit status, push status, and any publication error.
+- Added machine-readable source-control results to `report.json` after publication completes.
+- Added local bare-remote regression tests proving successful branch push and rejection of protected/non-VERIFIED publication attempts.
+- Added CLI regression coverage proving the engineering report is emitted before automatic publication and that `--no-publish` disables commit/push.
+
 ## 0.3.1 — 2026-08-24
 
 ### Packaging and distribution
@@ -34,7 +49,7 @@ All notable changes to DevAgent are documented here.
 - Generated-state filtering while preserving protection for real developer changes.
 - Exact built-in `git diff --check` verification.
 - Evidence-first outcome contract: `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
-- No automatic commit, push, merge, rebase, or deploy.
+- No merge, rebase, force-push, PR creation, or deploy automation.
 
 ## 0.2.1 — 2026-08-24
 

@@ -490,12 +490,22 @@ def _baseline_test_count_regressed(
 class DevAgent:
     """Deterministic orchestration; model reasoning is bounded inside named states."""
 
-    def __init__(self, provider: ModelProvider, *, max_corrections: int = 2, isolate: bool = True, verbose: bool = False, status: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        *,
+        max_corrections: int = 2,
+        isolate: bool = True,
+        verbose: bool = False,
+        status: Callable[[str], None] | None = None,
+        base_commit: str | None = None,
+    ) -> None:
         self.provider = provider
         self.max_corrections = max(0, min(max_corrections, 5))
         self.isolate = isolate
         self.verbose = verbose
         self.status = status or (lambda message: None)
+        self.base_commit = base_commit
 
     def _announce(self, artifacts: RunArtifacts, lifecycle: Lifecycle) -> None:
         artifacts.record("state", state=lifecycle.state)
@@ -541,12 +551,19 @@ class DevAgent:
         understanding = Understanding("", "", [], "", [], [], 0.0)
         review: ReviewDecision | None = None
         source_repository = discover_repository(root, probe_capabilities=False)
-        selection = select_worktree(root, artifacts.run_id, enabled=self.isolate, git_head=source_repository.git_head, dirty_files=source_repository.dirty_files)
+        effective_head = self.base_commit or source_repository.git_head
+        selection = select_worktree(
+            root,
+            artifacts.run_id,
+            enabled=self.isolate,
+            git_head=effective_head,
+            dirty_files=source_repository.dirty_files,
+        )
         working_root = selection.root
         repository = discover_repository(working_root)
         repository.root = str(root)
         repository.git_branch = source_repository.git_branch
-        repository.git_head = source_repository.git_head
+        repository.git_head = effective_head
         repository.dirty_files = source_repository.dirty_files
         workspace = Workspace(working_root, artifacts, source_repository.dirty_files if not selection.isolated else ())
         artifacts.write_json("metadata.json", {"run_id": artifacts.run_id, "task": task, "repository": repository})
