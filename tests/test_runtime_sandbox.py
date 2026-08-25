@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from devagent.artifacts import RunArtifacts
+from devagent.runtime import NetworkMode, RuntimeExecutor, RuntimePolicy, RuntimePolicyError, SandboxMode
+from devagent.safety import CommandPolicy, SafetyError
+from devagent.workspace import Workspace
+
+
+def test_linux_bwrap_network_is_denied_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(tmp_path, RuntimePolicy(sandbox=SandboxMode.AUTO, network=NetworkMode.DENY))
+
+    argv = runtime.prepare(("python", "--version"))
+
+    assert argv[0] == "/usr/bin/bwrap"
+    assert "--ro-bind" in argv
+    assert "--bind" in argv
+    assert "--unshare-net" in argv
+    assert argv[-2:] == ("python", "--version")
+    tmpfs_index = argv.index("--tmpfs")
+    bind_index = argv.index("--bind")
+    assert argv[tmpfs_index + 1] == "/tmp"
+    assert tmpfs_index < bind_index
+
+
+def test_linux_bwrap_can_explicitly_inherit_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(tmp_path, RuntimePolicy(sandbox=SandboxMode.AUTO, network=NetworkMode.INHERIT))
+
+    argv = runtime.prepare(("pytest", "-q"))
+
+    assert "--unshare-net" not in argv
+    assert argv[-2:] == ("pytest", "-q")
+
+
+def test_linux_bwrap_rebinds_external_run_state_writable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    worktree = tmp_path / "worktree"
+    run_home = tmp_path / "source" / ".devagent" / "runs" / "run-1" / "command-home"
+    worktree.mkdir()
+    run_home.mkdir(parents=True)
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(worktree, RuntimePolicy(sandbox=SandboxMode.AUTO))
+
+    argv = runtime.prepare(("pytest", "-q"), writable_paths=(run_home,))
+
+    bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--bind"]
+    assert ("--bind", str(worktree.resolve()), str(worktree.resolve())) in bind_triplets
+    assert ("--bind", str(run_home.resolve()), str(run_home.resolve())) in bind_triplets
+    assert argv.index("--tmpfs") < argv.index("--bind")
+
+
+def test_linux_bwrap_reopens_linked_git_common_metadata_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = tmp_path / "source" / ".git"
+    git_dir = common / "worktrees" / "worktree"
+    git_dir.mkdir(parents=True)
+    (git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(worktree, RuntimePolicy(sandbox=SandboxMode.REQUIRED))
+
+    argv = runtime.prepare(("git", "status", "--short"))
+
+    ro_bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--ro-bind"]
+    bind_triplets = [argv[index:index + 3] for index, token in enumerate(argv) if token == "--bind"]
+    common_triplet = ("--ro-bind", str(common.resolve()), str(common.resolve()))
+    root_triplet = ("--bind", str(worktree.resolve()), str(worktree.resolve()))
+    assert common_triplet in ro_bind_triplets
+    assert root_triplet in bind_triplets
+    assert argv.index(common_triplet[1]) < argv.index(root_triplet[1])
+
+
+def test_bwrap_loopback_failure_has_actionable_fail_closed_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(tmp_path, RuntimePolicy(sandbox=SandboxMode.REQUIRED, network=NetworkMode.DENY))
+
+    error = runtime.infrastructure_failure("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted")
+
+    assert error is not None
+    assert "AppArmor" in error
+    assert "refuses to fall back" in error
+
+
+def test_workspace_raises_on_bwrap_initialization_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "required")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "deny")
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    monkeypatch.setattr(
+        "devagent.workspace.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+        ),
+    )
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="bwrap-host-policy"))
+
+    with pytest.raises(SafetyError, match="AppArmor"):
+        tools.run(("python", "--version"), phase="sandbox-smoke")
+
+
+def test_required_sandbox_fails_closed_when_bwrap_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: None)
+    runtime = RuntimeExecutor(tmp_path, RuntimePolicy(sandbox=SandboxMode.REQUIRED))
+
+    with pytest.raises(RuntimePolicyError, match="required"):
+        runtime.prepare(("pytest", "-q"))
+
+
+def test_non_install_pip_commands_are_blocked() -> None:
+    with pytest.raises(SafetyError, match="Non-install pip"):
+        CommandPolicy.validate(("pip", "uninstall", "-y", "requests"))
+    with pytest.raises(SafetyError, match="Non-install pip"):
+        CommandPolicy.validate(("python", "-m", "pip", "uninstall", "-y", "requests"))
+
+
+def test_safe_pip_install_requires_requirement_file_and_binary_wheels() -> None:
+    with pytest.raises(SafetyError, match="requirement"):
+        CommandPolicy.validate(("pip", "install", "requests"), allow_dependency_install=True)
+
+    normalized = CommandPolicy.validate(
+        ("pip", "install", "-r", "requirements.txt"),
+        allow_dependency_install=True,
+    )
+    assert normalized[:4] == ("pip", "install", "-r", "requirements.txt")
+    assert "--no-input" in normalized
+    assert "--disable-pip-version-check" in normalized
+    assert "--only-binary=:all:" in normalized
+
+
+def test_safe_pip_install_rejects_extra_requirement_specifiers() -> None:
+    with pytest.raises(SafetyError, match="only -r/--requirement"):
+        CommandPolicy.validate(
+            ("pip", "install", "-r", "requirements.txt", "unpinned-package"),
+            allow_dependency_install=True,
+        )
+
+
+def test_safe_node_install_requires_lockfile_preserving_command() -> None:
+    with pytest.raises(SafetyError, match="npm ci"):
+        CommandPolicy.validate(("npm", "install"), allow_dependency_install=True)
+
+    normalized = CommandPolicy.validate(("npm", "ci"), allow_dependency_install=True)
+    assert normalized == ("npm", "ci", "--ignore-scripts")
+
+
+def test_safe_yarn_install_avoids_berry_incompatible_ignore_scripts_flag() -> None:
+    normalized = CommandPolicy.validate(("yarn", "install"), allow_dependency_install=True)
+
+    assert "--ignore-scripts" not in normalized
+    assert "--frozen-lockfile" in normalized
+
+
+def test_workspace_dependency_install_requires_explicit_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "deny")
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="dependency-network-deny"))
+
+    with pytest.raises(SafetyError, match="DEVAGENT_NETWORK=inherit"):
+        tools.run(("pip", "install", "-r", "requirements.txt"), phase="dependency")
+
+
+def test_workspace_rejects_direct_sources_inside_requirement_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "safe-package==1.2.3\nmalicious @ https://example.invalid/pkg.whl\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="dependency-source-block"))
+
+    with pytest.raises(SafetyError, match="Direct dependency source"):
+        tools.run(("pip", "install", "-r", "requirements.txt"), phase="dependency")
+
+
+def test_workspace_runs_normalized_dependency_install_when_explicitly_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "requirements.txt").write_text("pytest\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: tuple[str, ...], **kwargs: Any) -> SimpleNamespace:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devagent.workspace.subprocess.run", fake_run)
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="dependency-install"))
+    result = tools.run(("pip", "install", "-r", "requirements.txt"), phase="dependency")
+
+    assert result.passed
+    assert captured["argv"][:4] == ("pip", "install", "-r", "requirements.txt")
+    assert "--no-input" in captured["argv"]
+    assert "--only-binary=:all:" in captured["argv"]
+    assert captured["env"]["DEVAGENT_NETWORK_MODE"] == "inherit"
+
+
+def test_workspace_yarn_install_disables_scripts_for_classic_and_modern(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: tuple[str, ...], **kwargs: Any) -> SimpleNamespace:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devagent.workspace.subprocess.run", fake_run)
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="yarn-install"))
+    result = tools.run(("yarn", "install"), phase="dependency")
+
+    assert result.passed
+    assert "--ignore-scripts" not in captured["argv"]
+    assert captured["env"]["YARN_IGNORE_SCRIPTS"] == "true"
+    assert captured["env"]["YARN_ENABLE_SCRIPTS"] == "false"

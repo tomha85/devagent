@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devagent-ai"
-version = "0.5.1"
+version = "0.6.0"
 description = "Evidence-driven local autonomous software engineering agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,7 @@ dev = ["pytest>=8.0", "pytest-cov>=5.0"]
 
 [project.scripts]
 devagent = "devagent.cli:main"
+devagent-ui-check = "devagent.browser:main"
 
 [project.urls]
 Homepage = "https://github.com/tomha85/devagent"

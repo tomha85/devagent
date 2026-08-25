@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 - Runtime and sandbox hardening
+
+- Add an explicit runtime policy with `auto`, `required`, and `off` sandbox modes.
+- Use Linux `bubblewrap` when available to expose the host filesystem read-only while rebinding only the selected repository writable.
+- Deny network access by default inside the Linux sandbox and require explicit `DEVAGENT_NETWORK=inherit` for approved network-dependent operations.
+- Keep per-run HOME/TMP state isolated and preserve the existing secret, shell, URL, destructive Git, and command safety gates.
+- Add opt-in dependency installation that requires both explicit dependency/network approval and repository requirements or lockfiles; reject direct package URLs, arbitrary package additions, custom indexes/registries, editable installs, and lifecycle scripts where supported.
+- Add `devagent-ui-check` for bounded Chromium-family verification of repository files or localhost applications, including screenshot evidence and external-target rejection.
+- Add runtime, dependency, and browser-target regression coverage plus wheel/CLI smoke verification for the new UI checker.
+- Bump the package version to 0.6.0.
+
 ## 0.5.1 - Trust and security hardening
 
 - Prevent explicit provider switches from inheriting a stale base URL from a different configured provider.

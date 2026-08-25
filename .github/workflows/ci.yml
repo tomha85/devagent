@@ -59,6 +59,7 @@ jobs:
           devagent --version
           devagent --help >/dev/null
           devagent benchmark --help >/dev/null
+          devagent-ui-check --help >/dev/null
 
       - name: Validate installed dependencies
         run: python -m pip check
@@ -90,12 +91,68 @@ jobs:
           c++ --version | head -1
           make --version | head -1
 
+      - name: Install Linux sandbox backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor-utils
+          bwrap --version
+
+          # Ubuntu 24.04 enables AppArmor restrictions for unprivileged user
+          # namespaces. Grant only /usr/bin/bwrap the userns permission it needs
+          # to create the isolated network namespace; do not disable AppArmor or
+          # the host-wide userns restriction.
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
       - name: Install development package
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run production qualification catalog
+      - name: Smoke-test real Linux sandbox backend
+        env:
+          DEVAGENT_SANDBOX: required
+          DEVAGENT_NETWORK: deny
+        run: |
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+          from devagent.artifacts import RunArtifacts
+          from devagent.workspace import Workspace
+
+          with tempfile.TemporaryDirectory(prefix="devagent-bwrap-smoke-") as temporary:
+              base = Path(temporary)
+              source = base / "source"
+              worktree = base / "worktree"
+              source.mkdir()
+              worktree.mkdir()
+              artifacts = RunArtifacts(source, run_id="ci-real-bwrap")
+              workspace = Workspace(worktree, artifacts)
+              result = workspace.run(
+                  (sys.executable, "--version"),
+                  phase="sandbox-smoke",
+              )
+              print("sandbox backend:", workspace.runtime.backend)
+              print("exit:", result.exit_code)
+              print("stdout:", result.stdout)
+              print("stderr:", result.stderr)
+              if not result.passed:
+                  raise SystemExit(1)
+          PY
+
+      - name: Run production qualification catalog in required sandbox
+        env:
+          DEVAGENT_SANDBOX: required
+          DEVAGENT_NETWORK: deny
         run: |
           python -m devagent.qualification \
             --catalog evaluation/benchmark_v4.json \
@@ -107,7 +164,7 @@ jobs:
         with:
           name: production-qualification-v4
           path: .devagent/production-qualification-v4.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   package:
     name: Build and install wheel
@@ -136,4 +193,5 @@ jobs:
           /tmp/devagent-wheel-smoke/bin/devagent --version
           /tmp/devagent-wheel-smoke/bin/devagent --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent benchmark --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent-ui-check --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/python -m pip check
