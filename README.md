@@ -185,6 +185,112 @@ devagent --input ../specs/release.requirement
 
 Binary data, invalid UTF-8, secret-like paths, and files above the input-size bound are refused.
 
+## Practical examples
+
+DevAgent is intended for real repository work, not only one-line code generation. Run it from the repository you want to change and describe the engineering outcome you need.
+
+### 1. Fix a bug and prove the regression is covered
+
+```bash
+cd my-service
+devagent "Fix the websocket reconnect bug that duplicates subscriptions after a network drop. Add a regression test and keep the public API unchanged."
+```
+
+**Benefit:** DevAgent first discovers the relevant implementation and tests, turns the request into explicit acceptance criteria, makes a bounded patch, runs repository-supported verification, independently reviews the final diff, and only reports `VERIFIED` when the required evidence supports it.
+
+### 2. Add a feature on a dedicated branch
+
+```bash
+cd my-app
+devagent \
+  --publish-branch feature/csv-export \
+  "Add CSV export for filtered reports. Preserve the existing JSON export behavior and add tests."
+```
+
+**Benefit:** a verified change can be committed and pushed to the requested feature branch while DevAgent stops before PR creation or merge, leaving integration control with the developer or repository owner.
+
+### 3. Give DevAgent a longer product or customer requirement
+
+```bash
+cd my-repo
+devagent --input requirements/customer-billing-retry.md
+```
+
+The input can be any bounded UTF-8 text file; it does not need a special extension or DevAgent-specific format.
+
+**Benefit:** long requirements stay in a reviewable file instead of being compressed into a short prompt, while DevAgent still derives bounded implementation and verification work from repository evidence.
+
+### 4. Perform a refactor that includes rename/move/delete operations
+
+```bash
+cd my-repo
+devagent "Rename LegacyOrderService to OrderService, move it into the services package, update all references, remove the obsolete module, and preserve behavior."
+```
+
+**Benefit:** structural changes go through backup-first workspace operations, path/scope checks, repository verification, and final-diff review instead of uncontrolled file manipulation.
+
+### 5. Change a database schema with forward/rollback verification
+
+```bash
+cd my-python-service
+devagent "Add a nullable status column to the SQLite orders table, provide a forward and rollback migration, update the data-access layer, and verify both migration directions."
+```
+
+**Benefit:** migration work can be treated as high-risk engineering work with explicit acceptance evidence instead of assuming that a generated migration is correct because it looks plausible. The current qualified production fixture covers SQLite forward/rollback migration behavior; broader PostgreSQL/MySQL coverage remains an external-validation area.
+
+### 6. Work in Java or .NET repositories
+
+```bash
+cd my-java-service
+devagent "Add validation for duplicate customer IDs in this Maven service and add the appropriate JUnit regression test."
+```
+
+```bash
+cd my-dotnet-service
+devagent "Fix the null-handling bug in the order import path and verify the .NET project still builds successfully."
+```
+
+**Benefit:** DevAgent discovers repository-native Maven/Gradle and .NET project evidence instead of forcing every repository through a Python-centric workflow.
+
+### 7. Keep all changes local for inspection
+
+```bash
+cd my-repo
+devagent --no-publish "Refactor retry handling to remove duplicate logic and keep behavior unchanged."
+```
+
+**Benefit:** you still get implementation, verification, independent review, and the engineering report, but DevAgent does not commit or push the result.
+
+### 8. Use the model/provider you prefer
+
+```bash
+# Configure once
+devagent setup --provider anthropic --model YOUR_MODEL
+export ANTHROPIC_API_KEY=...
+
+# Then use the same DevAgent engineering workflow
+devagent "Fix the failing checkout integration test without weakening the assertion."
+```
+
+You can similarly configure OpenAI, Gemini, Grok/xAI, or an OpenAI-compatible endpoint.
+
+**Benefit:** the model supplies reasoning, while DevAgent keeps the same deterministic acceptance, safety, verification, reporting, and publication rules around it.
+
+## What DevAgent adds around an AI coding model
+
+| Common engineering risk | DevAgent behavior |
+| --- | --- |
+| The model says “done” without enough proof | Required acceptance criteria remain `UNPROVEN` or the run becomes `PARTIALLY_VERIFIED` / `BLOCKED` instead of falsely claiming success. |
+| A patch touches unrelated code | Evidence gathering, explicit scope, minimal-change planning, and independent diff review constrain the change. |
+| Existing developer work is damaged | Clean repositories use isolated worktrees by default; dirty tracked/untracked developer work is protected; files are backed up before first modification. |
+| Tests passed before a later edit | Verification is revision-aware, so older successful evidence does not prove a newer tree. |
+| A generated change breaks the build or tests | DevAgent runs repository-supported targeted/broad checks and can diagnose/replan before final verification. |
+| An agent pushes directly to a protected primary branch | Starting from `main`, `master`, or `trunk` causes DevAgent to work on a safe branch; runtime DevAgent does not merge or deploy. |
+| You are locked to one model vendor | OpenAI, Claude, Gemini, Grok/xAI, and compatible endpoints can use the same engineering harness. |
+| It is hard to audit what the agent actually did | DevAgent emits an engineering report with decisions, changed symbols, tests, acceptance evidence, verification, failures, gaps, and source-control status. |
+
+The goal is not to replace developer judgment. The goal is to make autonomous engineering work **bounded, reviewable, reproducible, and harder to falsely declare complete**.
+
 Useful commands:
 
 ```bash
