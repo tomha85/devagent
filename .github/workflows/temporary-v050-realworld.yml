@@ -96,7 +96,6 @@ jobs:
             tests/test_realworld_benchmark.py \
             tests/test_retrieval.py \
             evaluation/benchmark_v4.json \
-            .github/workflows/ci.yml \
             docs/realworld-benchmark.md \
             README.md \
             CHANGELOG.md \
