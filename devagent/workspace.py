@@ -10,6 +10,7 @@ from typing import Sequence
 
 from devagent.artifacts import RunArtifacts
 from devagent.models import FailureClass, VerificationResult
+from devagent.runtime import NetworkMode, RuntimeExecutor, RuntimePolicy, RuntimePolicyError
 from devagent.safety import CommandPolicy, PathPolicy, SKIP_DIRECTORIES, SafetyError, is_secret_path
 
 
@@ -21,6 +22,12 @@ class Workspace:
         self.dirty_files = frozenset(dirty_files)
         self.revision = 0
         self.modified_paths: set[str] = set()
+        try:
+            self.runtime_policy = RuntimePolicy.from_environment()
+        except RuntimePolicyError as exc:
+            raise SafetyError(str(exc)) from exc
+        self.runtime = RuntimeExecutor(self.root, self.runtime_policy)
+        self.artifacts.record("runtime_policy", **self.runtime.status())
 
     def _relative(self, target: Path) -> str:
         return target.relative_to(self.root).as_posix()
@@ -139,17 +146,67 @@ class Workspace:
         self.modified_paths.add(self._relative(target))
         self.artifacts.record("text_replaced", path=path, count=count, revision=self.revision)
 
+    def _validate_dependency_files(self, argv: tuple[str, ...]) -> None:
+        executable = Path(argv[0]).name.lower()
+        lowered = tuple(token.lower() for token in argv)
+        if executable in {"python", "python3"}:
+            args = argv[4:]
+        elif executable in {"pip", "pip3"}:
+            args = argv[2:]
+        else:
+            args = argv[2:]
+
+        if executable in {"python", "python3", "pip", "pip3"}:
+            for index, token in enumerate(args):
+                if token.lower() in {"-r", "--requirement"}:
+                    if index + 1 >= len(args):
+                        raise SafetyError("Dependency requirement file is missing")
+                    target = self.paths.resolve(args[index + 1], allow_missing=False)
+                    if not target.is_file():
+                        raise SafetyError(f"Dependency requirement is not a file: {args[index + 1]}")
+                    return
+            raise SafetyError("Safe pip installation requires a repository requirement file")
+
+        candidates: tuple[str, ...]
+        if executable == "npm":
+            candidates = ("package-lock.json", "npm-shrinkwrap.json")
+        elif executable == "pnpm":
+            candidates = ("pnpm-lock.yaml",)
+        elif executable == "yarn":
+            candidates = ("yarn.lock",)
+        else:
+            raise SafetyError(f"Unsupported dependency installer: {executable}")
+        if not any((self.root / name).is_file() for name in candidates):
+            raise SafetyError(
+                f"Safe {executable} installation requires a committed lockfile: {', '.join(candidates)}"
+            )
+
     def run(self, command: str | Sequence[str], *, timeout: int = 300, phase: str, baseline: bool = False) -> VerificationResult:
-        argv = CommandPolicy.validate(command)
+        parsed = CommandPolicy.parse(command)
+        dependency_install = CommandPolicy.is_dependency_install(parsed)
+        argv = CommandPolicy.validate(
+            parsed,
+            allow_dependency_install=self.runtime_policy.allow_dependency_install,
+        )
+        if dependency_install:
+            if self.runtime_policy.network is not NetworkMode.INHERIT:
+                raise SafetyError(
+                    "Dependency installation requires explicit DEVAGENT_NETWORK=inherit in addition to "
+                    "DEVAGENT_ALLOW_DEPENDENCY_INSTALL=1"
+                )
+            self._validate_dependency_files(argv)
+
         timeout = max(1, min(int(timeout), 1800))
         started = time.monotonic()
         timed_out = False
         sandbox_home = self.artifacts.root / "command-home"
         sandbox_home.mkdir(exist_ok=True)
+        sandbox_tmp = sandbox_home / "tmp"
+        sandbox_tmp.mkdir(exist_ok=True)
         environment = {
             key: value
             for key, value in os.environ.items()
-            if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV", "PYTHONPATH", "SYSTEMROOT", "WINDIR"}
+            if key in {"PATH", "LANG", "LC_ALL", "TERM", "VIRTUAL_ENV", "PYTHONPATH", "SYSTEMROOT", "WINDIR"}
         }
         # Keep HOME sandboxed so package-manager and cloud credentials are not inherited.
         # Rustup-managed cargo/rustc binaries still need the installed toolchain directory,
@@ -166,10 +223,23 @@ class Workspace:
         rustup_toolchain = os.environ.get("RUSTUP_TOOLCHAIN")
         if rustup_toolchain:
             environment["RUSTUP_TOOLCHAIN"] = rustup_toolchain
-        environment.update({"HOME": str(sandbox_home), "CI": "true", "DEVAGENT_RUN_ID": self.artifacts.run_id})
+        environment.update(
+            {
+                "HOME": str(sandbox_home),
+                "TMPDIR": str(sandbox_tmp),
+                "CI": "true",
+                "DEVAGENT_RUN_ID": self.artifacts.run_id,
+                "DEVAGENT_RUNTIME_BACKEND": self.runtime.backend,
+                "DEVAGENT_NETWORK_MODE": self.runtime_policy.network.value,
+            }
+        )
         try:
+            try:
+                execution_argv = self.runtime.prepare(argv)
+            except RuntimePolicyError as exc:
+                raise SafetyError(str(exc)) from exc
             completed = subprocess.run(
-                argv, cwd=self.root, env=environment, capture_output=True, text=True, timeout=timeout, check=False
+                execution_argv, cwd=self.root, env=environment, capture_output=True, text=True, timeout=timeout, check=False
             )
             exit_code: int | None = completed.returncode
             stdout, stderr = completed.stdout[-24_000:], completed.stderr[-24_000:]
@@ -195,7 +265,13 @@ class Workspace:
             tests_run=tests_run,
             tests_passed=tests_passed,
         )
-        self.artifacts.record("command_finished", result=result)
+        self.artifacts.record(
+            "command_finished",
+            result=result,
+            runtime_backend=self.runtime.backend,
+            network=self.runtime_policy.network.value,
+            dependency_install=dependency_install,
+        )
         return result
 
 
