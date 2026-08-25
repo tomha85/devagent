@@ -63,7 +63,7 @@ jobs:
         run: python -m pip check
 
   qualification:
-    name: Functional qualification
+    name: Production qualification
     runs-on: ubuntu-latest
 
     steps:
@@ -79,16 +79,34 @@ jobs:
             pyproject.toml
             requirements.txt
 
+      - name: Confirm supported qualification toolchains
+        run: |
+          python --version
+          node --version
+          npm --version
+          go version
+          cargo --version
+          c++ --version | head -1
+          make --version | head -1
+
       - name: Install development package
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run functional qualification catalog
+      - name: Run production qualification catalog
         run: |
           python -m devagent.qualification \
-            --catalog evaluation/benchmark_v2.json \
-            --report .devagent/functional-qualification.json
+            --catalog evaluation/benchmark_v3.json \
+            --report .devagent/production-qualification-v3.json
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-qualification-v3
+          path: .devagent/production-qualification-v3.json
+          if-no-files-found: error
 
   package:
     name: Build and install wheel

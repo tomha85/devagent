@@ -128,6 +128,21 @@ class Workspace:
             for key, value in os.environ.items()
             if key in {"PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "VIRTUAL_ENV", "PYTHONPATH", "SYSTEMROOT", "WINDIR"}
         }
+        # Keep HOME sandboxed so package-manager and cloud credentials are not inherited.
+        # Rustup-managed cargo/rustc binaries still need the installed toolchain directory,
+        # which is safe to expose separately from CARGO_HOME and registry credentials.
+        rustup_home = os.environ.get("RUSTUP_HOME")
+        if rustup_home:
+            environment["RUSTUP_HOME"] = rustup_home
+        else:
+            original_home = os.environ.get("HOME")
+            if original_home:
+                inferred_rustup = Path(original_home).expanduser() / ".rustup"
+                if inferred_rustup.is_dir():
+                    environment["RUSTUP_HOME"] = str(inferred_rustup)
+        rustup_toolchain = os.environ.get("RUSTUP_TOOLCHAIN")
+        if rustup_toolchain:
+            environment["RUSTUP_TOOLCHAIN"] = rustup_toolchain
         environment.update({"HOME": str(sandbox_home), "CI": "true", "DEVAGENT_RUN_ID": self.artifacts.run_id})
         try:
             completed = subprocess.run(

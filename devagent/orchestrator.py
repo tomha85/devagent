@@ -562,7 +562,10 @@ def _support_acceptance_criteria(
     diff_checks = [
         result for result in final_results if result.passed and result.command == ("git", "diff", "--check")
     ]
-    changed_tests = [path for path in changes.paths if _is_test_path(path)]
+    changed_tests = sorted(
+        set(path for path in changes.paths if _is_test_path(path))
+        | set(developer_review.test_files)
+    )
     all_final_pass = bool(final_results) and all(result.passed for result in final_results)
     implementation_text = " ".join(implementation).lower()
     lower_diff = diff_text.lower()
@@ -819,11 +822,14 @@ def _support_acceptance_criteria(
 def _is_test_path(path: str) -> bool:
     lowered = path.lower()
     parts = Path(lowered).parts
+    name = Path(lowered).name
     return (
         any(part in {"test", "tests", "spec", "specs", "__tests__"} for part in parts)
-        or Path(lowered).name.startswith("test_")
-        or ".test." in lowered
-        or ".spec." in lowered
+        or name.startswith("test_")
+        or name.startswith("test.")
+        or "_test." in name
+        or ".test." in name
+        or ".spec." in name
     )
 
 

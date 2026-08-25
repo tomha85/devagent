@@ -2,6 +2,25 @@
 
 All notable changes to DevAgent are documented here.
 
+## 0.4.0 — 2026-08-25
+
+### Production hardening and qualification
+
+- Promoted the package metadata from Alpha to Beta after expanding the release qualification surface and validating the release candidate on supported CI toolchains.
+- Added the production qualification v3 catalog with 52 required cases. The catalog retains the `false_verified == 0` invariant and now covers provider parity, actual multi-language toolchain execution, and release integrity in addition to the existing end-to-end, acceptance, safety, review, repair, reporting, and evaluation contracts.
+- Added real executable qualification fixtures for Python/pytest, Node with TypeScript repository discovery, Go, Rust/Cargo, and C++/Make. Production qualification fails when a required toolchain is unavailable or its discovered repository-native command fails.
+- Kept expensive real-toolchain fixtures out of the normal unit-test path while making the dedicated production qualification runner explicitly enable and execute them.
+- Added Google Gemini / Google provider aliases through Google's OpenAI-compatible Gemini endpoint, reusing DevAgent's existing bounded structured-response handling and deterministic local schema validation.
+- Added release-integrity regression tests proving package/version consistency, exact green-main release targeting, exact-tag package builds, `twine` validation, and PyPI Trusted Publishing requirements.
+- Production CI now runs Python 3.10/3.11/3.12 suites, clean wheel installation, and the production qualification catalog; the qualification JSON report is retained as a CI artifact.
+- Updated the default qualification catalog to `evaluation/benchmark_v3.json`.
+- Versioned the Python distribution and CLI as `0.4.0`.
+
+### Accuracy wording
+
+- A 100% production-qualification result means every explicitly cataloged case passed. It is not a mathematical guarantee for every unseen repository, environment, model response, language, or engineering request.
+- DevAgent continues to prefer a truthful `PARTIALLY_VERIFIED` or `BLOCKED` result over an unsupported `VERIFIED` result.
+
 ## 0.3.2 — 2026-08-24
 
 ### Developer review reporting and verified branch publishing

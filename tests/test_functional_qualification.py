@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from devagent.models import TaskType
-from devagent.qualification import load_catalog, run_qualification
+from devagent.qualification import QualificationCase, load_catalog, run_qualification
 from devagent.tasking import compile_task
 
 
@@ -32,12 +33,8 @@ def test_all_public_task_types_have_deterministic_classification_examples(
     assert compile_task(requirement).task_type is expected
 
 
-def test_v2_catalog_covers_required_functional_categories() -> None:
-    root = Path(__file__).resolve().parents[1]
-    payload, cases = load_catalog(root / "evaluation" / "benchmark_v2.json")
-
+def _assert_catalog_nodes(root: Path, payload: dict[str, Any], cases: tuple[QualificationCase, ...]) -> None:
     assert payload["primary_invariant"] == "false_verified == 0"
-    assert len(cases) >= 35
     present = {case.category for case in cases}
     assert set(payload["required_categories"]) <= present
     assert len({case.id for case in cases}) == len(cases)
@@ -48,6 +45,35 @@ def test_v2_catalog_covers_required_functional_categories() -> None:
         assert target.is_file(), case.pytest_node
         source = target.read_text(encoding="utf-8")
         assert f"def {function_name}(" in source, case.pytest_node
+
+
+def test_v2_catalog_covers_required_functional_categories() -> None:
+    root = Path(__file__).resolve().parents[1]
+    payload, cases = load_catalog(root / "evaluation" / "benchmark_v2.json")
+
+    assert len(cases) == 40
+    _assert_catalog_nodes(root, payload, cases)
+
+
+def test_v3_catalog_covers_production_toolchains_provider_parity_and_release_integrity() -> None:
+    root = Path(__file__).resolve().parents[1]
+    payload, cases = load_catalog(root / "evaluation" / "benchmark_v3.json")
+
+    assert len(cases) == 52
+    assert {"provider_parity", "real_stack", "release_integrity"} <= set(
+        payload["required_categories"]
+    )
+    real_stack = {case.id for case in cases if case.category == "real_stack"}
+    assert real_stack == {
+        "real-stack-python-pytest",
+        "real-stack-node-typescript",
+        "real-stack-go",
+        "real-stack-rust",
+        "real-stack-cpp-make",
+        "multilang-review-symbol-test-evidence",
+        "real-multistack-devagent-e2e",
+    }
+    _assert_catalog_nodes(root, payload, cases)
 
 
 def test_catalog_loader_rejects_missing_required_category(tmp_path: Path) -> None:

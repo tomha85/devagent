@@ -1,0 +1,338 @@
+{
+  "schema_version": 2,
+  "name": "DevAgent Production Qualification v3",
+  "primary_invariant": "false_verified == 0",
+  "qualification_rule": "Every catalog case must pass. Real-stack cases execute actual local toolchains under the production qualification environment.",
+  "required_categories": [
+    "end_to_end",
+    "truthfulness",
+    "acceptance_contract",
+    "task_scope",
+    "provider_contract",
+    "provider_parity",
+    "model_routing",
+    "worktree_safety",
+    "source_control_safety",
+    "cli_input",
+    "review_loop",
+    "repair_loop",
+    "report_integrity",
+    "evaluation_integrity",
+    "real_stack",
+    "release_integrity"
+  ],
+  "cases": [
+    {
+      "id": "e2e-minimal-verified",
+      "category": "end_to_end",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_minimal_unknown_repository_is_discovered_probed_and_verified",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "e2e-isolated-no-publication",
+      "category": "end_to_end",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_end_to_end_fixture_is_verified_without_source_control_publication",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "review-rejection-reverify",
+      "category": "review_loop",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_review_rejection_forces_edit_and_reverification",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "failed-hypothesis-replan",
+      "category": "repair_loop",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_failed_hypothesis_can_replan_before_a_focused_fix",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "insufficient-evidence-block",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_e2e_fake_provider.py::test_insufficient_evidence_blocks_before_modification",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "acceptance-no-blanket-pytest-proof",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_acceptance_contract.py::test_passing_tests_do_not_blanket_prove_unrelated_user_requirement",
+      "expected": "PASS"
+    },
+    {
+      "id": "named-preservation-baseline-proof",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_acceptance_contract.py::test_named_preservation_requires_deterministic_baseline_subject",
+      "expected": "PASS"
+    },
+    {
+      "id": "evaluation-false-verified-detected",
+      "category": "truthfulness",
+      "pytest_node": "tests/test_evaluation_harness.py::test_false_verified_is_explicitly_detected",
+      "expected": "PASS"
+    },
+    {
+      "id": "structured-user-acceptance-atomic",
+      "category": "acceptance_contract",
+      "pytest_node": "tests/test_acceptance_contract.py::test_structured_requirement_compiles_atomic_user_acceptance_items",
+      "expected": "PASS"
+    },
+    {
+      "id": "exact-quoted-contract",
+      "category": "acceptance_contract",
+      "pytest_node": "tests/test_acceptance_contract.py::test_exact_quoted_contract_must_appear_in_final_diff",
+      "expected": "PASS"
+    },
+    {
+      "id": "preservation-requires-baseline-final",
+      "category": "acceptance_contract",
+      "pytest_node": "tests/test_acceptance_contract.py::test_without_changing_preservation_requires_baseline_and_final_evidence",
+      "expected": "PASS"
+    },
+    {
+      "id": "long-structured-requirement-not-truncated",
+      "category": "acceptance_contract",
+      "pytest_node": "tests/test_acceptance_contract.py::test_markdown_sections_keep_tests_verification_constraints_and_more_than_24_items",
+      "expected": "PASS"
+    },
+    {
+      "id": "migration-high-risk-contract",
+      "category": "task_scope",
+      "pytest_node": "tests/test_acceptance_contract.py::test_migration_is_high_risk_and_requires_verification_contract",
+      "expected": "PASS"
+    },
+    {
+      "id": "refactor-requires-regression-verification",
+      "category": "task_scope",
+      "pytest_node": "tests/test_acceptance_contract.py::test_refactor_requires_tests_and_behavior_preservation",
+      "expected": "PASS"
+    },
+    {
+      "id": "feature-regression-word-not-bugfix",
+      "category": "task_scope",
+      "pytest_node": "tests/test_acceptance_contract.py::test_feature_with_regression_test_language_is_not_misclassified_as_bug_fix",
+      "expected": "PASS"
+    },
+    {
+      "id": "all-task-types-classify",
+      "category": "task_scope",
+      "pytest_node": "tests/test_functional_qualification.py::test_all_public_task_types_have_deterministic_classification_examples",
+      "expected": "PASS"
+    },
+    {
+      "id": "structured-confidence-repair",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_qualitative_confidence_gets_one_bounded_repair_and_parses",
+      "expected": "PASS"
+    },
+    {
+      "id": "structured-repair-bounded",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_structured_repair_is_exhausted_after_one_attempt",
+      "expected": "PASS"
+    },
+    {
+      "id": "no-edit-before-valid-plan",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_no_modification_occurs_before_valid_understanding_and_plan",
+      "expected": "BLOCKED"
+    },
+    {
+      "id": "openai-strict-schema",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_openai_sends_supplied_schema_as_strict_structured_output",
+      "expected": "PASS"
+    },
+    {
+      "id": "compatible-provider-fallback",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_compatible_provider_falls_back_when_json_object_format_is_unsupported",
+      "expected": "PASS"
+    },
+    {
+      "id": "anthropic-bounded-repair",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_structured_provider_contract.py::test_anthropic_uses_local_validation_and_bounded_repair",
+      "expected": "PASS"
+    },
+    {
+      "id": "gemini-first-class-defaults",
+      "category": "provider_parity",
+      "pytest_node": "tests/test_production_v040.py::test_gemini_provider_defaults_are_first_class",
+      "expected": "PASS"
+    },
+    {
+      "id": "gemini-openai-compat-structured-contract",
+      "category": "provider_parity",
+      "pytest_node": "tests/test_production_v040.py::test_gemini_uses_official_openai_compatibility_endpoint_and_local_schema_validation",
+      "expected": "PASS"
+    },
+    {
+      "id": "role-routing-selection-fallback",
+      "category": "model_routing",
+      "pytest_node": "tests/test_model_routing.py::test_role_router_uses_selected_provider_and_default_fallback",
+      "expected": "PASS"
+    },
+    {
+      "id": "role-config-round-trip",
+      "category": "model_routing",
+      "pytest_node": "tests/test_model_routing.py::test_role_config_round_trip_and_default_update_preserves_roles",
+      "expected": "PASS"
+    },
+    {
+      "id": "routing-no-credential-leak",
+      "category": "model_routing",
+      "pytest_node": "tests/test_model_routing.py::test_routing_summary_does_not_expose_credentials",
+      "expected": "PASS"
+    },
+    {
+      "id": "generated-state-allows-isolation",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_generated_only_untracked_state_preserves_worktree_isolation",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-untracked-source-protected",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_real_untracked_source_remains_protected",
+      "expected": "PASS"
+    },
+    {
+      "id": "tracked-modification-protected",
+      "category": "worktree_safety",
+      "pytest_node": "tests/test_production_hardening.py::test_modified_tracked_file_remains_protected",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-refuses-protected-branch",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_publish_refuses_protected_branch",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-refuses-nonverified",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_publish_refuses_non_verified_result",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-continue-same-branch",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_continue_mode_fast_forward_pushes_same_branch",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-blocks-remote-race",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_continue_mode_blocks_when_remote_moves_during_run",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-remote-ahead-baseline",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_prepare_publication_uses_remote_head_when_devagent_branch_is_ahead",
+      "expected": "PASS"
+    },
+    {
+      "id": "cli-input-extension-unrestricted",
+      "category": "cli_input",
+      "pytest_node": "tests/test_cli.py::test_requirement_file_extension_is_unrestricted",
+      "expected": "PASS"
+    },
+    {
+      "id": "cli-input-binary-refused",
+      "category": "cli_input",
+      "pytest_node": "tests/test_cli.py::test_requirement_file_rejects_binary_content",
+      "expected": "PASS"
+    },
+    {
+      "id": "cli-input-secret-refused",
+      "category": "cli_input",
+      "pytest_node": "tests/test_cli.py::test_requirement_file_rejects_sensitive_path",
+      "expected": "PASS"
+    },
+    {
+      "id": "report-before-publish",
+      "category": "report_integrity",
+      "pytest_node": "tests/test_cli.py::test_verified_run_prints_report_before_automatic_publish",
+      "expected": "PASS"
+    },
+    {
+      "id": "no-publish-means-no-publish",
+      "category": "report_integrity",
+      "pytest_node": "tests/test_cli.py::test_no_publish_keeps_verified_run_local",
+      "expected": "PASS"
+    },
+    {
+      "id": "evaluation-source-state-integrity",
+      "category": "evaluation_integrity",
+      "pytest_node": "tests/test_evaluation_harness.py::test_repository_snapshot_ignores_generated_state_but_detects_real_changes",
+      "expected": "PASS"
+    },
+    {
+      "id": "evaluation-regression-source-mutation-hard-fail",
+      "category": "evaluation_integrity",
+      "pytest_node": "tests/test_evaluation_harness.py::test_scope_regression_and_source_mutation_are_hard_failures",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-python-pytest",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_python_pytest_stack_is_discovered_and_executes",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-node-typescript",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_node_typescript_stack_is_discovered_and_executes",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-go",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_go_stack_is_discovered_and_executes",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-rust",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_rust_stack_is_discovered_and_executes_test_and_build",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-cpp-make",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_cpp_make_stack_is_discovered_and_executes",
+      "expected": "PASS"
+    },
+    {
+      "id": "multilang-review-symbol-test-evidence",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multilang_technical_review.py::test_multilang_review_extracts_changed_symbols_and_test_cases",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-multistack-devagent-e2e",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_devagent_e2e.py::test_real_multistack_devagent_feature_patch_is_verified",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "release-version-consistency",
+      "category": "release_integrity",
+      "pytest_node": "tests/test_production_v040.py::test_release_version_is_semver_and_consistent",
+      "expected": "PASS"
+    },
+    {
+      "id": "release-gated-by-green-exact-main",
+      "category": "release_integrity",
+      "pytest_node": "tests/test_production_v040.py::test_release_workflow_requires_green_exact_main_revision",
+      "expected": "PASS"
+    },
+    {
+      "id": "pypi-trusted-exact-tag-publish",
+      "category": "release_integrity",
+      "pytest_node": "tests/test_production_v040.py::test_pypi_workflow_uses_trusted_publishing_and_exact_tag_build",
+      "expected": "PASS"
+    }
+  ]
+}
