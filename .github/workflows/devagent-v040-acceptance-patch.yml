@@ -24,7 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: Apply deterministic patch
-        run: python .devagent-v040-acceptance-patch.py
+        run: |
+          python .devagent-v040-acceptance-patch.py
+          python .devagent-v040-acceptance-fix.py
 
       - name: Install development package
         run: |
@@ -46,10 +48,6 @@ jobs:
 
       - name: Commit verified product patch
         run: |
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain --untracked-files=normal | grep -v '^?? .devagent-v040-acceptance-patch.py$' || true)" ]; then
-            echo 'No product changes to commit.'
-            exit 0
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add devagent/models.py devagent/tasking.py devagent/orchestrator.py devagent/report.py tests/test_acceptance_contract.py docs/acceptance-contract.md
