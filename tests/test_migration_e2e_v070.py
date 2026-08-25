@@ -69,6 +69,12 @@ def test_sqlite_migration_forward_rollback_and_existing_state_are_verified(tmp_p
     tests = tmp_path / "tests"
     tests.mkdir()
     (tests / "test_migrations.py").write_text(before_test, encoding="utf-8")
+    workflow = tmp_path / ".github" / "workflows"
+    workflow.mkdir(parents=True)
+    (workflow / "ci.yml").write_text(
+        "name: fixture-ci\nsteps:\n  - run: python -m compileall -q .\n",
+        encoding="utf-8",
+    )
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.name", "DevAgent Qualification")
     _git(tmp_path, "config", "user.email", "qualification@example.com")
@@ -139,9 +145,15 @@ def test_sqlite_migration_forward_rollback_and_existing_state_are_verified(tmp_p
         if item.required
     ]
     assert result.task.task_type is TaskType.MIGRATION
-    assert result.outcome is Outcome.VERIFIED, diagnostic
     assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required), diagnostic
+    assert result.outcome is Outcome.VERIFIED, (diagnostic, result.not_run)
     assert any(item.phase == "final" and item.command == ("python", "-m", "pytest", "-q") and item.passed for item in result.verification)
+    assert any(
+        item.phase == "final"
+        and item.command == ("python", "-m", "compileall", "-q", ".")
+        and item.passed
+        for item in result.verification
+    )
     working = Path(result.working_root)
     assert "upgrade_add_email" in (working / "migrations.py").read_text(encoding="utf-8")
     assert "downgrade_add_email" in (working / "migrations.py").read_text(encoding="utf-8")
