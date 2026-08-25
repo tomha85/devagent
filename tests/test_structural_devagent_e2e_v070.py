@@ -96,7 +96,7 @@ def test_structural_rename_delete_refactor_is_verified_end_to_end(tmp_path: Path
 Acceptance criteria:
 - Rename `service.py` to `calculator.py`
 - Remove `legacy.py`
-- Preserve existing add behavior
+- Preserve existing service behavior
 - Verify relevant tests
 """,
     )
@@ -106,8 +106,8 @@ Acceptance criteria:
         for item in result.task.acceptance_criteria
         if item.required
     ]
-    assert result.outcome is Outcome.VERIFIED, diagnostic
     assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required), diagnostic
+    assert result.outcome is Outcome.VERIFIED, diagnostic
     working = Path(result.working_root)
     assert not (working / "service.py").exists()
     assert (working / "calculator.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
