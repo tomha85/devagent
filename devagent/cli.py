@@ -4,10 +4,11 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from devagent import __version__
 from devagent.config import (
@@ -37,6 +38,84 @@ _LIVE_PROBE_SCHEMA = {
     "additionalProperties": False,
 }
 
+_PROGRESS_STAGES: dict[str, tuple[int, str]] = {
+    "DISCOVER": (1, "DISCOVER / UNDERSTAND"),
+    "UNDERSTAND": (1, "DISCOVER / UNDERSTAND"),
+    "TASK_SPEC": (2, "REQUIREMENTS / PLAN"),
+    "BASELINE": (2, "REQUIREMENTS / PLAN"),
+    "PLAN": (2, "REQUIREMENTS / PLAN"),
+    "GATHER_CONTEXT": (2, "REQUIREMENTS / PLAN"),
+    "REPRODUCE": (2, "REQUIREMENTS / PLAN"),
+    "IMPLEMENT": (3, "IMPLEMENT"),
+    "VERIFY_TARGETED": (4, "VERIFY / REPAIR IF NEEDED"),
+    "VERIFY_BROAD": (4, "VERIFY / REPAIR IF NEEDED"),
+    "REVIEW": (5, "INDEPENDENT REVIEW"),
+    "QUALITY_CHECK": (6, "FINAL VERIFICATION"),
+    "FINAL_VERIFY": (6, "FINAL VERIFICATION"),
+}
+_STATE_LINE = re.compile(r"^\[([A-Z_]+)\]$")
+
+
+class _ProgressStatus:
+    """Render stable user-facing milestones while keeping full diagnostics opt-in."""
+
+    def __init__(
+        self,
+        sink: Callable[[str], None] = print,
+        *,
+        verbose: bool = False,
+    ) -> None:
+        self.sink = sink
+        self.verbose = verbose
+        self._last_stage = 0
+        self._plan_seen = False
+        self._implement_seen = False
+        self._review_seen = False
+
+    def __call__(self, message: str) -> None:
+        if self.verbose:
+            self.sink(message)
+            return
+
+        match = _STATE_LINE.fullmatch(message)
+        if match is None:
+            return
+        state = match.group(1)
+
+        if state == "DIAGNOSE":
+            self.sink("      ↳ DIAGNOSE")
+            return
+        if state == "PLAN":
+            if self._plan_seen:
+                self.sink("      ↳ REPLAN")
+                return
+            self._plan_seen = True
+        if state == "IMPLEMENT":
+            if self._implement_seen:
+                label = "APPLY REVIEW FIXES" if self._review_seen else "APPLY CORRECTION"
+                self.sink(f"      ↳ {label}")
+                return
+            self._implement_seen = True
+        if state == "REVIEW":
+            self._review_seen = True
+
+        stage = _PROGRESS_STAGES.get(state)
+        if stage is None:
+            return
+        number, label = stage
+        if number <= self._last_stage:
+            return
+        self._last_stage = number
+        self.sink(f"[{number}/7] {label}")
+
+    def report(self) -> None:
+        if self.verbose:
+            self.sink("[ENGINEERING_REPORT]")
+            return
+        if self._last_stage < 7:
+            self._last_stage = 7
+            self.sink("[7/7] ENGINEERING REPORT")
+
 
 def _top_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="devagent", description="Evidence-driven local software engineering agent")
@@ -53,7 +132,11 @@ def _top_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", choices=_PROVIDER_CHOICES)
     parser.add_argument("--model")
     parser.add_argument("--base-url")
-    parser.add_argument("--verbose", action="store_true", help="Show state transitions")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show internal state transitions and diagnostics instead of concise progress stages",
+    )
     parser.add_argument("--no-isolation", action="store_true", help="Work in place instead of creating a local detached worktree")
     parser.add_argument(
         "--publish",
@@ -337,11 +420,14 @@ def _run(argv: Sequence[str]) -> int:
         from devagent.orchestrator import DevAgent
         from devagent.report import recommendations_for, render_report
 
+        progress = _ProgressStatus(print, verbose=args.verbose)
         result = DevAgent(
             model_provider,
             isolate=not args.no_isolation,
-            verbose=args.verbose,
-            status=print,
+            # Internal status events are always emitted. The progress reporter keeps normal
+            # CLI output concise and passes the full state/diagnostic stream only in --verbose.
+            verbose=True,
+            status=progress,
             base_commit=publication_plan.base_commit if publication_plan else None,
         ).run(args.repo, requirement)
 
@@ -361,6 +447,7 @@ def _run(argv: Sequence[str]) -> int:
 
         # The full engineering report is intentionally emitted before any Git commit/push.
         result.recommendations = recommendations_for(result)
+        progress.report()
         print(render_report(result))
 
         if publish_requested:
