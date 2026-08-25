@@ -33,7 +33,7 @@
       "id": "skills-bounded-relevance",
       "category": "skills",
       "pytest_node": "tests/test_v080_skills_automations.py::test_skill_registry_is_bounded_safe_and_requirement_relevant",
-      "expected": "only bounded relevant repository skills are selected"
+      "expected": "only bounded relevant repository skills are selected and oversized skill files are rejected before unbounded reads"
     },
     {
       "id": "skills-provider-injection",
@@ -42,10 +42,10 @@
       "expected": "matched repository skill context is injected without changing provider authority"
     },
     {
-      "id": "automation-due-outcome",
+      "id": "automation-overlap-claim-recovery",
       "category": "automations",
-      "pytest_node": "tests/test_v080_skills_automations.py::test_automation_store_schedules_due_work_and_records_outcomes",
-      "expected": "due automation executes through bounded coordinator and advances only after observed outcome"
+      "pytest_node": "tests/test_v080_skills_automations.py::test_automation_claim_prevents_overlap_and_recovers_after_lease",
+      "expected": "overlapping schedulers atomically claim due work once, expired claims recover, and stale outcomes cannot overwrite newer claims"
     },
     {
       "id": "provider-benchmark-dedup",
@@ -63,7 +63,7 @@
       "id": "provider-benchmark-secret-redaction",
       "category": "provider_benchmark",
       "pytest_node": "tests/test_v080_provider_benchmark.py::test_provider_benchmark_redacts_secret_values_from_errors",
-      "expected": "benchmark reports do not persist environment secret values"
+      "expected": "benchmark reports redact the configured credential regardless of env-name casing and also redact heuristic secret env values"
     }
   ]
 }

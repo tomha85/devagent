@@ -43,7 +43,13 @@ class SkillRegistry:
             target = directory / "SKILL.md"
             if target.is_symlink() or not target.is_file():
                 continue
-            data = target.read_bytes()
+            try:
+                if target.stat().st_size > _MAX_SKILL_BYTES:
+                    continue
+                with target.open("rb") as handle:
+                    data = handle.read(_MAX_SKILL_BYTES + 1)
+            except OSError:
+                continue
             if len(data) > _MAX_SKILL_BYTES or b"\x00" in data:
                 continue
             try:

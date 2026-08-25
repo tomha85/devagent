@@ -21,6 +21,7 @@ _SCHEMA = {
     "required": ["ok", "contract"],
     "additionalProperties": False,
 }
+_SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "CREDENTIAL", "PASSWORD")
 
 
 @dataclass(frozen=True)
@@ -52,11 +53,23 @@ def qualification_targets(default: ProviderConfig, roles: dict[str, ProviderConf
     return tuple(result)
 
 
-def _sanitized_error(exc: Exception) -> str:
-    text = str(exc)
+def _secret_values(config: ProviderConfig) -> tuple[str, ...]:
+    values: set[str] = set()
+    if config.api_key_env:
+        explicit = os.getenv(config.api_key_env)
+        if explicit:
+            values.add(explicit)
     for name, value in os.environ.items():
-        if ("KEY" in name or "TOKEN" in name or "SECRET" in name) and value:
-            text = text.replace(value, "[REDACTED]")
+        normalized = name.upper()
+        if value and any(marker in normalized for marker in _SECRET_ENV_MARKERS):
+            values.add(value)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+def _sanitized_error(exc: Exception, config: ProviderConfig) -> str:
+    text = str(exc)
+    for value in _secret_values(config):
+        text = text.replace(value, "[REDACTED]")
     return text[:500]
 
 
@@ -84,7 +97,7 @@ def run_benchmark(
             if not passed:
                 error = "provider returned a schema-valid but incorrect benchmark contract"
         except (ProviderError, OSError, ValueError) as exc:
-            error = _sanitized_error(exc)
+            error = _sanitized_error(exc, target.config)
         results.append(
             BenchmarkResult(
                 label=target.label,

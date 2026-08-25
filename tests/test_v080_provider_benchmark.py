@@ -37,15 +37,17 @@ def test_provider_benchmark_executes_strict_live_contract_with_factory() -> None
 
 
 def test_provider_benchmark_redacts_secret_values_from_errors(monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "super-secret-value")
-    target = BenchmarkTarget("default", ProviderConfig("openai", "gpt-test", None, "OPENAI_API_KEY", 30))
+    monkeypatch.setenv("custom_credential", "explicit-custom-secret")
+    monkeypatch.setenv("lowercase_token", "heuristic-token-secret")
+    target = BenchmarkTarget("default", ProviderConfig("compatible", "gpt-test", None, "custom_credential", 30))
 
     class _Broken:
         def request(self, **kwargs):
-            raise ProviderError("failure contains super-secret-value")
+            raise ProviderError("failure contains explicit-custom-secret and heuristic-token-secret")
 
     results = run_benchmark((target,), provider_factory=lambda config: _Broken())
 
     assert results[0].passed is False
-    assert "super-secret-value" not in (results[0].error or "")
-    assert "[REDACTED]" in (results[0].error or "")
+    assert "explicit-custom-secret" not in (results[0].error or "")
+    assert "heuristic-token-secret" not in (results[0].error or "")
+    assert (results[0].error or "").count("[REDACTED]") == 2
