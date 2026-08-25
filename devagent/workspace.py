@@ -146,6 +146,54 @@ class Workspace:
         self.modified_paths.add(self._relative(target))
         self.artifacts.record("text_replaced", path=path, count=count, revision=self.revision)
 
+    def _structural_file(self, path: str) -> Path:
+        lexical = self.root / path
+        if lexical.is_symlink():
+            raise SafetyError(f"Structural file operations do not follow symlinks: {path}")
+        target = self._writable(path)
+        if not target.exists() or not target.is_file():
+            raise SafetyError(f"Structural operation requires an existing regular file: {path}")
+        return target
+
+    def delete_file(self, path: str) -> None:
+        """Delete one planned regular file after preserving a run-local backup."""
+        target = self._structural_file(path)
+        relative = self._relative(target)
+        self.artifacts.backup(target, relative_to=self.root)
+        target.unlink()
+        self.revision += 1
+        self.modified_paths.add(relative)
+        self.artifacts.record("file_deleted", path=relative, revision=self.revision)
+
+    def move_file(self, source: str, destination: str, *, operation: str = "move") -> None:
+        """Move/rename one planned regular file without overwriting existing content."""
+        source_target = self._structural_file(source)
+        destination_lexical = self.root / destination
+        if destination_lexical.is_symlink():
+            raise SafetyError(f"Structural destination cannot be a symlink: {destination}")
+        destination_target = self._writable(destination)
+        source_relative = self._relative(source_target)
+        destination_relative = self._relative(destination_target)
+        if source_relative == destination_relative:
+            raise SafetyError("Structural source and destination must be different")
+        if destination_target.exists():
+            raise SafetyError(f"Refusing to overwrite structural destination: {destination_relative}")
+        self.artifacts.backup(source_target, relative_to=self.root)
+        destination_target.parent.mkdir(parents=True, exist_ok=True)
+        source_target.replace(destination_target)
+        self.revision += 1
+        self.modified_paths.update({source_relative, destination_relative})
+        self.artifacts.record(
+            "file_moved",
+            source=source_relative,
+            destination=destination_relative,
+            operation=operation,
+            revision=self.revision,
+        )
+
+    def rename_file(self, source: str, destination: str) -> None:
+        self.move_file(source, destination, operation="rename")
+
     def _validate_python_requirement_file(self, target: Path) -> None:
         if target.stat().st_size > 1_000_000:
             raise SafetyError(f"Dependency requirement file is too large: {self._relative(target)}")
@@ -258,9 +306,6 @@ class Workspace:
             for key, value in os.environ.items()
             if key in {"PATH", "LANG", "LC_ALL", "TERM", "VIRTUAL_ENV", "PYTHONPATH", "SYSTEMROOT", "WINDIR"}
         }
-        # Keep HOME sandboxed so package-manager and cloud credentials are not inherited.
-        # Rustup-managed cargo/rustc binaries still need the installed toolchain directory,
-        # which is safe to expose separately from CARGO_HOME and registry credentials.
         rustup_home = os.environ.get("RUSTUP_HOME")
         if rustup_home:
             environment["RUSTUP_HOME"] = rustup_home
@@ -284,9 +329,6 @@ class Workspace:
             }
         )
         if dependency_install and Path(argv[0]).name.lower() == "yarn":
-            # Yarn Classic understands ignore-scripts; Yarn Modern uses enableScripts
-            # and rejects the old --ignore-scripts CLI flag. Supplying both environment
-            # settings is safe: each generation consumes the setting it understands.
             environment["YARN_IGNORE_SCRIPTS"] = "true"
             environment["YARN_ENABLE_SCRIPTS"] = "false"
         try:
