@@ -53,6 +53,37 @@ def test_linux_bwrap_rebinds_external_run_state_writable(tmp_path: Path, monkeyp
     assert ("--bind", str(run_home.resolve()), str(run_home.resolve())) in bind_triplets
 
 
+def test_bwrap_loopback_failure_has_actionable_fail_closed_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    runtime = RuntimeExecutor(tmp_path, RuntimePolicy(sandbox=SandboxMode.REQUIRED, network=NetworkMode.DENY))
+
+    error = runtime.infrastructure_failure("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted")
+
+    assert error is not None
+    assert "AppArmor" in error
+    assert "refuses to fall back" in error
+
+
+def test_workspace_raises_on_bwrap_initialization_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "required")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "deny")
+    monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
+    monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+    monkeypatch.setattr(
+        "devagent.workspace.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+        ),
+    )
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="bwrap-host-policy"))
+
+    with pytest.raises(SafetyError, match="AppArmor"):
+        tools.run(("python", "--version"), phase="sandbox-smoke")
+
+
 def test_required_sandbox_fails_closed_when_bwrap_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("devagent.runtime.sys.platform", "linux")
     monkeypatch.setattr("devagent.runtime.shutil.which", lambda name: None)
