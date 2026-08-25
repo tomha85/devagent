@@ -5,13 +5,13 @@
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 [![Production CI](https://github.com/tomha85/devagent/actions/workflows/ci.yml/badge.svg)](https://github.com/tomha85/devagent/actions/workflows/ci.yml)
 
-**A local, evidence-driven software engineering agent that turns a requirement into a tested, reviewed patch — while leaving commit, push, merge, and deploy decisions to the developer.**
+**A local, evidence-driven software engineering agent that turns a requirement into a tested, reviewed patch — with optional verified-branch commit/push while leaving PR and merge decisions to the developer.**
 
 DevAgent runs against a local repository. It discovers the application, gathers source evidence, compiles acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, reviews the final diff, and returns one final engineering report.
 
-> **From requirement to verified local branch.**
+> **From requirement to evidence-backed verified branch.**
 >
-> DevAgent can modify software. It does not publish software.
+> DevAgent can optionally commit and push a `VERIFIED` result to a new branch. It never creates a pull request or merges code.
 
 ## Why DevAgent?
 
@@ -28,7 +28,8 @@ Core principles:
 - **Repository-native verification** — use commands supported by manifests, package scripts, tests, and CI evidence.
 - **Independent review** — the final diff is reviewed separately from implementation.
 - **Provider choice** — OpenAI, Anthropic/Claude, xAI/Grok, and OpenAI-compatible local endpoints.
-- **No automatic publishing** — DevAgent does not commit, push, merge, rebase, or deploy.
+- **Bounded publishing** — opt-in publishing is allowed only after `VERIFIED`, only to a new non-protected branch, and only from the isolated worktree.
+- **No PR or merge automation** — DevAgent never creates PRs, merges, rebases, force-pushes, or deploys.
 - **Evidence-backed outcomes** — final status is `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
 
 ## Quick start
@@ -106,6 +107,30 @@ pytest 2>&1 | devagent
 devagent
 ```
 
+To commit and push a successful `VERIFIED` result to a new branch:
+
+```bash
+devagent --publish "Add CSV export to reports"
+```
+
+The default pushed branch is unique per run, for example `devagent/20260825T010000Z-ab12cd`. To choose the new branch name explicitly:
+
+```bash
+devagent \
+  --publish-branch feature/devagent-csv-export \
+  "Add CSV export to reports"
+```
+
+Publishing is intentionally narrow:
+
+- the run must finish `VERIFIED`,
+- the default isolated worktree must be active,
+- the target branch must be new and cannot be `main`, `master`, or `trunk`,
+- only reviewed changed paths are staged,
+- one commit is created and pushed to the selected remote,
+- no pull request is created,
+- no merge, rebase, force push, or deployment is performed.
+
 Useful commands:
 
 ```bash
@@ -158,7 +183,7 @@ LEARN
 REPORT
 ```
 
-Python owns deterministic state transitions, safety gates, filesystem operations, verification validity, retry bounds, and final status. The model reasons inside bounded roles.
+Python owns deterministic state transitions, safety gates, filesystem operations, verification validity, retry bounds, final status, and optional verified-branch publication. The model reasons inside bounded roles and never receives a general-purpose Git publishing tool.
 
 ## Evidence gate
 
@@ -192,6 +217,8 @@ Depending on the repository, DevAgent can run:
 
 Each verification result records the command, exit code, duration, output, failure classification, phase, and workspace revision.
 
+The final report includes per-command pass/fail status, test counts when available, failure classifications, bounded stdout/stderr for failed checks, independent-review findings, and deterministic recommendations.
+
 A code modification invalidates prior successful verification for the old revision.
 
 ## Outcome contract
@@ -199,6 +226,8 @@ A code modification invalidates prior successful verification for the old revisi
 ### `VERIFIED`
 
 Used only when the current implementation has sufficient acceptance evidence, applicable verification passes, no known new regression remains, scope is acceptable, and independent review approves the final diff.
+
+Only `VERIFIED` results are eligible for opt-in branch publishing.
 
 ### `PARTIALLY_VERIFIED`
 
@@ -212,19 +241,21 @@ DevAgent is intentionally conservative: a truthful `BLOCKED` is better than a fa
 
 ## Safety boundary
 
-DevAgent uses defense-in-depth controls around repository modification and command execution.
+DevAgent uses defense-in-depth controls around repository modification, command execution, and branch publishing.
 
 - Clean Git repositories use a retained detached worktree by default.
 - Pre-existing dirty developer files are protected.
 - Existing files are backed up before their first modification.
 - Workspace paths are confined and checked against symlink escape.
 - Secret-like paths such as `.env*`, private keys, SSH/AWS credentials, and generated dependency trees are excluded from automatic reads.
-- Commands run as argv without a shell.
+- Engineering commands run as argv without a shell.
 - Credential environment variables are scrubbed from verification subprocesses where appropriate.
-- Publishing and destructive operations are blocked.
-- DevAgent never automatically commits, pushes, merges, rebases, or deploys.
+- The model-facing command policy continues to block Git write operations.
+- Optional publication is a separate deterministic post-verification step and requires explicit `--publish` or `--publish-branch` intent.
+- Publication refuses protected/existing target branches and stages only reviewed changed paths.
+- DevAgent never creates PRs, merges, rebases, force-pushes, or deploys.
 
-DevAgent is **not** an operating-system sandbox. Always review the final report and diff before publishing changes.
+DevAgent is **not** an operating-system sandbox. Always review the final report and pushed branch before integrating changes.
 
 ## Repository intelligence
 
@@ -268,34 +299,46 @@ STATUS
 VERIFIED
 
 TASK
-Handle division by zero safely and add a regression test.
+Add multiplication support and regression tests.
 
 ROOT CAUSE
-The divide path did not explicitly handle a zero divisor.
+The calculator does not provide multiplication behavior.
 
 IMPLEMENTATION
-- Added bounded zero-divisor handling
-- Added regression coverage
+- Added multiply(a, b)
+- Added multiplication regression coverage
 
 FILES CHANGED
 calculator.py
 test_calculator.py
 
-VERIFICATION
-PASS  targeted tests
-PASS  broader tests
-PASS  git diff --check
+VERIFICATION SUMMARY
+Passed checks: 4
+Failed checks: 0
+
+VERIFICATION RESULTS
+✓ python -m pytest -q | phase=final | exit=0 | 0.15s | tests=5/5
+✓ git diff --check | phase=final | exit=0 | 0.00s
+
+INDEPENDENT REVIEW
+APPROVED
+The implementation is minimal and verified.
 
 NEW REGRESSIONS
-None detected
+0
 
 SOURCE CONTROL
-No commit
-No push
-No merge
+Remote: origin
+Branch: feature/devagent-multiplication
+Commit: <sha>
+Committed: YES
+Pushed: YES
+Pull request: NOT CREATED
+Merge: NOT PERFORMED
 
 DEVELOPER ACTION
-Review the diff before publishing.
+Review remote branch: origin/feature/devagent-multiplication
+Create a PR or merge only after developer review, if desired.
 ```
 
 ## Local run data
@@ -316,6 +359,8 @@ DevAgent keeps run artifacts under the target repository's `.devagent/` state:
     └── strategies.json
 ```
 
+The machine-readable `report.json` also records the requested publication branch/remote, commit SHA, commit status, push status, and any publication error.
+
 Repository facts are tied to evidence fingerprints and can be invalidated when their source changes.
 
 ## Development
@@ -334,7 +379,7 @@ Install the current checkout in editable mode:
 pip install -e ".[dev]"
 ```
 
-Automated tests use a deterministic fake provider and do not consume cloud-model credits.
+Automated tests use a deterministic fake provider and do not consume cloud-model credits. Source-control publication tests use a local bare Git repository rather than a network remote.
 
 ## Project status
 
@@ -355,7 +400,7 @@ The project intentionally prioritizes trustworthy outcomes over feature count.
 
 Contributions are welcome.
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In particular, changes to DevAgent's safety or verification behavior should include regression tests and must not weaken the no-publish boundary.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. In particular, changes to DevAgent's safety, verification, or bounded publication behavior should include regression tests and must not give model-generated actions unrestricted Git publishing authority.
 
 For bugs and feature requests, use the [GitHub issue tracker](https://github.com/tomha85/devagent/issues).
 
