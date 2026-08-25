@@ -11,10 +11,10 @@ from typing import Sequence
 
 from devagent import __version__
 from devagent.config import ProviderConfig, config_path, load_config, save_config
-from devagent.models import Outcome
-from devagent.orchestrator import run_devagent
+from devagent.models import Outcome, jsonable
 from devagent.providers import ProviderError, create_provider
 from devagent.safety import is_secret_path
+from devagent.source_control import publish_verified_branch
 
 
 def _top_parser() -> argparse.ArgumentParser:
@@ -28,6 +28,20 @@ def _top_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url")
     parser.add_argument("--verbose", action="store_true", help="Show state transitions")
     parser.add_argument("--no-isolation", action="store_true", help="Work in place instead of creating a local detached worktree")
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="After VERIFIED, commit and push to a new remote branch; never creates a PR or merges",
+    )
+    parser.add_argument(
+        "--publish-branch",
+        help="New branch name to commit and push after VERIFIED; implies --publish",
+    )
+    parser.add_argument(
+        "--publish-remote",
+        default="origin",
+        help="Git remote used by --publish (default: origin)",
+    )
     return parser
 
 
@@ -89,6 +103,10 @@ def _status(repo: Path) -> int:
         return 1
     print(f"Run: {data.get('run_id', latest.parent.name)}")
     print(f"Status: {data.get('outcome', 'UNKNOWN')}")
+    source_control = data.get("source_control") or {}
+    if source_control.get("requested"):
+        print(f"Branch: {source_control.get('branch') or '(none)'}")
+        print(f"Pushed: {'YES' if source_control.get('pushed') else 'NO'}")
     print(f"Report: {latest}")
     return 0
 
@@ -115,6 +133,8 @@ def _run(argv: Sequence[str]) -> int:
             raise ValueError("Engineering requirement cannot be empty")
         if not args.repo.resolve().is_dir():
             raise ValueError(f"Repository does not exist: {args.repo}")
+        if (args.publish or args.publish_branch) and args.no_isolation:
+            raise ValueError("Branch publishing requires isolation; remove --no-isolation")
         configured = load_config()
         selected_provider = args.provider or configured.provider
         if args.provider and args.provider != configured.provider:
@@ -138,8 +158,21 @@ def _run(argv: Sequence[str]) -> int:
             verbose=args.verbose,
             status=print,
         ).run(args.repo, requirement)
+
+        publish_requested = bool(args.publish or args.publish_branch)
+        if publish_requested:
+            result.source_control = publish_verified_branch(
+                result,
+                branch=args.publish_branch,
+                remote=args.publish_remote,
+            )
+            report_path = Path(result.run_dir) / "report.json"
+            report_path.write_text(json.dumps(jsonable(result), indent=2) + "\n", encoding="utf-8")
+
         report = render_report(result)
         print(report)
+        if result.outcome is Outcome.VERIFIED and publish_requested and not result.source_control.pushed:
+            return 3
         return {Outcome.VERIFIED: 0, Outcome.PARTIALLY_VERIFIED: 2, Outcome.BLOCKED: 1}[result.outcome]
     except (ValueError, OSError, ProviderError) as exc:
         print(f"DevAgent failed: {exc}", file=sys.stderr)
