@@ -152,24 +152,24 @@ class CommandPolicy:
                 raise SafetyError("Direct dependency URLs are blocked")
 
         if kind == "pip":
-            requirement_index = next(
-                (index for index, token in enumerate(args) if token.lower() in {"-r", "--requirement"}),
-                None,
-            )
-            if requirement_index is None or requirement_index + 1 >= len(args):
-                raise SafetyError("Safe pip installation requires -r/--requirement with a repository file")
-            requirement = args[requirement_index + 1]
+            # Keep the caller-controlled surface deliberately tiny: exactly one repository
+            # requirements file. DevAgent appends all safety flags itself, so arbitrary
+            # requirement specifiers or user-supplied pip options cannot bypass the file.
+            if len(args) != 2 or args[0].lower() not in {"-r", "--requirement"}:
+                raise SafetyError(
+                    "Safe pip installation accepts only -r/--requirement with one repository file"
+                )
+            requirement = args[1]
             if requirement.startswith("-") or is_secret_path(Path(requirement)):
                 raise SafetyError("Safe pip installation requires a non-sensitive requirement file")
-            normalized = list(prefix) + args
-            lowered_normalized = tuple(token.lower() for token in normalized)
-            if "--no-input" not in lowered_normalized:
-                normalized.append("--no-input")
-            if "--disable-pip-version-check" not in lowered_normalized:
-                normalized.append("--disable-pip-version-check")
-            if not any(token.startswith("--only-binary") for token in lowered_normalized):
-                normalized.append("--only-binary=:all:")
-            return tuple(normalized)
+            return (
+                *prefix,
+                args[0],
+                requirement,
+                "--no-input",
+                "--disable-pip-version-check",
+                "--only-binary=:all:",
+            )
 
         if kind == "npm":
             if lowered[1] != "ci":
@@ -195,8 +195,9 @@ class CommandPolicy:
             normalized = list(prefix) + args
             if "--frozen-lockfile" not in lowered and "--immutable" not in lowered:
                 normalized.append("--frozen-lockfile")
-            if "--ignore-scripts" not in lowered:
-                normalized.append("--ignore-scripts")
+            # Script suppression is injected through the environment in Workspace.run.
+            # Yarn Classic supports YARN_IGNORE_SCRIPTS; Yarn Modern maps
+            # YARN_ENABLE_SCRIPTS to enableScripts and rejects --ignore-scripts.
             return tuple(normalized)
 
         raise SafetyError("Unsupported dependency installer")
@@ -220,6 +221,14 @@ class CommandPolicy:
             token in {"-c", "-e", "--eval"} for token in lowered[1:]
         ):
             raise SafetyError("Inline interpreter execution is blocked")
+
+        # pip is never a general-purpose verification tool. Only the explicitly gated
+        # `install -r <repo file>` form may pass through the dependency-install path.
+        if executable in {"pip", "pip3"} and (len(lowered) < 2 or lowered[1] != "install"):
+            raise SafetyError("Non-install pip commands are blocked during an engineering run")
+        if executable in {"python", "python3"} and len(lowered) >= 3 and lowered[1:3] == ("-m", "pip"):
+            if len(lowered) < 4 or lowered[3] != "install":
+                raise SafetyError("Non-install pip commands are blocked during an engineering run")
 
         dependency_install = cls.is_dependency_install(tokens)
         if dependency_install:
