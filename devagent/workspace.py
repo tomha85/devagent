@@ -283,6 +283,12 @@ class Workspace:
                 "DEVAGENT_NETWORK_MODE": self.runtime_policy.network.value,
             }
         )
+        if dependency_install and Path(argv[0]).name.lower() == "yarn":
+            # Yarn Classic understands ignore-scripts; Yarn Modern uses enableScripts
+            # and rejects the old --ignore-scripts CLI flag. Supplying both environment
+            # settings is safe: each generation consumes the setting it understands.
+            environment["YARN_IGNORE_SCRIPTS"] = "true"
+            environment["YARN_ENABLE_SCRIPTS"] = "false"
         try:
             try:
                 execution_argv = self.runtime.prepare(argv, writable_paths=(sandbox_home,))
