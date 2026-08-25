@@ -466,6 +466,10 @@ def _task_design_defaults(task: TaskSpec) -> list[str]:
                 "Do not invent authorization roles, OAuth scopes, account-linking policy, or other security/product decisions absent from the user request.",
             ]
         )
+    if any(term in lowered for term in ("payment", "billing", "checkout", "subscription")):
+        common.append(
+            "Do not invent retry counts, fees, cancellation policy, payment state transitions, or other commercial behavior absent from the user request."
+        )
     return _dedupe(common)
 
 
@@ -533,7 +537,7 @@ def _compile_repository_aware_brief(task: TaskSpec, repository: Any) -> None:
         [
             "",
             "DESIGN GUARDRAIL",
-            "- Do not invent pricing, retry counts, authorization policy, destructive data behavior, external API semantics, or other product/business rules that the user did not request.",
+            "- Do not invent material product, business, security, data-lifecycle, or external-contract behavior that the user did not request.",
             "- If source evidence shows a material ambiguity, prefer a bounded implementation or BLOCKED/PARTIALLY_VERIFIED outcome over silently choosing product policy.",
         ]
     )
