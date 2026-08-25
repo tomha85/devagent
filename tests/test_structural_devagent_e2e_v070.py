@@ -91,11 +91,23 @@ def test_structural_rename_delete_refactor_is_verified_end_to_end(tmp_path: Path
 
     result = DevAgent(ScriptedFakeProvider(responses)).run(
         tmp_path,
-        "Refactor the calculator module: rename `service.py` to `calculator.py`, remove `legacy.py`, preserve existing addition behavior, and verify tests.",
+        """Refactor the calculator module layout.
+
+Acceptance criteria:
+- Rename `service.py` to `calculator.py`
+- Remove `legacy.py`
+- Preserve existing add behavior
+- Verify relevant tests
+""",
     )
 
-    assert result.outcome is Outcome.VERIFIED
-    assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required)
+    diagnostic = [
+        (item.description, item.status.value, item.reason, item.evidence)
+        for item in result.task.acceptance_criteria
+        if item.required
+    ]
+    assert result.outcome is Outcome.VERIFIED, diagnostic
+    assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required), diagnostic
     working = Path(result.working_root)
     assert not (working / "service.py").exists()
     assert (working / "calculator.py").read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
