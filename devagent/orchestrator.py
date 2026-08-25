@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import difflib
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -10,8 +11,11 @@ from devagent.artifacts import RunArtifacts
 from devagent.discovery import discover_repository
 from devagent.memory import RepositoryMemory
 from devagent.models import (
+    AcceptanceSource,
+    AcceptanceStatus,
     AgentState,
     ChangeMetrics,
+    DeveloperReviewEvidence,
     EngineeringPlan,
     Evidence,
     Outcome,
@@ -29,7 +33,8 @@ from devagent.report import render_report
 from devagent.retrieval import retrieve_context
 from devagent.safety import SafetyError
 from devagent.state_machine import InvalidTransition, Lifecycle
-from devagent.tasking import compile_task
+from devagent.tasking import compile_task, enrich_acceptance_contract
+from devagent.technical_review import analyze_developer_review
 from devagent.workspace import Workspace
 from devagent.worktree import select_worktree
 
@@ -413,19 +418,323 @@ def _command_kind(command: tuple[str, ...], repository: Any) -> str | None:
     return None
 
 
-def _support_acceptance_criteria(task: Any, changes: ChangeMetrics, final_results: list[VerificationResult], review: ReviewDecision) -> None:
-    passing_commands = [" ".join(result.command) for result in final_results if result.passed]
+_ACCEPTANCE_STOPWORDS = frozenset(
+    {
+        "add", "and", "the", "handle", "safely", "changing", "implement", "support", "preserve", "preserving", "existing", "behavior",
+        "behaviour", "function", "functionality", "values", "value", "with", "without",
+        "from", "into", "that", "this", "then", "than", "must", "should", "shall",
+        "keep", "ensure", "when", "where", "make", "changes", "change", "tests", "test",
+        "verify", "verification", "relevant", "automated", "pass", "passes", "final",
+        "revision", "repository", "supported", "check", "review", "independent", "current",
+        "normal", "edge", "case", "covered", "coverage", "feature", "follows", "conventions",
+        "unrelated", "externally", "observable", "remains", "unchanged", "explicitly",
+        "requested", "root", "cause", "addressed", "merely", "masked", "regression",
+        "protects", "refactored", "migration", "strategy", "application", "contract", "against",
+        "representative", "state", "safe", "forward", "rollback", "non", "reversible",
+    }
+)
+
+
+def _acceptance_tokens(text: str) -> set[str]:
+    preferred = {
+        item.lower()
+        for item in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", text)
+        if item.lower() not in _ACCEPTANCE_STOPWORDS
+    }
+    preferred.update(
+        item.lower()
+        for item in re.findall(r"`([A-Za-z_][A-Za-z0-9_.-]*)`", text)
+        if item.lower() not in _ACCEPTANCE_STOPWORDS
+    )
+    if preferred:
+        return preferred
+    return {
+        item.lower()
+        for item in re.findall(r"[A-Za-z_][A-Za-z0-9_-]*", text)
+        if len(item) > 2 and item.lower() not in _ACCEPTANCE_STOPWORDS
+    }
+
+
+def _matching_acceptance_inventory(
+    description: str,
+    changes: ChangeMetrics,
+    developer_review: DeveloperReviewEvidence,
+) -> tuple[list[str], list[str], set[str]]:
+    tokens = _acceptance_tokens(description)
+    matched: list[str] = []
+    matched_tests: list[str] = []
+    matched_tokens: set[str] = set()
+    inventory: list[tuple[str, str, bool]] = []
+    for symbol in developer_review.changed_symbols:
+        inventory.append((f"symbol {symbol.path}:{symbol.name}", f"{symbol.path} {symbol.name}".lower(), False))
+    for test in developer_review.test_cases:
+        inventory.append((f"test {test.path}:{test.name}", f"{test.path} {test.name}".lower(), True))
+    for path in changes.paths:
+        inventory.append((f"changed path {path}", path.lower(), _is_test_path(path)))
+
+    for label, searchable, is_test in inventory:
+        hits = {token for token in tokens if token in searchable}
+        if not hits:
+            continue
+        matched_tokens.update(hits)
+        if label not in matched:
+            matched.append(label)
+        if is_test and label not in matched_tests:
+            matched_tests.append(label)
+    return matched, matched_tests, matched_tokens
+
+
+def _set_acceptance(
+    criterion: Any,
+    status: AcceptanceStatus,
+    evidence: Sequence[str] = (),
+    reason: str | None = None,
+) -> None:
+    criterion.status = status
+    criterion.evidence = list(dict.fromkeys(item for item in evidence if item))
+    criterion.reason = reason
+
+
+def _support_acceptance_criteria(
+    task: Any,
+    repository: Any,
+    understanding: Understanding,
+    changes: ChangeMetrics,
+    verification: list[VerificationResult],
+    final_results: list[VerificationResult],
+    review: ReviewDecision,
+    developer_review: DeveloperReviewEvidence,
+    implementation: Sequence[str],
+    diff_text: str,
+) -> None:
+    passing_tests = [
+        result
+        for result in final_results
+        if result.passed and _command_kind(result.command, repository) in {"test", "integration"}
+    ]
+    baseline_tests = [
+        result
+        for result in verification
+        if result.baseline and result.passed and _command_kind(result.command, repository) in {"test", "integration"}
+    ]
+    diff_checks = [
+        result for result in final_results if result.passed and result.command == ("git", "diff", "--check")
+    ]
+    changed_tests = [path for path in changes.paths if _is_test_path(path)]
+    all_final_pass = bool(final_results) and all(result.passed for result in final_results)
+    implementation_text = " ".join(implementation).lower()
+    lower_diff = diff_text.lower()
+    conflicts = set(understanding.preservation_conflicts())
+
     for criterion in task.acceptance_criteria:
+        _set_acceptance(criterion, AcceptanceStatus.UNPROVEN, reason="No criterion-specific final evidence was established")
         lowered = criterion.description.lower()
-        if "review" in lowered and review.approved:
-            criterion.evidence.append("Independent reviewer approved the final diff")
-        elif "test" in lowered or "coverage" in lowered:
-            criterion.evidence.extend(path for path in changes.paths if _is_test_path(path))
-            criterion.evidence.extend(passing_commands)
-        elif "unrelated" in lowered:
-            criterion.evidence.append(f"Minimal-diff gate accepted {changes.files_changed} changed file(s)")
-        elif changes.paths:
-            criterion.evidence.extend(changes.paths)
+
+        if criterion.source is AcceptanceSource.REPOSITORY:
+            result = next(
+                (
+                    item
+                    for item in final_results
+                    if criterion.verification_command is not None
+                    and item.command == criterion.verification_command
+                    and item.passed
+                ),
+                None,
+            )
+            if result is not None:
+                _set_acceptance(
+                    criterion,
+                    AcceptanceStatus.SATISFIED,
+                    [" ".join(result.command)],
+                    "Trusted repository check passed on the final revision",
+                )
+            else:
+                criterion.reason = "Repository-derived final verification command did not pass exactly as discovered"
+            continue
+
+        if criterion.source is AcceptanceSource.QUALITY_GATE:
+            if lowered == "relevant automated tests pass":
+                if passing_tests:
+                    _set_acceptance(
+                        criterion,
+                        AcceptanceStatus.SATISFIED,
+                        [" ".join(item.command) for item in passing_tests],
+                        "Evidence-backed test command passed on the final revision",
+                    )
+                else:
+                    criterion.reason = "No evidence-backed test/integration command passed on the final revision"
+            elif lowered == "no unrelated behavior changes":
+                if review.approved and diff_checks:
+                    _set_acceptance(
+                        criterion,
+                        AcceptanceStatus.SATISFIED,
+                        [
+                            f"Minimal-diff gate accepted {changes.files_changed} changed file(s)",
+                            "Independent reviewer approved the final diff",
+                            "git diff --check",
+                        ],
+                        "Scope was bounded by the deterministic minimal-diff gate and independent review",
+                    )
+                else:
+                    criterion.reason = "Scope cannot be accepted without both final diff validation and independent review"
+            elif lowered == "final diff and independent review pass":
+                if review.approved and diff_checks and all_final_pass:
+                    _set_acceptance(
+                        criterion,
+                        AcceptanceStatus.SATISFIED,
+                        ["Independent reviewer approved the final diff", "git diff --check"],
+                        "All current-revision final checks and independent review passed",
+                    )
+                else:
+                    criterion.reason = "Final verification and independent review are not both proven"
+            continue
+
+        if criterion.source is AcceptanceSource.TASK_POLICY:
+            evidence: list[str] = []
+            satisfied = False
+            if lowered == "the feature follows existing repository conventions":
+                satisfied = review.approved and bool(changes.paths)
+                evidence = ["Independent reviewer approved repository-convention fit", *changes.paths]
+            elif lowered == "normal and relevant edge-case behavior are covered":
+                satisfied = bool(changed_tests and passing_tests)
+                evidence = [*changed_tests, *(" ".join(item.command) for item in passing_tests)]
+            elif lowered == "the root cause is addressed, not merely masked":
+                satisfied = review.approved and bool(changes.paths) and bool(passing_tests or final_results)
+                evidence = ["Independent reviewer approved the root-cause fix", *changes.paths]
+            elif lowered == "regression coverage exercises the failing case":
+                satisfied = bool(changed_tests and passing_tests)
+                evidence = [*changed_tests, *(" ".join(item.command) for item in passing_tests)]
+            elif lowered == "tests assert externally meaningful behavior":
+                satisfied = review.approved and bool(changed_tests and passing_tests)
+                evidence = [*changed_tests, "Independent reviewer approved the test behavior"]
+            elif lowered == "externally observable behavior remains unchanged unless explicitly requested":
+                satisfied = review.approved and bool(baseline_tests and passing_tests)
+                evidence = [
+                    "Independent reviewer approved behavior preservation",
+                    *("baseline: " + " ".join(item.command) for item in baseline_tests),
+                    *("final: " + " ".join(item.command) for item in passing_tests),
+                ]
+            elif lowered == "regression coverage protects the refactored behavior":
+                satisfied = bool(changed_tests and passing_tests)
+                evidence = [*changed_tests, *(" ".join(item.command) for item in passing_tests)]
+            elif lowered == "migration preserves compatibility with the current supported application contract":
+                satisfied = review.approved and bool(baseline_tests and passing_tests)
+                evidence = [
+                    "Independent reviewer approved migration compatibility",
+                    *("baseline: " + " ".join(item.command) for item in baseline_tests),
+                    *("final: " + " ".join(item.command) for item in passing_tests),
+                ]
+            elif lowered == "migration has an explicit forward and rollback or safe non-reversible strategy":
+                strategy_terms = ("rollback", "downgrade", "reversible", "non-reversible", "expand", "contract")
+                present = [term for term in strategy_terms if term in implementation_text or term in lower_diff]
+                satisfied = review.approved and bool(present)
+                evidence = ["Independent reviewer approved migration strategy", *(f"strategy evidence: {item}" for item in present)]
+            elif lowered == "migration behavior is covered against representative existing state":
+                satisfied = bool(baseline_tests and changed_tests and passing_tests)
+                evidence = [
+                    *changed_tests,
+                    *("baseline: " + " ".join(item.command) for item in baseline_tests),
+                    *("final: " + " ".join(item.command) for item in passing_tests),
+                ]
+            if satisfied:
+                _set_acceptance(criterion, AcceptanceStatus.SATISFIED, evidence, "Task-specific engineering policy was proven")
+            else:
+                criterion.reason = "Task-specific engineering policy lacks its required final evidence"
+            continue
+
+        # User criteria are never blanket-proven by a passing command. They need semantic
+        # linkage to changed code/tests (or an exact quoted contract) plus final verification.
+        tokens = _acceptance_tokens(criterion.description)
+        matched, matched_tests, matched_tokens = _matching_acceptance_inventory(
+            criterion.description, changes, developer_review
+        )
+        diff_tokens = {token for token in tokens if token in lower_diff}
+        semantic_tokens = matched_tokens | diff_tokens
+        quoted_contracts = [
+            item for item in re.findall(r'["\']([^"\']{4,})["\']', criterion.description)
+        ]
+        quoted_missing = [item for item in quoted_contracts if item.lower() not in lower_diff]
+        conflict = next((subject for subject in conflicts if subject in lowered), None)
+        if conflict:
+            _set_acceptance(
+                criterion,
+                AcceptanceStatus.CONTRADICTED,
+                [],
+                f"Baseline evidence contradicts the requested preservation subject: {conflict}",
+            )
+            continue
+
+        if "unrelated" in lowered:
+            if review.approved and diff_checks:
+                _set_acceptance(
+                    criterion,
+                    AcceptanceStatus.SATISFIED,
+                    [f"Minimal-diff gate accepted {changes.files_changed} changed file(s)", "Independent reviewer approved the final diff"],
+                    "User scope constraint passed deterministic scope and review gates",
+                )
+            else:
+                criterion.reason = "User scope constraint lacks deterministic diff/review proof"
+            continue
+
+        preservation = any(word in lowered for word in ("preserve", "unchanged", "remain", "existing"))
+        behavior_specific = any(
+            word in lowered
+            for word in ("return", "raise", "error", "empty", "positive", "negative", "decimal", "when", "support")
+        )
+        if quoted_missing:
+            criterion.reason = "Exact quoted user contract is not present in the final diff: " + "; ".join(quoted_missing)
+            continue
+
+        preservation = preservation or "without changing" in lowered
+        generic_test_intent = (
+            not tokens
+            and any(term in lowered for term in ("regression test", "add test", "add tests", "verify the application", "verify application"))
+        )
+        if generic_test_intent:
+            if changed_tests and passing_tests and review.approved:
+                _set_acceptance(
+                    criterion,
+                    AcceptanceStatus.SATISFIED,
+                    [
+                        *changed_tests,
+                        *(" ".join(item.command) for item in passing_tests),
+                        "Independent reviewer approved the final diff",
+                    ],
+                    "Generic user test/verification intent is proven by changed test coverage, final tests, and independent review",
+                )
+            else:
+                criterion.reason = "Generic user test/verification intent lacks changed tests, passing final tests, or independent review"
+            continue
+
+        if preservation and not matched_tests:
+            criterion.reason = "Preservation requirement has no matching regression-test inventory evidence"
+            continue
+        if preservation and not baseline_tests:
+            criterion.reason = "Preservation requirement has no passing baseline test evidence for comparison"
+            continue
+        if tokens and not semantic_tokens:
+            criterion.reason = "No changed symbol, test, path, or final diff token semantically matches this user criterion"
+            continue
+        if behavior_specific and task.requires_tests and not matched_tests:
+            criterion.reason = "Behavior-specific requirement has no semantically matching test-case evidence"
+            continue
+        if task.requires_tests and not passing_tests:
+            criterion.reason = "User criterion cannot be satisfied because no final evidence-backed tests passed"
+            continue
+        evidence = [*matched]
+        if diff_tokens:
+            evidence.append("Final diff semantic tokens: " + ", ".join(sorted(diff_tokens)))
+        if preservation:
+            evidence.extend("baseline: " + " ".join(item.command) for item in baseline_tests)
+        evidence.extend("final: " + " ".join(item.command) for item in passing_tests)
+        if review.approved:
+            evidence.append("Independent reviewer approved the final diff")
+        _set_acceptance(
+            criterion,
+            AcceptanceStatus.SATISFIED,
+            evidence,
+            "User criterion is linked to final code/test evidence and current-revision verification",
+        )
 
 
 def _is_test_path(path: str) -> bool:
@@ -550,6 +859,7 @@ class DevAgent:
         recommendations: list[str] = []
         understanding = Understanding("", "", [], "", [], [], 0.0)
         review: ReviewDecision | None = None
+        developer_review = DeveloperReviewEvidence()
         source_repository = discover_repository(root, probe_capabilities=False)
         effective_head = self.base_commit or source_repository.git_head
         selection = select_worktree(
@@ -565,6 +875,7 @@ class DevAgent:
         repository.git_branch = source_repository.git_branch
         repository.git_head = effective_head
         repository.dirty_files = source_repository.dirty_files
+        task = enrich_acceptance_contract(task, repository)
         workspace = Workspace(working_root, artifacts, source_repository.dirty_files if not selection.isolated else ())
         artifacts.write_json("metadata.json", {"run_id": artifacts.run_id, "task": task, "repository": repository})
         artifacts.record("worktree", source=str(root), working_root=str(working_root), isolated=selection.isolated, reason=selection.reason)
@@ -839,9 +1150,31 @@ class DevAgent:
                     f"{baseline_result.tests_run} -> {final_result.tests_run}"
                 )
             current_results = [result for result in final_results if result.revision == workspace.revision]
+            developer_review = analyze_developer_review(working_root, changes.paths)
+            final_diff = _diff(working_root, workspace)
             if review is not None:
-                _support_acceptance_criteria(task, changes, current_results, review)
-            unsupported_criteria = [criterion.description for criterion in task.acceptance_criteria if criterion.required and not criterion.evidence]
+                _support_acceptance_criteria(
+                    task,
+                    repository,
+                    understanding,
+                    changes,
+                    verification,
+                    current_results,
+                    review,
+                    developer_review,
+                    implementation,
+                    final_diff,
+                )
+            contradicted_criteria = [
+                criterion.description
+                for criterion in task.acceptance_criteria
+                if criterion.required and criterion.status is AcceptanceStatus.CONTRADICTED
+            ]
+            unsupported_criteria = [
+                criterion.description
+                for criterion in task.acceptance_criteria
+                if criterion.required and criterion.status is not AcceptanceStatus.SATISFIED
+            ]
             if not current_results or any(not result.passed for result in current_results):
                 lifecycle.transition(AgentState.PARTIALLY_VERIFIED)
                 outcome = Outcome.PARTIALLY_VERIFIED
@@ -852,8 +1185,12 @@ class DevAgent:
                 not_run.append("High-risk change has no discovered broad/static verification capability")
                 lifecycle.transition(AgentState.PARTIALLY_VERIFIED)
                 outcome = Outcome.PARTIALLY_VERIFIED
+            elif contradicted_criteria:
+                not_run.append("Required acceptance criteria contradicted by final/baseline evidence: " + "; ".join(contradicted_criteria))
+                lifecycle.transition(AgentState.PARTIALLY_VERIFIED)
+                outcome = Outcome.PARTIALLY_VERIFIED
             elif unsupported_criteria:
-                not_run.append("Acceptance criteria without final evidence: " + "; ".join(unsupported_criteria))
+                not_run.append("Required acceptance criteria not satisfied: " + "; ".join(unsupported_criteria))
                 lifecycle.transition(AgentState.PARTIALLY_VERIFIED)
                 outcome = Outcome.PARTIALLY_VERIFIED
             else:
@@ -892,6 +1229,7 @@ class DevAgent:
             recommendations=recommendations,
             state_history=lifecycle.history,
             working_root=str(working_root),
+            developer_review=developer_review,
         )
         artifacts.verification.write_text(json.dumps(jsonable(verification), indent=2) + "\n", encoding="utf-8")
         artifacts.report.write_text(json.dumps(jsonable(result), indent=2) + "\n", encoding="utf-8")

@@ -15,6 +15,7 @@ class TaskType(str, Enum):
     BUILD_FAILURE = "BUILD_FAILURE"
     UNIT_TEST = "UNIT_TEST"
     REFACTOR = "REFACTOR"
+    MIGRATION = "MIGRATION"
     PERFORMANCE = "PERFORMANCE"
     GENERAL_ENGINEERING_TASK = "GENERAL_ENGINEERING_TASK"
 
@@ -52,6 +53,19 @@ class RiskLevel(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+
+
+class AcceptanceSource(str, Enum):
+    USER = "USER"
+    REPOSITORY = "REPOSITORY"
+    TASK_POLICY = "TASK_POLICY"
+    QUALITY_GATE = "QUALITY_GATE"
+
+
+class AcceptanceStatus(str, Enum):
+    UNPROVEN = "UNPROVEN"
+    SATISFIED = "SATISFIED"
+    CONTRADICTED = "CONTRADICTED"
 
 
 class FailureClass(str, Enum):
@@ -138,7 +152,21 @@ class RepositoryModel:
 class AcceptanceCriterion:
     description: str
     required: bool = True
+    source: AcceptanceSource = AcceptanceSource.TASK_POLICY
+    status: AcceptanceStatus = AcceptanceStatus.UNPROVEN
     evidence: list[str] = field(default_factory=list)
+    reason: str | None = None
+    verification_command: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        # Preserve compatibility for callers constructing already-evidenced criteria.
+        # Runtime-compiled criteria start without evidence and must be explicitly adjudicated.
+        if self.evidence and self.status is AcceptanceStatus.UNPROVEN:
+            self.status = AcceptanceStatus.SATISFIED
+
+    @property
+    def satisfied(self) -> bool:
+        return self.status is AcceptanceStatus.SATISFIED
 
 
 @dataclass
