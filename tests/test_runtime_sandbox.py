@@ -93,8 +93,15 @@ def test_required_sandbox_fails_closed_when_bwrap_is_missing(tmp_path: Path, mon
         runtime.prepare(("pytest", "-q"))
 
 
+def test_non_install_pip_commands_are_blocked() -> None:
+    with pytest.raises(SafetyError, match="Non-install pip"):
+        CommandPolicy.validate(("pip", "uninstall", "-y", "requests"))
+    with pytest.raises(SafetyError, match="Non-install pip"):
+        CommandPolicy.validate(("python", "-m", "pip", "uninstall", "-y", "requests"))
+
+
 def test_safe_pip_install_requires_requirement_file_and_binary_wheels() -> None:
-    with pytest.raises(SafetyError, match="requires -r"):
+    with pytest.raises(SafetyError, match="requirement"):
         CommandPolicy.validate(("pip", "install", "requests"), allow_dependency_install=True)
 
     normalized = CommandPolicy.validate(
@@ -107,12 +114,27 @@ def test_safe_pip_install_requires_requirement_file_and_binary_wheels() -> None:
     assert "--only-binary=:all:" in normalized
 
 
+def test_safe_pip_install_rejects_extra_requirement_specifiers() -> None:
+    with pytest.raises(SafetyError, match="only -r/--requirement"):
+        CommandPolicy.validate(
+            ("pip", "install", "-r", "requirements.txt", "unpinned-package"),
+            allow_dependency_install=True,
+        )
+
+
 def test_safe_node_install_requires_lockfile_preserving_command() -> None:
     with pytest.raises(SafetyError, match="npm ci"):
         CommandPolicy.validate(("npm", "install"), allow_dependency_install=True)
 
     normalized = CommandPolicy.validate(("npm", "ci"), allow_dependency_install=True)
     assert normalized == ("npm", "ci", "--ignore-scripts")
+
+
+def test_safe_yarn_install_avoids_berry_incompatible_ignore_scripts_flag() -> None:
+    normalized = CommandPolicy.validate(("yarn", "install"), allow_dependency_install=True)
+
+    assert "--ignore-scripts" not in normalized
+    assert "--frozen-lockfile" in normalized
 
 
 def test_workspace_dependency_install_requires_explicit_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,3 +186,28 @@ def test_workspace_runs_normalized_dependency_install_when_explicitly_enabled(
     assert "--no-input" in captured["argv"]
     assert "--only-binary=:all:" in captured["argv"]
     assert captured["env"]["DEVAGENT_NETWORK_MODE"] == "inherit"
+
+
+def test_workspace_yarn_install_disables_scripts_for_classic_and_modern(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_ALLOW_DEPENDENCY_INSTALL", "1")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "inherit")
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: tuple[str, ...], **kwargs: Any) -> SimpleNamespace:
+        captured["argv"] = argv
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("devagent.workspace.subprocess.run", fake_run)
+    tools = Workspace(tmp_path, RunArtifacts(tmp_path, run_id="yarn-install"))
+    result = tools.run(("yarn", "install"), phase="dependency")
+
+    assert result.passed
+    assert "--ignore-scripts" not in captured["argv"]
+    assert captured["env"]["YARN_IGNORE_SCRIPTS"] == "true"
+    assert captured["env"]["YARN_ENABLE_SCRIPTS"] == "false"
