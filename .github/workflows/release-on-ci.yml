@@ -14,15 +14,11 @@ concurrency:
 
 jobs:
   release:
-    name: Ensure GitHub release and inspect PyPI
+    name: Ensure GitHub release
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-      release_sha: ${{ steps.existing.outputs.release_sha }}
-      publish_needed: ${{ steps.pypi.outputs.publish_needed }}
 
     steps:
       - name: Checkout the exact verified main revision
@@ -85,14 +81,12 @@ jobs:
             fi
             echo "Release $TAG already exists at $TAG_SHA."
             echo "create=false" >> "$GITHUB_OUTPUT"
-            echo "release_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
           else
             if [ "$TAG_EXISTS" = "true" ] && [ "$TAG_SHA" != "$VERIFIED_SHA" ]; then
               echo "Existing tag $TAG points to $TAG_SHA, expected new release commit $VERIFIED_SHA" >&2
               exit 1
             fi
             echo "create=true" >> "$GITHUB_OUTPUT"
-            echo "release_sha=$VERIFIED_SHA" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create tag and GitHub release
@@ -107,86 +101,3 @@ jobs:
             --target "$VERIFIED_SHA" \
             --title "DevAgent $TAG" \
             --generate-notes
-
-      - name: Check whether this version already exists on PyPI
-        id: pypi
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          python - <<'PY'
-          import os
-          import urllib.error
-          import urllib.request
-
-          version = os.environ["TAG"].removeprefix("v")
-          url = f"https://pypi.org/pypi/devagent-ai/{version}/json"
-          publish_needed = True
-          try:
-              with urllib.request.urlopen(url, timeout=20) as response:
-                  if response.status == 200:
-                      publish_needed = False
-          except urllib.error.HTTPError as exc:
-              if exc.code != 404:
-                  raise
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"publish_needed={'true' if publish_needed else 'false'}\n")
-          print(
-              f"devagent-ai {version} is "
-              + ("not yet on PyPI; publishing is required." if publish_needed else "already on PyPI; publishing is skipped.")
-          )
-          PY
-
-  publish:
-    name: Publish exact GitHub release to PyPI
-    needs: release
-    if: needs.release.outputs.publish_needed == 'true'
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/devagent-ai/
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout exact release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-          fetch-depth: 0
-
-      - name: Verify exact release revision
-        env:
-          RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Build and validate exact release distributions
-        env:
-          RELEASE_TAG: ${{ needs.release.outputs.tag }}
-        run: |
-          python -m pip install --upgrade pip build twine
-          python -m build
-          python -m twine check dist/*
-          python - <<'PY'
-          import os
-          import pathlib
-          import tomllib
-
-          expected = os.environ["RELEASE_TAG"].removeprefix("v")
-          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-          assert project["name"] == "devagent-ai", project["name"]
-          assert project["version"] == expected, (project["version"], expected)
-          PY
-
-      - name: Publish to PyPI with Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
