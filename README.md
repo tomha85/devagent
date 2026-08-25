@@ -199,7 +199,7 @@ devagent benchmark --help
 
 ### Pinned real-world benchmark
 
-DevAgent 0.5 adds an opt-in benchmark runner for pinned GitHub repositories. A benchmark case injects a deterministic defect into an exact commit and uses an **external oracle** before and after DevAgent. This avoids treating DevAgent's own report as the benchmark oracle.
+DevAgent includes an opt-in benchmark runner for pinned GitHub repositories. A benchmark case injects a deterministic defect into an exact commit and uses an **external oracle** before and after DevAgent. This avoids treating DevAgent's own report as the benchmark oracle.
 
 ```bash
 devagent benchmark \
@@ -247,7 +247,7 @@ DevAgent uses defense-in-depth controls around repository modification, command 
 - protected targets are refused and force push is never used;
 - no runtime PR, merge, rebase, force-push, or deployment automation.
 
-DevAgent is **not an operating-system sandbox**. Review the report and pushed branch before integrating customer or production code.
+On Linux, DevAgent can execute engineering commands inside a bubblewrap-based operating-system sandbox. Production qualification exercises required sandbox mode with network access denied. Required mode fails closed when isolation cannot be established rather than silently falling back. Review the report and pushed branch before integrating customer or production code: sandboxing reduces execution risk, but it does not make arbitrary generated changes universally safe.
 
 ## Repository intelligence and verification
 
@@ -267,13 +267,20 @@ Verification can include baseline tests, targeted tests, component/broad checks,
 
 ## Production qualification
 
-DevAgent 0.5.0 uses **production qualification v4**. It extends the v3 release gate with large-repository bounded-retrieval and real-world benchmark truthfulness contracts while preserving the primary invariant:
+DevAgent 0.8.0 uses cumulative production qualification rather than replacing older evidence with a smaller new suite.
+
+- **v4 — 70 required cases** covering end-to-end engineering behavior, acceptance truthfulness, task/risk scope, provider contracts and parity, model routing, worktree and Git publication safety, CLI input, review/repair loops, report/evaluation integrity, release integrity, large-repository behavior, structural refactors, Java/.NET discovery and execution, SQLite migration forward/rollback, and real repository-native stacks.
+- **v5 — 9 required autonomy cases** covering bounded parallel coordination, dirty-source refusal, real isolated parallel DevAgent runs, bounded/relevant skills and provider injection, automation overlap claim/recovery, and provider-benchmark deduplication, live structured-contract behavior, and secret redaction.
+
+The v0.8 merge commit on `main` passed both catalogs in required Linux sandbox mode:
 
 ```text
-false_verified == 0
+v4: 70/70 passed
+v5:  9/9 passed
+combined: 79/79 passed
 ```
 
-It covers end-to-end engineering behavior, acceptance truthfulness, task scope, provider contracts/parity, model routing, worktree and Git publication safety, CLI input, review/repair loops, report/evaluation integrity, release integrity, and actual repository-native toolchain execution for:
+The qualification environment exercises real local toolchains for:
 
 ```text
 Python / pytest
@@ -281,21 +288,30 @@ Node + TypeScript repository discovery
 Go
 Rust / Cargo
 C++ / Make
+Java / Maven
+.NET build
+SQLite migration forward + rollback
 ```
 
-Run the release qualification locally on a machine with those toolchains:
+Run the same release qualification catalogs locally on a machine with the required toolchains:
 
 ```bash
+DEVAGENT_SANDBOX=required DEVAGENT_NETWORK=deny \
 python -m devagent.qualification \
   --catalog evaluation/benchmark_v4.json \
   --report .devagent/production-qualification-v4.json
+
+DEVAGENT_SANDBOX=required DEVAGENT_NETWORK=deny \
+python -m devagent.qualification \
+  --catalog evaluation/benchmark_v5.json \
+  --report .devagent/production-qualification-v5.json
 ```
 
-Production CI runs Python 3.10/3.11/3.12, a clean wheel install, and this production qualification gate. The qualification JSON is retained as CI evidence.
+Production CI also runs Python 3.10/3.11/3.12, a clean wheel build/install, real bubblewrap sandbox smoke, and both qualification catalogs. Qualification JSON is retained as CI evidence.
 
-**100% qualified means 100% of this explicit catalog passed.** It does not mean mathematical correctness for every unseen repository, environment, model response, language, or engineering task.
+**100% qualified means 100% of these explicit catalogs passed on that revision and environment.** It does not mean mathematical correctness for every unseen repository, environment, model response, language, provider, or engineering task, and it is not a claim that DevAgent is universally superior to every hosted coding platform.
 
-See [docs/production-readiness.md](docs/production-readiness.md) for the evidence behind the 0.4.0 production-readiness assessment and its explicit limitations.
+See [docs/production-readiness.md](docs/production-readiness.md) for the project's earlier readiness assessment and its explicit limitations.
 
 ## Provider architecture
 
@@ -349,11 +365,15 @@ Automated provider tests normally use deterministic or mocked clients and do not
 
 ## Project status
 
-DevAgent 0.5 is **beta software**. Its qualification and benchmark results are bounded claims tied to explicit cases, pinned revisions, and external oracles; they are not a claim of universal correctness or parity with every hosted coding platform.
+DevAgent 0.8.0 is **beta software with a verified core release baseline**. The exact v0.8 merge revision on `main` passed Production CI across Python 3.10/3.11/3.12, clean wheel installation, real Linux bubblewrap sandbox execution, production qualification v4 (**70/70**), and autonomy qualification v5 (**9/9**), for **79/79 cumulative required qualification cases**.
 
-Remaining gaps include a larger published corpus of pinned upstream benchmark cases, browser/UI runtime qualification, a broader Java/.NET/database-migration matrix, very large monorepo stress runs above the current bounded inventory, parallel multi-agent orchestration, operating-system sandboxing, and continuous paid real-provider testing across every model/provider combination.
+The current core includes evidence-backed `VERIFIED` / `PARTIALLY_VERIFIED` / `BLOCKED` outcomes, backup-first editing, isolated worktrees, bounded structural file operations, repository-native verification, independent review, safe branch publication, provider/model choice, Java and .NET engineering discovery/execution, SQLite migration forward/rollback verification, large-monorepo deep-manifest discovery, bounded parallel agents, repository-local skills, foreground automations, Linux OS sandboxing, bounded browser/local-UI verification, and real-provider structured-contract benchmarking.
 
-The project intentionally prioritizes trustworthy outcomes over feature count.
+These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI.
+
+Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; and continuous paid real-provider benchmarking across a broader set of model/provider combinations. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
+
+The project intentionally prioritizes trustworthy outcomes, reproducible evidence, and safe engineering behavior over feature count or unsupported "best agent" claims.
 
 ## Contributing
 
