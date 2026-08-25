@@ -1,0 +1,57 @@
+name: Temporary Acceptance Accuracy Hardening
+
+on:
+  push:
+    branches:
+      - feat/acceptance-contract-v040
+
+permissions:
+  contents: write
+
+jobs:
+  harden-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feat/acceptance-contract-v040
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply accuracy hardening
+        run: python .devagent-v040-accuracy-hardening.py
+
+      - name: Install development package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Compile
+        run: python -m compileall -q devagent tests
+
+      - name: Full tests with coverage
+        run: |
+          python -m pytest -q \
+            --cov=devagent \
+            --cov-report=term-missing \
+            --cov-fail-under=75
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit verified hardening
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add devagent/models.py devagent/tasking.py devagent/orchestrator.py devagent/report.py tests/test_acceptance_contract.py tests/test_developer_review_report.py docs/acceptance-contract.md
+          if git diff --cached --quiet; then
+            echo 'No staged product changes.'
+            exit 0
+          fi
+          git commit -m 'fix: harden acceptance accuracy semantics'
+          git push origin HEAD:feat/acceptance-contract-v040
