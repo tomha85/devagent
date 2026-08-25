@@ -18,6 +18,7 @@ from devagent.models import (
     TaskSpec,
     TaskType,
 )
+from devagent.providers import ProviderError
 from devagent.source_control import PublicationPlan
 
 
@@ -331,3 +332,118 @@ def test_current_local_development_branch_is_continued_by_default(
     }
     assert "Branch: feature/calculator" in output
     assert "Status: PUSHED" in output
+
+
+def test_doctor_live_probes_default_and_role_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[provider]\nname='openai'\nmodel='gpt-live'\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_CONFIG", str(config_path))
+    default = ProviderConfig("openai", "gpt-live", api_key_env="OPENAI_API_KEY")
+    reviewer = ProviderConfig("anthropic", "claude-live", api_key_env="ANTHROPIC_API_KEY")
+    monkeypatch.setattr("devagent.cli.load_config", lambda: default)
+    monkeypatch.setattr("devagent.cli.load_role_configs", lambda: {"reviewer": reviewer})
+    monkeypatch.setattr("devagent.cli._sdk_available", lambda _config: True)
+    monkeypatch.setattr("devagent.cli._api_key_available", lambda _config: True)
+    calls: list[str] = []
+
+    class LiveProvider:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def request(self, *, role, payload, schema):
+            calls.append(self.label)
+            assert role == "doctor"
+            assert schema["properties"]["ok"]["const"] is True
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        "devagent.cli.create_provider",
+        lambda config: LiveProvider(f"{config.provider}/{config.model}"),
+    )
+
+    assert main(["doctor", "--live"]) == 0
+    output = capsys.readouterr().out
+    assert "LIVE PASS  default openai/gpt-live" in output
+    assert "LIVE PASS  role:reviewer anthropic/claude-live" in output
+    assert calls == ["openai/gpt-live", "anthropic/claude-live"]
+
+
+def test_doctor_live_failure_returns_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[provider]\nname='openai'\nmodel='broken-model'\n", encoding="utf-8")
+    monkeypatch.setenv("DEVAGENT_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        "devagent.cli.load_config",
+        lambda: ProviderConfig("openai", "broken-model", api_key_env="OPENAI_API_KEY"),
+    )
+    monkeypatch.setattr("devagent.cli.load_role_configs", lambda: {})
+    monkeypatch.setattr("devagent.cli._sdk_available", lambda _config: True)
+    monkeypatch.setattr("devagent.cli._api_key_available", lambda _config: True)
+
+    class BrokenProvider:
+        def request(self, **_kwargs):
+            raise ProviderError("probe failed")
+
+    monkeypatch.setattr("devagent.cli.create_provider", lambda _config: BrokenProvider())
+    assert main(["doctor", "--live"]) == 1
+    assert "LIVE FAIL  default openai/broken-model" in capsys.readouterr().out
+
+
+def test_explicit_provider_switch_does_not_inherit_previous_base_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    repo, _result = _patch_engineering_run(tmp_path, monkeypatch, events)
+    monkeypatch.setattr(
+        "devagent.cli.load_config",
+        lambda: ProviderConfig(
+            "compatible",
+            "local-model",
+            "http://127.0.0.1:11434/v1",
+            "DEVAGENT_API_KEY",
+        ),
+    )
+    monkeypatch.setattr("devagent.cli.load_role_configs", lambda: {})
+    captured: list[ProviderConfig] = []
+
+    def capture(config: ProviderConfig):
+        captured.append(config)
+        return object()
+
+    monkeypatch.setattr("devagent.cli.create_provider", capture)
+    assert main(
+        [
+            "--repo",
+            str(repo),
+            "--no-publish",
+            "--provider",
+            "openai",
+            "--model",
+            "gpt-test",
+            "Add multiplication support",
+        ]
+    ) == 0
+    assert captured[0].provider == "openai"
+    assert captured[0].base_url is None
+
+
+def test_models_show_bounded_provider_qualification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config.toml"
+    monkeypatch.setenv("DEVAGENT_CONFIG", str(path))
+    assert main(["setup", "--provider", "openai", "--model", "gpt-default"]) == 0
+    assert main(["models"]) == 0
+    output = capsys.readouterr().out
+    assert "default: openai/gpt-default [CONTRACT-QUALIFIED]" in output

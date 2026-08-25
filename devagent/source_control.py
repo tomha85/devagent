@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,23 @@ def _git(root: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProce
         timeout=timeout,
         check=False,
     )
+
+
+def _git_without_hooks(
+    root: Path,
+    *args: str,
+    timeout: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    """Run deterministic publication Git with repository-controlled hooks disabled."""
+
+    with tempfile.TemporaryDirectory(prefix="devagent-empty-git-hooks-") as hooks_dir:
+        return _git(
+            root,
+            "-c",
+            f"core.hooksPath={hooks_dir}",
+            *args,
+            timeout=timeout,
+        )
 
 
 def _failure(prefix: str, completed: subprocess.CompletedProcess[str]) -> str:
@@ -270,7 +288,7 @@ def publish_verified_branch(
     message = f"DevAgent: {result.task.goal.strip()}"
     if len(message) > 120:
         message = message[:117].rstrip() + "..."
-    commit = _git(working_root, "commit", "-m", message, timeout=30)
+    commit = _git_without_hooks(working_root, "commit", "-m", message, timeout=30)
     if commit.returncode != 0:
         publication.error = _failure("Git commit failed", commit)
         return publication
@@ -294,9 +312,13 @@ def publish_verified_branch(
                 f"found {remote_head or '(absent)'}"
             )
             return publication
-        push = _git(working_root, "push", remote, f"HEAD:refs/heads/{target_branch}")
+        push = _git_without_hooks(
+            working_root, "push", remote, f"HEAD:refs/heads/{target_branch}"
+        )
     else:
-        push = _git(working_root, "push", "--set-upstream", remote, target_branch)
+        push = _git_without_hooks(
+            working_root, "push", "--set-upstream", remote, target_branch
+        )
     if push.returncode != 0:
         publication.error = _failure("Git push failed", push)
         return publication

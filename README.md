@@ -68,6 +68,7 @@ OpenAI:
 devagent setup --provider openai --model YOUR_MODEL
 export OPENAI_API_KEY=...
 devagent doctor
+devagent doctor --live
 ```
 
 Anthropic / Claude:
@@ -240,7 +241,7 @@ DevAgent uses defense-in-depth controls around repository modification, command 
 - engineering commands executed as argv without a general shell;
 - credential environment scrubbing for verification where appropriate;
 - model-facing command policy blocks Git write operations;
-- publication is a separate deterministic post-report step;
+- publication is a separate deterministic post-report step and disables repository-controlled Git hooks for commit/push;
 - only reviewed changed paths are staged;
 - remote branch state is captured and rechecked to block publication races;
 - protected targets are refused and force push is never used;
@@ -308,7 +309,7 @@ Currently supported:
 | Google Gemini | `--provider gemini` or `--provider google` |
 | Local / OpenAI-compatible | `--provider compatible --base-url ...` |
 
-Provider choice affects reasoning quality, cost, latency, and privacy characteristics. It does not change DevAgent's deterministic acceptance, safety, verification, reporting, and publication rules.
+Provider choice affects reasoning quality, cost, latency, and privacy characteristics. It does not change DevAgent's deterministic acceptance, safety, verification, reporting, and publication rules. `devagent models` labels deterministic adapter status as `CONTRACT-QUALIFIED` or `SUPPORTED`; `devagent doctor --live` is the explicit real API/model structured-output readiness probe and consumes provider usage.
 
 ## Engineering report
 

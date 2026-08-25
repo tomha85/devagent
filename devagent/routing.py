@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from devagent.config import ProviderConfig, ROLE_NAMES
+from devagent.config import ProviderConfig, ROLE_NAMES, provider_qualification
 from devagent.providers import ModelProvider, create_provider
 
 
@@ -67,9 +67,15 @@ def routing_lines(
 ) -> list[str]:
     """Return a safe provider/model routing summary with no credentials."""
 
-    lines = [f"default: {default_config.provider}/{default_config.model}"]
+    lines = [
+        f"default: {default_config.provider}/{default_config.model} "
+        f"[{provider_qualification(default_config.provider)}]"
+    ]
     for role in ROLE_NAMES:
         config = role_configs.get(role, default_config)
         suffix = "" if role in role_configs else " (default)"
-        lines.append(f"{role}: {config.provider}/{config.model}{suffix}")
+        lines.append(
+            f"{role}: {config.provider}/{config.model} "
+            f"[{provider_qualification(config.provider)}]{suffix}"
+        )
     return lines

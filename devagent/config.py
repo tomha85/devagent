@@ -26,6 +26,18 @@ _PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
     "fake": ("fake", ""),
 }
 
+_PROVIDER_QUALIFICATION: dict[str, str] = {
+    "openai": "CONTRACT-QUALIFIED",
+    "anthropic": "CONTRACT-QUALIFIED",
+    "claude": "CONTRACT-QUALIFIED",
+    "xai": "CONTRACT-QUALIFIED",
+    "grok": "CONTRACT-QUALIFIED",
+    "gemini": "CONTRACT-QUALIFIED",
+    "google": "CONTRACT-QUALIFIED",
+    "compatible": "SUPPORTED",
+    "fake": "TEST-ONLY",
+}
+
 
 @dataclass(frozen=True)
 class ProviderConfig:
@@ -46,6 +58,17 @@ def config_path() -> Path:
 
 def provider_defaults(provider: str) -> tuple[str, str]:
     return _PROVIDER_DEFAULTS.get(provider.lower(), _PROVIDER_DEFAULTS["compatible"])
+
+
+def provider_qualification(provider: str) -> str:
+    """Return the bounded qualification level for a provider adapter.
+
+    CONTRACT-QUALIFIED means deterministic provider-contract tests exist. It is not a
+    claim that a specific paid model/API key is currently reachable; `doctor --live`
+    performs that explicit runtime check.
+    """
+
+    return _PROVIDER_QUALIFICATION.get(provider.lower(), "EXPERIMENTAL")
 
 
 def _read_raw(path: Path) -> dict[str, Any]:
