@@ -193,7 +193,20 @@ devagent setup --help
 devagent doctor
 devagent models
 devagent status
+devagent benchmark --help
 ```
+
+### Pinned real-world benchmark
+
+DevAgent 0.5 adds an opt-in benchmark runner for pinned GitHub repositories. A benchmark case injects a deterministic defect into an exact commit and uses an **external oracle** before and after DevAgent. This avoids treating DevAgent's own report as the benchmark oracle.
+
+```bash
+devagent benchmark \
+  --catalog /path/to/realworld-cases.json \
+  --report .devagent/realworld-benchmark.json
+```
+
+A `VERIFIED` result with a failing external oracle is explicitly counted as a **false VERIFIED**. See [docs/realworld-benchmark.md](docs/realworld-benchmark.md) for the catalog contract and safety boundary.
 
 ## Outcome contract
 
@@ -253,7 +266,7 @@ Verification can include baseline tests, targeted tests, component/broad checks,
 
 ## Production qualification
 
-DevAgent 0.4.0 adds **production qualification v3**. The release catalog contains 52 required cases and preserves the primary invariant:
+DevAgent 0.5.0 uses **production qualification v4**. It extends the v3 release gate with large-repository bounded-retrieval and real-world benchmark truthfulness contracts while preserving the primary invariant:
 
 ```text
 false_verified == 0
@@ -273,8 +286,8 @@ Run the release qualification locally on a machine with those toolchains:
 
 ```bash
 python -m devagent.qualification \
-  --catalog evaluation/benchmark_v3.json \
-  --report .devagent/production-qualification-v3.json
+  --catalog evaluation/benchmark_v4.json \
+  --report .devagent/production-qualification-v4.json
 ```
 
 Production CI runs Python 3.10/3.11/3.12, a clean wheel install, and this production qualification gate. The qualification JSON is retained as CI evidence.
@@ -335,9 +348,9 @@ Automated provider tests normally use deterministic or mocked clients and do not
 
 ## Project status
 
-DevAgent 0.4 is **beta software** with a production-readiness target of approximately **9/10 for the documented local engineering workflow**. That assessment is based on explicit qualification evidence, not on a claim of universal correctness or parity with every capability of a hosted coding platform.
+DevAgent 0.5 is **beta software**. Its qualification and benchmark results are bounded claims tied to explicit cases, pinned revisions, and external oracles; they are not a claim of universal correctness or parity with every hosted coding platform.
 
-Remaining gaps include browser/UI runtime qualification, a broader Java/.NET/database-migration matrix, very large monorepo benchmarks, parallel multi-agent orchestration, operating-system sandboxing, and continuous paid real-provider testing across every model/provider combination.
+Remaining gaps include a larger published corpus of pinned upstream benchmark cases, browser/UI runtime qualification, a broader Java/.NET/database-migration matrix, very large monorepo stress runs above the current bounded inventory, parallel multi-agent orchestration, operating-system sandboxing, and continuous paid real-provider testing across every model/provider combination.
 
 The project intentionally prioritizes trustworthy outcomes over feature count.
 

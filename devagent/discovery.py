@@ -67,24 +67,36 @@ def _fingerprint(path: Path) -> str:
 
 
 def _walk(root: Path, limit: int = 12_000) -> list[Path]:
+    """Walk deterministically while pruning generated/vendor trees before descent."""
     files: list[Path] = []
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        if any(part in SKIP_DIRECTORIES for part in relative.parts):
-            continue
-        try:
-            resolved = path.resolve()
-            resolved_relative = resolved.relative_to(root)
-        except (OSError, ValueError):
-            continue
-        if (
-            resolved.is_file()
-            and not is_secret_path(relative)
-            and not is_secret_path(resolved_relative)
-        ):
-            files.append(path)
-            if len(files) >= limit:
-                break
+    maximum = min(max(0, int(limit)), 12_000)
+    if maximum == 0:
+        return files
+    for current, directories, filenames in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        relative_current = current_path.relative_to(root)
+        directories[:] = sorted(
+            directory
+            for directory in directories
+            if directory not in SKIP_DIRECTORIES
+            and not is_secret_path(relative_current / directory)
+        )
+        for filename in sorted(filenames):
+            path = current_path / filename
+            relative = path.relative_to(root)
+            try:
+                resolved = path.resolve()
+                resolved_relative = resolved.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if (
+                resolved.is_file()
+                and not is_secret_path(relative)
+                and not is_secret_path(resolved_relative)
+            ):
+                files.append(path)
+                if len(files) >= maximum:
+                    return files
     return files
 
 

@@ -33,12 +33,33 @@ class Workspace:
         return target
 
     def list_files(self, path: str = ".", pattern: str = "*", limit: int = 250) -> list[str]:
+        """Return a deterministic bounded file inventory without descending into skipped trees."""
         base = self.paths.resolve(path, allow_missing=False)
-        candidates = [base] if base.is_file() else base.rglob("*")
+        maximum = min(max(0, int(limit)), 12_000)
+        if maximum == 0:
+            return []
+        candidates: list[Path] = []
+        if base.is_file():
+            candidates.append(base)
+        else:
+            for current, directories, filenames in os.walk(base, topdown=True, followlinks=False):
+                current_path = Path(current)
+                relative_current = current_path.relative_to(self.root)
+                directories[:] = sorted(
+                    directory
+                    for directory in directories
+                    if directory not in SKIP_DIRECTORIES
+                    and not is_secret_path(relative_current / directory)
+                )
+                for filename in sorted(filenames):
+                    candidates.append(current_path / filename)
+                    if len(candidates) >= maximum:
+                        break
+                if len(candidates) >= maximum:
+                    break
+
         results: list[str] = []
         for candidate in candidates:
-            if len(results) >= min(limit, 12_000):
-                break
             relative = candidate.relative_to(self.root)
             try:
                 resolved = candidate.resolve()
@@ -55,6 +76,8 @@ class Workspace:
             rendered = relative.as_posix()
             if fnmatch.fnmatch(candidate.name, pattern) or fnmatch.fnmatch(rendered, pattern):
                 results.append(rendered)
+                if len(results) >= maximum:
+                    break
         return results
 
     def read_file(self, path: str, max_chars: int = 60_000) -> str:

@@ -1,3 +1,3 @@
 """DevAgent: evidence-driven local software engineering automation."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

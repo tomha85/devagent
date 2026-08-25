@@ -353,6 +353,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser = argparse.ArgumentParser(prog="devagent status", description="Show the latest local run")
         parser.add_argument("--repo", "-r", type=Path, default=Path.cwd())
         return _status(parser.parse_args(arguments[1:]).repo)
+    if arguments and arguments[0] == "benchmark":
+        from devagent.realworld import main as benchmark_main
+
+        return benchmark_main(arguments[1:])
     return _run(arguments)
 
 

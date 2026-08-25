@@ -92,6 +92,92 @@ def test_large_repository_fallback_remains_bounded(tmp_path: Path) -> None:
     assert sum(len(value) for value in context["snippets"].values()) <= 8_000
 
 
+def test_large_repository_scan_budget_is_hard_bounded(tmp_path: Path) -> None:
+    for index in range(30):
+        (tmp_path / f"source_{index:03d}.py").write_text(
+            f"VALUE_{index} = {index}\n",
+            encoding="utf-8",
+        )
+    repository = discover_repository(tmp_path, probe_capabilities=False)
+    workspace = Workspace(tmp_path, RunArtifacts(tmp_path))
+    budget = RetrievalBudget(
+        max_files=6,
+        max_chars=4_000,
+        max_per_file_chars=700,
+        small_repository_max_files=2,
+        max_scan_chars=100_000,
+        max_scan_files=4,
+        max_git_grep_files=0,
+    )
+
+    context = retrieve_context(
+        workspace,
+        repository,
+        "Investigate undocumented behavior",
+        budget=budget,
+        max_chars=4_000,
+    )
+
+    assert context["diagnostics"]["scanned_files"] <= 4
+    assert context["diagnostics"]["scan_truncated"] is True
+    assert len(context["ranked_paths"]) <= 6
+
+
+def test_git_grep_prioritizes_content_match_beyond_scan_frontier(tmp_path: Path) -> None:
+    import subprocess
+
+    for index in range(40):
+        (tmp_path / f"module_{index:03d}.py").write_text(
+            f"VALUE_{index} = {index}\n",
+            encoding="utf-8",
+        )
+    target = tmp_path / "zz_target.py"
+    target.write_text(
+        "def helper():\n    return 'reconnect_session_safely'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+
+    repository = discover_repository(tmp_path, probe_capabilities=False)
+    workspace = Workspace(tmp_path, RunArtifacts(tmp_path))
+    budget = RetrievalBudget(
+        max_files=5,
+        max_chars=4_000,
+        max_per_file_chars=800,
+        small_repository_max_files=2,
+        max_scan_chars=2_000,
+        max_scan_files=2,
+        max_git_grep_files=10,
+    )
+
+    context = retrieve_context(
+        workspace,
+        repository,
+        "Reconnect session safely",
+        budget=budget,
+        max_chars=4_000,
+    )
+
+    assert context["diagnostics"]["git_grep_used"] is True
+    assert "zz_target.py" in context["diagnostics"]["git_grep_paths"]
+    assert "zz_target.py" in context["ranked_paths"]
+
+
+def test_workspace_inventory_prunes_generated_dependency_trees(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    for index in range(20):
+        (tmp_path / "node_modules" / "pkg" / f"generated_{index}.js").write_text(
+            "generated = true;\n",
+            encoding="utf-8",
+        )
+    workspace = Workspace(tmp_path, RunArtifacts(tmp_path))
+
+    assert workspace.list_files(limit=5) == ["src/app.py"]
+
+
 def test_inventory_does_not_follow_text_symlinks_outside_repository(
     tmp_path: Path,
 ) -> None:
