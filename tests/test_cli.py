@@ -103,7 +103,19 @@ def test_requirement_file_is_bounded(tmp_path: Path) -> None:
         _read_requirement_file(requirement)
 
 
-def test_help_describes_unrestricted_input_path(capsys: pytest.CaptureFixture[str]) -> None:
+def test_benchmark_subcommand_has_dedicated_help(capsys) -> None:
+    from devagent.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["benchmark", "--help"])
+
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "pinned real-world" in output
+    assert "--catalog" in output
+
+
+def test_cli_help_describes_unrestricted_input_path(capsys) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--help"])
     assert raised.value.code == 0

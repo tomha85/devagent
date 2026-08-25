@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -61,6 +62,9 @@ class RetrievalBudget:
     small_repository_max_files: int = 20
     inventory_max_files: int = 12_000
     max_scan_chars: int = 12_000_000
+    max_scan_files: int = 1_200
+    max_git_grep_files: int = 400
+    git_grep_timeout_seconds: int = 8
     max_relationship_files: int = 500
 
 
@@ -161,6 +165,44 @@ def _content_tokens(text: str) -> tuple[set[str], set[str]]:
     raw = set(_split_identifier(text))
     normalized = {form for token in raw for form in _normalized_forms(token)}
     return raw, normalized
+
+
+def _git_grep_paths(
+    root: Path,
+    terms: list[str],
+    allowed_paths: list[str],
+    budget: RetrievalBudget,
+) -> tuple[list[str], bool]:
+    """Use Git's index as a bounded large-repository accelerator when available."""
+    if not terms or budget.max_git_grep_files <= 0:
+        return [], False
+    argv = ["git", "grep", "-l", "-I", "-F"]
+    for term in terms[:8]:
+        argv.extend(("-e", term))
+    argv.extend(("--", "."))
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(int(budget.git_grep_timeout_seconds), 30)),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return [], False
+    if completed.returncode not in {0, 1}:
+        return [], False
+    allowed = set(allowed_paths)
+    matches: list[str] = []
+    for raw in completed.stdout.splitlines():
+        path = raw.removeprefix("./").strip()
+        if path not in allowed or path in matches:
+            continue
+        matches.append(path)
+        if len(matches) >= budget.max_git_grep_files:
+            break
+    return matches, True
 
 
 def _python_module_map(paths: list[str]) -> dict[str, str]:
@@ -331,13 +373,35 @@ def retrieve_context(
         if normalized_path:
             lexical_scores[path] += 6 * len(normalized_path)
             normalized_lexical_matches += len(normalized_path - exact_path)
-        if scanned_chars >= configured.max_scan_chars:
-            continue
+
+    git_grep_paths, git_grep_used = _git_grep_paths(
+        workspace.root,
+        terms,
+        paths,
+        configured,
+    )
+    git_priority = set(git_grep_paths)
+    scan_order = sorted(
+        paths,
+        key=lambda path: (
+            0 if path in git_priority else 1 if lexical_scores[path] > 0 else 2,
+            -lexical_scores[path],
+            0 if kinds[path] == "source" else 1 if kinds[path] == "test" else 2,
+            path,
+        ),
+    )
+    scanned_files = 0
+    for path in scan_order:
+        if scanned_files >= configured.max_scan_files or scanned_chars >= configured.max_scan_chars:
+            break
         allowance = min(200_000, configured.max_scan_chars - scanned_chars)
+        if allowance <= 0:
+            break
         try:
             text = workspace.read_file(path, max_chars=allowance)
         except (OSError, UnicodeError, SafetyError):
             continue
+        scanned_files += 1
         content_cache[path] = text
         scanned_chars += min(len(text), allowance)
         raw, normalized = _content_tokens(text)
@@ -456,7 +520,12 @@ def retrieve_context(
         ],
         "diagnostics": {
             "repository_files": len(inventory),
-            "inventory_truncated": len(workspace.list_files(limit=configured.inventory_max_files)) >= configured.inventory_max_files,
+            "inventory_truncated": len(inventory) >= configured.inventory_max_files,
+            "scanned_files": scanned_files,
+            "scanned_chars": scanned_chars,
+            "scan_truncated": scanned_files < len(paths),
+            "git_grep_used": git_grep_used,
+            "git_grep_paths": git_grep_paths,
             "exact_lexical_matches": exact_lexical_matches,
             "normalized_lexical_matches": normalized_lexical_matches,
             "fallback": fallback,

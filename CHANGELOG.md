@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 - 2026-08-25
+
+- Add a pinned real-world repository benchmark harness with exact commit-SHA provenance, deterministic defect injection, baseline oracle failure checks, and independent final oracle verification.
+- Treat a `VERIFIED` benchmark result with a failing external oracle as an explicit false VERIFIED.
+- Add `devagent benchmark --catalog ...` for opt-in real-provider benchmark runs without source-control publication.
+- Harden large-repository discovery and workspace inventory by pruning generated/vendor dependency trees before recursive descent.
+- Add bounded content-scan file budgets and Git-index-backed `git grep` prioritization so relevant tracked files can be found beyond the sequential scan frontier.
+- Add production qualification v4 cases for large-repository bounds, Git-grep retrieval, generated-tree pruning, pinned benchmark provenance, independent-oracle truthfulness, and oracle credential isolation.
+- Bump the package version to 0.5.0.
+
+
 All notable changes to DevAgent are documented here.
 
 ## 0.4.0 — 2026-08-25

@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--catalog",
         type=Path,
-        default=Path("evaluation/benchmark_v3.json"),
+        default=Path("evaluation/benchmark_v4.json"),
         help="Qualification catalog path",
     )
     parser.add_argument(
