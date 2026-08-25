@@ -91,12 +91,21 @@ jobs:
           c++ --version | head -1
           make --version | head -1
 
+      - name: Install Linux sandbox backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          bwrap --version
+
       - name: Install development package
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run production qualification catalog
+      - name: Run production qualification catalog in required sandbox
+        env:
+          DEVAGENT_SANDBOX: required
+          DEVAGENT_NETWORK: deny
         run: |
           python -m devagent.qualification \
             --catalog evaluation/benchmark_v4.json \
