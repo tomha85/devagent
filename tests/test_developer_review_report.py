@@ -172,7 +172,7 @@ def test_developer_report_explains_why_symbols_tests_acceptance_and_completeness
     assert "Preserved behavior / scope constraints:" in report
     assert "Existing divide behavior remains covered" in report
     assert "Why this result is considered sufficient / insufficient:" in report
-    assert "Required acceptance evidence: 2/2" in report
+    assert "Required acceptance criteria satisfied: 2/2" in report
     assert "Outcome decision: VERIFIED" in report
     assert "WHY THIS CHANGE" in report
     assert "FUNCTIONS / CLASSES / SYMBOLS CHANGED" in report
@@ -186,6 +186,6 @@ def test_developer_report_explains_why_symbols_tests_acceptance_and_completeness
     assert "VERIFICATION MATRIX" in report
     assert "phase=final" in report
     assert "COMPLETENESS ASSESSMENT" in report
-    assert "Required acceptance criteria evidenced: 2/2" in report
+    assert "Required acceptance criteria satisfied: 2/2" in report
     assert "COMPLETE FOR DEVELOPER REVIEW" in report
     assert "DEVELOPER REVIEW CHECKLIST" in report

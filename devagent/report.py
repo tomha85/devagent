@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from devagent.models import FailureClass, Outcome, RunResult, VerificationResult
+from devagent.models import AcceptanceStatus, FailureClass, Outcome, RunResult, VerificationResult
 
 
 def _bounded_output(value: str, limit: int = 1200) -> str:
@@ -68,8 +68,8 @@ def recommendations_for(result: RunResult) -> list[str]:
 
 def _acceptance_summary(result: RunResult) -> tuple[int, int]:
     required = [criterion for criterion in result.task.acceptance_criteria if criterion.required]
-    evidenced = [criterion for criterion in required if criterion.evidence]
-    return len(evidenced), len(required)
+    satisfied = [criterion for criterion in required if criterion.status is AcceptanceStatus.SATISFIED]
+    return len(satisfied), len(required)
 
 
 def _final_verification(result: RunResult) -> list[VerificationResult]:
@@ -93,7 +93,7 @@ def _completeness_lines(result: RunResult) -> list[str]:
 
     return [
         f"Outcome: {result.outcome.value}",
-        f"Required acceptance criteria evidenced: {acceptance_done}/{acceptance_total}",
+        f"Required acceptance criteria satisfied: {acceptance_done}/{acceptance_total}",
         f"Final/current verification checks: {final_passed} passed, {final_failed} failed",
         f"Independent review: {review_status}",
         f"Changed files: {result.changes.files_changed}",
@@ -159,7 +159,7 @@ def _implementation_logic_summary(result: RunResult) -> list[str]:
     lines.extend(
         [
             "Why this result is considered sufficient / insufficient:",
-            f"- Required acceptance evidence: {acceptance_done}/{acceptance_total}",
+            f"- Required acceptance criteria satisfied: {acceptance_done}/{acceptance_total}",
             f"- Final/current verification: {final_passed} passed, {final_failed} failed",
             f"- Independent review: {review_status}",
             f"- Outcome decision: {result.outcome.value}",
@@ -245,9 +245,18 @@ def render_report(result: RunResult) -> str:
     lines.extend(["", "ACCEPTANCE CRITERIA + EVIDENCE"])
     if result.task.acceptance_criteria:
         for index, criterion in enumerate(result.task.acceptance_criteria, start=1):
-            status = "✓" if criterion.evidence else "✗"
+            marker = {
+                AcceptanceStatus.SATISFIED: "✓",
+                AcceptanceStatus.UNPROVEN: "?",
+                AcceptanceStatus.CONTRADICTED: "!",
+            }[criterion.status]
             requirement = "REQUIRED" if criterion.required else "OPTIONAL"
-            lines.append(f"{status} AC-{index} [{requirement}] {criterion.description}")
+            lines.append(
+                f"{marker} AC-{index} [{requirement}] [{criterion.source.value}] "
+                f"[{criterion.status.value}] {criterion.description}"
+            )
+            if criterion.reason:
+                lines.append(f"  reason: {criterion.reason}")
             if criterion.evidence:
                 for evidence in criterion.evidence:
                     lines.append(f"  evidence: {evidence}")
