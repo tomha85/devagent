@@ -31,7 +31,8 @@ Reports are especially important when they involve:
 - secret or credential exposure,
 - unsafe shell or subprocess execution,
 - destructive Git operations,
-- model-driven or non-opt-in commit/push behavior,
+- publication before the engineering report is emitted,
+- publication of a non-`VERIFIED` run,
 - publication to protected or pre-existing remote branches,
 - pull-request, merge, rebase, force-push, or deploy automation,
 - staging paths that were not part of the reviewed verified change,
@@ -45,9 +46,11 @@ Reports are especially important when they involve:
 
 DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a bounded publication boundary.
 
-Engineering/model-facing command execution continues to block Git write operations. Optional publication is a separate deterministic post-verification path that requires explicit user intent, a `VERIFIED` outcome, the default isolated worktree, a new non-protected branch, and staging limited to reviewed changed paths. DevAgent does not create pull requests or perform merges, rebases, force pushes, or deployments.
+Engineering/model-facing command execution continues to block Git write operations. For a normal isolated run, DevAgent prints the complete engineering review report first. Only after that report is emitted may the separate deterministic publication path commit and push a `VERIFIED` result to a new non-protected branch. The publication path stages only reviewed changed paths and refuses `main`, `master`, `trunk`, or an already-existing target branch. Developers can disable publication with `--no-publish`.
 
-These controls reduce risk but do not make DevAgent an operating-system sandbox. Run DevAgent only in environments and repositories you are prepared to inspect, and review the final report and pushed branch before integrating changes.
+DevAgent does not create pull requests or perform merges, rebases, force pushes, or deployments.
+
+These controls reduce risk but do not make DevAgent an operating-system sandbox. Review the engineering report and the resulting pushed branch before integrating changes.
 
 ## Disclosure
 
