@@ -15,6 +15,7 @@ from devagent.models import Outcome, jsonable
 from devagent.providers import ProviderError, create_provider
 from devagent.safety import is_secret_path
 from devagent.source_control import publish_verified_branch
+from devagent.technical_review import analyze_developer_review
 
 
 def _top_parser() -> argparse.ArgumentParser:
@@ -158,6 +159,8 @@ def _run(argv: Sequence[str]) -> int:
             verbose=args.verbose,
             status=print,
         ).run(args.repo, requirement)
+
+        result.developer_review = analyze_developer_review(result.working_root, result.changes.paths)
 
         publish_requested = bool(args.publish or args.publish_branch)
         if publish_requested:
