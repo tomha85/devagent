@@ -17,11 +17,11 @@ _CLASSIFIERS: tuple[tuple[TaskType, tuple[str, ...]], ...] = (
     (TaskType.TEST_FAILURE, ("test fail", "failing test", "pytest error")),
     (TaskType.RUNTIME_ERROR, ("traceback", "exception", "runtime error", "crash")),
     (TaskType.MIGRATION, ("migration", "migrate ", "schema change", "alembic", "database migration")),
-    (TaskType.PERFORMANCE, ("performance", "optimize", "slow", "latency", "n+1")),
-    (TaskType.REFACTOR, ("refactor", "restructure", "cleanup")),
+    (TaskType.PERFORMANCE, ("performance", "optimize", "slow", "latency", "n+1", "faster", "speed up")),
+    (TaskType.REFACTOR, ("refactor", "restructure", "cleanup", "rename ", "move ", "delete obsolete")),
     (TaskType.UNIT_TEST, ("add unit test", "write tests", "test coverage")),
     (TaskType.BUG_FIX, ("fix", "bug", "incorrect", "broken", "regression failure", "regression bug")),
-    (TaskType.FEATURE, ("add ", "implement", "support ", "feature")),
+    (TaskType.FEATURE, ("add ", "implement", "support ", "feature", "create ")),
 )
 
 _HIGH_RISK = {
@@ -56,24 +56,39 @@ _KNOWN_SECTIONS = _REQUIREMENT_SECTIONS | {
     "non-goals",
     "non goals",
     "notes",
+    "engineering design",
+    "engineering context",
 }
 _DIRECTIVE = re.compile(
-    r"^(?:add|implement|support|preserve|keep|ensure|require|must|should|when|do not|don't|"
-    r"verify|run|return|raise|allow|prevent|maintain|migrate|refactor|update|fix|handle)\b",
+    r"^(?:add|create|implement|support|preserve|keep|ensure|require|must|should|when|do not|don't|"
+    r"verify|run|return|raise|allow|prevent|maintain|migrate|refactor|rename|move|delete|update|fix|handle)\b",
     re.IGNORECASE,
 )
 
-# Bounded normalization for terse user intent. This is deliberately not a fuzzy
-# "guess what the user meant" layer: it corrects common engineering shorthand,
-# grammatical number, and operation wording while preserving identifiers,
-# quoted contracts, values, and explicit constraints. Task policy and repository
-# evidence still provide the verification/safety contract.
+# Bounded normalization for terse user intent. This intentionally fixes common
+# engineering shorthand and spelling without attempting to invent product behavior.
 _OPERATION_ALIASES: tuple[tuple[str, str], ...] = (
     ("substraction", "subtraction"),
     ("substract", "subtract"),
     ("multipy", "multiply"),
     ("mutiply", "multiply"),
+    ("authentification", "authentication"),
+    ("autorization", "authorization"),
+    ("loging", "login"),
 )
+_ACRONYMS = {
+    "api": "API",
+    "csv": "CSV",
+    "db": "DB",
+    "http": "HTTP",
+    "https": "HTTPS",
+    "json": "JSON",
+    "jwt": "JWT",
+    "oauth": "OAuth",
+    "sql": "SQL",
+    "ui": "UI",
+    "url": "URL",
+}
 
 
 def _classify(text: str) -> TaskType:
@@ -110,27 +125,66 @@ def _dedupe(items: list[str]) -> list[str]:
     return result
 
 
+def _section_header(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    markdown = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+    if markdown:
+        return markdown.group(1).strip().rstrip(":").lower(), ""
+    colon = re.match(r"^([A-Za-z][A-Za-z0-9 _/-]{0,80})\s*:\s*(.*)$", stripped)
+    if colon and colon.group(1).strip().lower() in _KNOWN_SECTIONS:
+        return colon.group(1).strip().lower(), colon.group(2).strip()
+    return None
+
+
+def _extract_goal(requirement: str) -> str:
+    """Prefer an explicit Goal section while preserving ordinary free-form input."""
+
+    lines = requirement.splitlines()
+    for index, raw in enumerate(lines):
+        header = _section_header(raw)
+        if header is None or header[0] != "goal":
+            continue
+        _, inline = header
+        if inline:
+            return _clean_requirement_item(inline)
+        collected: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if _section_header(candidate) is not None:
+                break
+            if candidate.strip():
+                collected.append(_clean_requirement_item(candidate))
+        if collected:
+            return " ".join(collected)
+    return re.sub(r"\s+", " ", requirement).strip()
+
+
+def _polish_plain_goal(value: str) -> str:
+    """Improve readability without changing the requested product semantics."""
+
+    result = re.sub(r"\s+", " ", value).strip()
+    for source, destination in _OPERATION_ALIASES:
+        result = re.sub(rf"\b{re.escape(source)}\b", destination, result, flags=re.IGNORECASE)
+    result = re.sub(r"^customer\s+(?:need|needs|want|wants)\s+", "Implement ", result, flags=re.IGNORECASE)
+    result = re.sub(r"^user\s+(?:need|needs|want|wants)\s+", "Implement ", result, flags=re.IGNORECASE)
+    for source, destination in _ACRONYMS.items():
+        result = re.sub(rf"\b{source}\b", destination, result, flags=re.IGNORECASE)
+    if result:
+        result = result[0].upper() + result[1:]
+    return result.rstrip(".;")
+
+
 def _normalize_terse_requirement(requirement: str) -> str:
-    """Compile common rough one-line prompts into a clearer engineering request.
+    """Compile common rough prompts into a clearer bounded engineering request."""
 
-    The compiler is intentionally bounded. It may repair shorthand/grammar and
-    make an operation explicit, but it must not add product behavior the user did
-    not request. Structured/multi-line requirements are left intact.
-    """
-
-    value = re.sub(r"\s+", " ", requirement).strip()
-    if not value or "\n" in requirement or _section_header(value) is not None:
+    raw_value = _extract_goal(requirement)
+    value = _polish_plain_goal(raw_value)
+    if not value:
         return value
     # An explicit callable name is already a precise user contract; never rename it.
     if re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", value):
         return value
 
-    for source, destination in _OPERATION_ALIASES:
-        value = re.sub(rf"\b{re.escape(source)}\b", destination, value, flags=re.IGNORECASE)
-
     # Common shorthand from natural prompts such as "addition 2 matrix 2x2".
-    # Keep both "matrix" and "matrices" in the normalized contract so
-    # deterministic evidence can link either conventional symbol spelling.
     matrix_match = re.search(
         r"\b(add(?:ition)?|sum|subtract(?:ion)?|multiply|multiplication|divide|division)\b"
         r"(?:\s+(?:of|for))?\s+(?:2|two)\s+matrix(?:es)?\s+(\d+x\d+)\b",
@@ -157,28 +211,19 @@ def _normalize_terse_requirement(requirement: str) -> str:
             f"(matrix inputs)"
         )
 
-    # Repair simple count+noun shorthand without inventing domain behavior.
     value = re.sub(r"\b2\s+matrix\b", "two matrices", value, flags=re.IGNORECASE)
     value = re.sub(r"\b2\s+file\b", "two files", value, flags=re.IGNORECASE)
     value = re.sub(r"\b2\s+test\b", "two tests", value, flags=re.IGNORECASE)
     return value
 
 
-def _section_header(line: str) -> tuple[str, str] | None:
-    stripped = line.strip()
-    markdown = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
-    if markdown:
-        return markdown.group(1).strip().rstrip(":").lower(), ""
-    colon = re.match(r"^([A-Za-z][A-Za-z0-9 _/-]{0,80})\s*:\s*(.*)$", stripped)
-    if colon and colon.group(1).strip().lower() in _KNOWN_SECTIONS:
-        return colon.group(1).strip().lower(), colon.group(2).strip()
-    return None
-
-
 def _user_acceptance_items(requirement: str) -> list[str]:
     lines = requirement.splitlines()
     explicit: list[str] = []
     active_section: str | None = None
+    recognized_section = False
+    nonempty_lines = [line.strip() for line in lines if line.strip()]
+
     for raw in lines:
         stripped = raw.strip()
         if not stripped:
@@ -192,6 +237,7 @@ def _user_acceptance_items(requirement: str) -> list[str]:
 
         header = _section_header(stripped)
         if header is not None:
+            recognized_section = True
             name, inline = header
             active_section = name if name in _REQUIREMENT_SECTIONS else None
             if active_section is not None and inline:
@@ -221,6 +267,19 @@ def _user_acceptance_items(requirement: str) -> list[str]:
         if _DIRECTIVE.match(item) or re.search(r"\b(?:must|should|shall)\b", item, re.IGNORECASE):
             directives.append(item)
     directives = _dedupe(directives)
+
+    # For a loose multi-line customer note, do not silently discard fragments merely
+    # because one line happens to begin with a directive. Preserve the whole intent as
+    # one user criterion unless the text is clearly a structured directive list.
+    if len(nonempty_lines) > 1 and not recognized_section:
+        all_directive_like = all(
+            _DIRECTIVE.match(_clean_requirement_item(item))
+            or re.search(r"\b(?:must|should|shall)\b", item, re.IGNORECASE)
+            for item in nonempty_lines
+        )
+        if not all_directive_like:
+            return [re.sub(r"\s+", " ", requirement).strip()]
+
     if directives:
         return directives
     return [re.sub(r"\s+", " ", requirement).strip()]
@@ -257,8 +316,6 @@ def compile_task(requirement: str) -> TaskSpec:
     requires_tests = task_type is not TaskType.BUILD_FAILURE
 
     criteria: list[AcceptanceCriterion] = []
-    # Structured user requirements remain authoritative. Only an unstructured,
-    # terse prompt is compiled into the clearer canonical request.
     user_items = _user_acceptance_items(requirement)
     if len(user_items) == 1 and user_items[0] == raw_goal and goal != raw_goal:
         user_items = [goal]
@@ -342,14 +399,13 @@ def _matrix_operation_contract(task: TaskSpec, repository: Any) -> None:
         "multiplication": "multiply",
         "division": "divide",
     }[operation]
-    compact_dimension = dimension.replace("x", "x")
     language = _repository_language(repository)
     if language in {"java", "javascript", "typescript"}:
-        symbol = f"{verb}Matrices{compact_dimension}"
+        symbol = f"{verb}Matrices{dimension}"
     elif language in {"csharp", "c#"}:
-        symbol = f"{verb.capitalize()}Matrices{compact_dimension}"
+        symbol = f"{verb.capitalize()}Matrices{dimension}"
     else:
-        symbol = f"{verb}_matrices_{compact_dimension}"
+        symbol = f"{verb}_matrices_{dimension}"
 
     compiled = (
         f"Add {symbol}(a, b) to perform element-wise matrix {operation} "
@@ -363,8 +419,129 @@ def _matrix_operation_contract(task: TaskSpec, repository: Any) -> None:
         user_criteria[0].description = compiled
 
 
+def _unique_repository_values(repository: Any, field: str) -> list[str]:
+    values: list[str] = []
+    for component in repository.components:
+        for value in getattr(component, field, []):
+            if value and value not in values:
+                values.append(value)
+    return values
+
+
+def _task_design_defaults(task: TaskSpec) -> list[str]:
+    common = [
+        "Integrate with the repository's existing architecture and naming conventions instead of creating a parallel pattern.",
+        "Keep the implementation bounded to the requested behavior and avoid unrelated refactors.",
+        "Preserve behavior outside the explicitly requested scope unless the user states otherwise.",
+    ]
+    if task.requires_tests:
+        common.append("Add or update focused regression coverage using the repository's existing test conventions.")
+
+    if task.task_type in {TaskType.BUG_FIX, TaskType.RUNTIME_ERROR, TaskType.TEST_FAILURE}:
+        common.extend(
+            [
+                "Identify and fix the underlying cause rather than masking the visible symptom.",
+                "Prove the failing scenario with regression coverage when the repository supports it.",
+            ]
+        )
+    elif task.task_type is TaskType.REFACTOR:
+        common.append("Keep externally observable behavior stable while updating references and tests affected by the refactor.")
+    elif task.task_type is TaskType.MIGRATION:
+        common.extend(
+            [
+                "Use the repository's existing migration mechanism and preserve compatibility with supported application state.",
+                "Provide a forward path plus rollback or an explicitly safe non-reversible strategy; do not invent destructive data policy.",
+            ]
+        )
+    elif task.task_type is TaskType.PERFORMANCE:
+        common.append("Preserve functional behavior while improving the requested performance concern; do not invent an unrequested numeric target.")
+
+    lowered = " ".join(
+        criterion.description for criterion in task.acceptance_criteria if criterion.source is AcceptanceSource.USER
+    ).lower()
+    if any(term in lowered for term in ("auth", "login", "oauth", "token", "credential", "api key", "secret")):
+        common.extend(
+            [
+                "Use the repository's existing configuration and secret-handling mechanisms; never hardcode credentials.",
+                "Do not invent authorization roles, OAuth scopes, account-linking policy, or other security/product decisions absent from the user request.",
+            ]
+        )
+    return _dedupe(common)
+
+
+def _compile_repository_aware_brief(task: TaskSpec, repository: Any) -> None:
+    """Turn user intent into a richer engineering brief without changing user-owned criteria.
+
+    This brief is supplied to every later DevAgent role through TaskSpec.goal. It may
+    add safe engineering defaults and repository facts, but it explicitly does not
+    create new user/business requirements. AcceptanceSource.USER criteria remain the
+    authoritative statement of what the user asked for.
+    """
+
+    if "DEVAGENT REQUIREMENT INTELLIGENCE" in task.goal:
+        return
+
+    core_goal = task.goal.strip()
+    user_requirements = [
+        criterion.description
+        for criterion in task.acceptance_criteria
+        if criterion.source is AcceptanceSource.USER
+    ]
+    languages = _unique_repository_values(repository, "languages")
+    frameworks = _unique_repository_values(repository, "frameworks")
+    manifests = _unique_repository_values(repository, "manifests")
+    test_locations = _unique_repository_values(repository, "test_locations")
+
+    trusted_commands: list[str] = []
+    for capability in repository.capabilities:
+        if capability.trusted:
+            command = " ".join(capability.command)
+            if command and command not in trusted_commands:
+                trusted_commands.append(command)
+
+    lines = [
+        core_goal,
+        "",
+        "DEVAGENT REQUIREMENT INTELLIGENCE",
+        "User intent remains authoritative; the sections below are engineering design guidance, not invented business requirements.",
+        "",
+        "USER REQUIREMENTS",
+    ]
+    lines.extend(f"- {item}" for item in user_requirements or [core_goal])
+
+    lines.extend(["", "SAFE ENGINEERING DEFAULTS"])
+    lines.extend(f"- {item}" for item in _task_design_defaults(task))
+
+    repository_lines: list[str] = []
+    if languages:
+        repository_lines.append("Languages: " + ", ".join(languages[:8]))
+    if frameworks:
+        repository_lines.append("Frameworks: " + ", ".join(frameworks[:8]))
+    if manifests:
+        repository_lines.append("Manifests: " + ", ".join(manifests[:10]))
+    if test_locations:
+        repository_lines.append("Existing test locations: " + ", ".join(test_locations[:10]))
+    if trusted_commands:
+        repository_lines.append("Evidence-backed verification: " + "; ".join(trusted_commands[:8]))
+    if len(repository.components) > 1:
+        repository_lines.append(f"Repository structure: {repository.kind} with {len(repository.components)} discovered components")
+
+    lines.extend(["", "REPOSITORY-DERIVED CONTEXT"])
+    lines.extend(f"- {item}" for item in repository_lines or ["Use discovered repository structure and conventions as implementation evidence."])
+
+    lines.extend(
+        [
+            "",
+            "DESIGN GUARDRAIL",
+            "- Do not invent pricing, retry counts, authorization policy, destructive data behavior, external API semantics, or other product/business rules that the user did not request.",
+            "- If source evidence shows a material ambiguity, prefer a bounded implementation or BLOCKED/PARTIALLY_VERIFIED outcome over silently choosing product policy.",
+        ]
+    )
+    task.goal = "\n".join(lines)
+
+
 def enrich_acceptance_contract(task: TaskSpec, repository: Any) -> TaskSpec:
-    """Compile safe repository-aware defaults, then add trusted repository checks."""
+    """Compile repository-aware requirement intelligence and trusted final checks."""
 
     _matrix_operation_contract(task, repository)
     seen_commands: set[tuple[str, ...]] = set()
@@ -382,4 +559,6 @@ def enrich_acceptance_contract(task: TaskSpec, repository: Any) -> TaskSpec:
             source=AcceptanceSource.REPOSITORY,
             verification_command=capability.command,
         )
+
+    _compile_repository_aware_brief(task, repository)
     return task
