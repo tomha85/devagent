@@ -32,6 +32,8 @@ _LANGUAGE_EXTENSIONS = {
     ".cpp": "c++",
     ".h": "c/c++",
     ".cs": "c#",
+    ".fs": "f#",
+    ".vb": "visual-basic",
     ".rb": "ruby",
     ".php": "php",
 }
@@ -46,7 +48,11 @@ _MANIFESTS = {
     "cargo.toml",
     "go.mod",
     "pom.xml",
+    "mvnw",
     "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
     "gradlew",
     "cmakelists.txt",
     "makefile",
@@ -56,6 +62,7 @@ _MANIFESTS = {
     ".gitlab-ci.yml",
     "azure-pipelines.yml",
 }
+_PROJECT_SUFFIXES = {".sln", ".slnx", ".csproj", ".fsproj", ".vbproj"}
 
 
 def _fingerprint(path: Path) -> str:
@@ -121,6 +128,65 @@ def _is_safe_generated_untracked_path(path: str) -> bool:
     )
 
 
+def _is_manifest(path: Path) -> bool:
+    return path.name.lower() in _MANIFESTS or path.suffix.lower() in _PROJECT_SUFFIXES
+
+
+def _is_ci_file(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root).as_posix()
+    return relative.startswith(".github/workflows/") or path.name.lower() in {
+        "jenkinsfile",
+        ".gitlab-ci.yml",
+        "azure-pipelines.yml",
+    }
+
+
+def _priority_repository_files(root: Path, limit: int = 20_000) -> list[Path]:
+    """Recover high-value tracked manifests/CI files even after the bounded walk is full.
+
+    A huge monorepo can contain more than the normal 12k inventory budget before a deep
+    component is reached. Git's index is a cheap authoritative directory of tracked paths;
+    we inspect only manifest/project/CI candidates and keep the result bounded.
+    """
+    listed = _git(root, "ls-files")
+    if listed is None:
+        return []
+    priority: list[Path] = []
+    for raw in listed.splitlines():
+        if len(priority) >= limit:
+            break
+        if not raw or "\x00" in raw:
+            continue
+        relative = Path(raw)
+        if any(part in SKIP_DIRECTORIES for part in relative.parts) or is_secret_path(relative):
+            continue
+        candidate = root / relative
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved_relative = resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not resolved.is_file() or is_secret_path(resolved_relative):
+            continue
+        if _is_manifest(candidate) or _is_ci_file(candidate, root):
+            priority.append(candidate)
+    return priority
+
+
+def _manifest_languages(path: Path) -> set[str]:
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if name in {"pom.xml", "mvnw", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew"}:
+        return {"java"}
+    if suffix == ".csproj":
+        return {"c#"}
+    if suffix == ".fsproj":
+        return {"f#"}
+    if suffix == ".vbproj":
+        return {"visual-basic"}
+    return set()
+
+
 def _package_capabilities(path: Path, relative: str) -> tuple[list[str], list[Capability]]:
     frameworks: list[str] = []
     capabilities: list[Capability] = []
@@ -149,9 +215,42 @@ def _package_capabilities(path: Path, relative: str) -> tuple[list[str], list[Ca
     return sorted(set(frameworks)), capabilities
 
 
+def _java_maven_command(path: Path, root: Path, component: str) -> tuple[str, ...]:
+    wrapper = path.parent / "mvnw"
+    if wrapper.is_file():
+        executable = "./mvnw" if component == "." else f"./{component}/mvnw"
+    else:
+        executable = "mvn"
+    return (executable, "test") if component == "." else (executable, "-f", path.relative_to(root).as_posix(), "test")
+
+
+def _dotnet_capabilities(path: Path, root: Path, component: str) -> list[Capability]:
+    relative = path.relative_to(root).as_posix()
+    suffix = path.suffix.lower()
+    capabilities: list[Capability] = []
+    if suffix in {".sln", ".slnx"}:
+        capabilities.append(Capability("build", ("dotnet", "build", relative), relative, component, True))
+        return capabilities
+    if suffix not in {".csproj", ".fsproj", ".vbproj"}:
+        return capabilities
+
+    text = path.read_text(encoding="utf-8", errors="ignore").lower()
+    assets = path.parent / "obj" / "project.assets.json"
+    no_restore = ("--no-restore",) if assets.is_file() else ()
+    capabilities.append(
+        Capability("build", ("dotnet", "build", relative, *no_restore), relative, component, True)
+    )
+    if "<istestproject>true" in text or "microsoft.net.test.sdk" in text:
+        capabilities.append(
+            Capability("test", ("dotnet", "test", relative, *no_restore), relative, component, False)
+        )
+    return capabilities
+
+
 def _manifest_capabilities(path: Path, root: Path) -> tuple[list[str], list[Capability]]:
     relative = path.relative_to(root).as_posix()
     name = path.name.lower()
+    suffix = path.suffix.lower()
     frameworks: list[str] = []
     capabilities: list[Capability] = []
     component = path.parent.relative_to(root).as_posix() or "."
@@ -180,12 +279,16 @@ def _manifest_capabilities(path: Path, root: Path) -> tuple[list[str], list[Capa
         command = ("go", "test", "./...") if component == "." else ("go", "-C", component, "test", "./...")
         capabilities.append(Capability("test", command, relative, component))
     elif name == "pom.xml":
-        command = ("mvn", "test") if component == "." else ("mvn", "-f", relative, "test")
-        capabilities.append(Capability("test", command, relative, component))
-    elif name in {"build.gradle", "gradlew"}:
+        frameworks.append("maven")
+        capabilities.append(Capability("test", _java_maven_command(path, root, component), relative, component))
+    elif name in {"build.gradle", "build.gradle.kts", "gradlew"}:
+        frameworks.append("gradle")
         executable = "./gradlew" if component == "." and (path.parent / "gradlew").exists() else (f"./{component}/gradlew" if (path.parent / "gradlew").exists() else "gradle")
         command = (executable, "test") if component == "." else (executable, "-p", component, "test")
         capabilities.append(Capability("test", command, relative, component))
+    elif suffix in _PROJECT_SUFFIXES:
+        frameworks.append("dotnet")
+        capabilities.extend(_dotnet_capabilities(path, root, component))
     elif name == "cmakelists.txt":
         build_dir = "build" if component == "." else f"{component}/build"
         capabilities.append(Capability("test", ("ctest", "--test-dir", build_dir), relative, component))
@@ -201,7 +304,7 @@ def _ci_capabilities(path: Path, root: Path) -> list[Capability]:
     """Extract simple argv commands from CI run/command lines as high-value evidence."""
     relative = path.relative_to(root).as_posix()
     commands: list[Capability] = []
-    allowed = {"python", "python3", "pytest", "npm", "pnpm", "yarn", "go", "cargo", "mvn", "gradle", "./gradlew", "make", "ctest", "dotnet", "ruff", "mypy"}
+    allowed = {"python", "python3", "pytest", "npm", "pnpm", "yarn", "go", "cargo", "mvn", "gradle", "./gradlew", "./mvnw", "make", "ctest", "dotnet", "ruff", "mypy"}
     for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         stripped = raw_line.strip()
         value = ""
@@ -414,14 +517,17 @@ def _probe_python_test_capability(
 
 def discover_repository(root: Path | str, *, probe_capabilities: bool = True) -> RepositoryModel:
     root_path = Path(root).expanduser().resolve()
-    files = _walk(root_path)
-    ci_files = [
-        path
-        for path in files
-        if path.relative_to(root_path).as_posix().startswith(".github/workflows/")
-        or path.name.lower() in {"jenkinsfile", ".gitlab-ci.yml", "azure-pipelines.yml"}
-    ]
-    manifests = [path for path in files if path.name.lower() in _MANIFESTS or path.suffix.lower() in {".sln", ".csproj"}]
+    walked_files = _walk(root_path)
+    files = list(walked_files)
+    seen = {path.relative_to(root_path).as_posix() for path in files}
+    for path in _priority_repository_files(root_path):
+        relative = path.relative_to(root_path).as_posix()
+        if relative not in seen:
+            files.append(path)
+            seen.add(relative)
+
+    ci_files = [path for path in files if _is_ci_file(path, root_path)]
+    manifests = [path for path in files if _is_manifest(path)]
     component_paths = {root_path}
     for manifest in manifests:
         if manifest.parent != root_path and manifest not in ci_files:
@@ -434,6 +540,7 @@ def discover_repository(root: Path | str, *, probe_capabilities: bool = True) ->
         owned_files = [path for path in files if path == component_path or component_path in path.parents]
         language_counts = Counter(_LANGUAGE_EXTENSIONS[path.suffix.lower()] for path in owned_files if path.suffix.lower() in _LANGUAGE_EXTENSIONS)
         component_manifests = [path for path in manifests if path.parent == component_path]
+        inferred_languages = set().union(*(_manifest_languages(path) for path in component_manifests)) if component_manifests else set()
         frameworks: list[str] = []
         capabilities: list[Capability] = []
         for manifest in component_manifests:
@@ -456,9 +563,13 @@ def discover_repository(root: Path | str, *, probe_capabilities: bool = True) ->
             if probed is not None:
                 capabilities.append(probed)
                 frameworks.append("pytest" if "pytest" in probed.command else "unittest")
+        ordered_languages = [name for name, _ in language_counts.most_common()]
+        for language in sorted(inferred_languages):
+            if language not in ordered_languages:
+                ordered_languages.append(language)
         component = Component(
             path=relative_component,
-            languages=[name for name, _ in language_counts.most_common()],
+            languages=ordered_languages,
             frameworks=sorted(set(frameworks)),
             manifests=[path.relative_to(root_path).as_posix() for path in component_manifests],
             test_locations=_test_locations(owned_files, root_path, component_path),
@@ -501,7 +612,7 @@ def discover_repository(root: Path | str, *, probe_capabilities: bool = True) ->
         git_branch=_git(root_path, "branch", "--show-current"),
         git_head=_git(root_path, "rev-parse", "HEAD"),
         dirty_files=sorted(tracked_dirty | untracked_dirty),
-        inventory_file_count=len(files),
+        inventory_file_count=len(walked_files),
         capability_diagnostics=capability_diagnostics,
     )
 
