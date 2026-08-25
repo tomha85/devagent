@@ -150,10 +150,11 @@ class RuntimeExecutor:
             return command
 
         # The host filesystem is visible read-only while the selected repository and
-        # explicit per-run state directories are rebound writable. This is important
-        # when DevAgent executes in a retained external worktree while artifacts/HOME
-        # remain under the source repository. Network is removed unless explicitly
-        # inherited for a trusted verification/install phase.
+        # explicit per-run state directories are rebound writable. /tmp is replaced
+        # with a private writable tmpfs so compilers and test runners can use conventional
+        # temporary paths without mutating or observing host temporary state. bubblewrap
+        # resolves bind sources from the old root, so repository/worktree paths that are
+        # themselves below /tmp can still be rebound after the tmpfs mask is installed.
         writable: list[Path] = [self.root]
         for item in writable_paths:
             candidate = Path(item).expanduser().resolve()
@@ -171,6 +172,8 @@ class RuntimeExecutor:
             "--ro-bind",
             "/",
             "/",
+            "--tmpfs",
+            "/tmp",
         ]
         for candidate in writable:
             wrapped.extend(("--bind", str(candidate), str(candidate)))
