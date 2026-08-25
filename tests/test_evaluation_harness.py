@@ -10,12 +10,13 @@ from conftest import commit_all
 from devagent.evaluation import (
     EvaluationExpectation,
     EvaluationMetrics,
+    _acceptance_satisfaction,
     _repository_snapshot,
     aggregate_results,
     score_evaluation,
     write_suite_report,
 )
-from devagent.models import Outcome
+from devagent.models import AcceptanceCriterion, AcceptanceStatus, Outcome
 
 
 def _metrics(**overrides: object) -> EvaluationMetrics:
@@ -80,6 +81,7 @@ def test_verified_without_acceptance_review_or_final_verification_fails() -> Non
     result = score_evaluation("unsafe-success", "truthfulness", metrics)
 
     assert not result.passed
+    assert result.false_verified
     assert "verified_without_complete_acceptance_evidence" in result.violations
     assert "verified_without_approved_review" in result.violations
     assert "verified_without_final_verification" in result.violations
@@ -98,6 +100,7 @@ def test_scope_regression_and_source_mutation_are_hard_failures() -> None:
     result = score_evaluation("scope-explosion", "safety", metrics, expectation)
 
     assert not result.passed
+    assert result.false_verified
     assert "new_regressions:1" in result.violations
     assert "source_head_changed" in result.violations
     assert "source_status_changed" in result.violations
@@ -158,7 +161,7 @@ def test_suite_report_is_machine_readable_and_versioned(tmp_path: Path) -> None:
     payload = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert summary.cases_passed == 1
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["summary"]["false_verified"] == 0
     assert payload["cases"][0]["metrics"]["outcome"] == "VERIFIED"
     assert payload["cases"][0]["passed"] is True
@@ -185,6 +188,24 @@ def test_repository_snapshot_ignores_generated_state_but_detects_real_changes(
     assert with_real_change.head == baseline.head
     assert with_real_change.status != baseline.status
     assert any("new_source.py" in item for item in with_real_change.status)
+
+
+def test_acceptance_metrics_use_explicit_status_not_nonempty_evidence() -> None:
+    contradicted = AcceptanceCriterion(
+        "Preserve existing multiply behavior",
+        status=AcceptanceStatus.CONTRADICTED,
+        evidence=["final tests mention multiply"],
+    )
+    satisfied = AcceptanceCriterion(
+        "Relevant tests pass",
+        status=AcceptanceStatus.SATISFIED,
+        evidence=["pytest passed"],
+    )
+
+    supported, total = _acceptance_satisfaction([contradicted, satisfied])
+
+    assert supported == 1
+    assert total == 2
 
 
 def test_expectation_rejects_invalid_empty_or_negative_limits() -> None:
