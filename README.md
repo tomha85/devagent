@@ -35,22 +35,30 @@ Core principles:
 
 ### Install
 
-Using `pipx`:
+From PyPI:
 
 ```bash
-pipx install git+https://github.com/tomha85/devagent.git
+python -m pip install devagent
 ```
 
-Or from a checkout:
+For an isolated CLI installation, `pipx` is recommended:
+
+```bash
+pipx install devagent
+```
+
+Or install and develop directly from a source checkout:
 
 ```bash
 git clone https://github.com/tomha85/devagent.git
 cd devagent
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 pytest -q
 ```
+
+Both installation paths expose the same `devagent` CLI. A source checkout remains the best option for contributors; the PyPI package is the easiest option for normal users.
 
 ### Configure an AI provider
 
