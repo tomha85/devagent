@@ -103,6 +103,7 @@ class RuntimeExecutor:
         argv: Sequence[str],
         *,
         network: NetworkMode | None = None,
+        writable_paths: Sequence[Path | str] = (),
     ) -> tuple[str, ...]:
         command = tuple(str(item) for item in argv)
         effective_network = network or self.policy.network
@@ -115,10 +116,21 @@ class RuntimeExecutor:
                 )
             return command
 
-        # The host filesystem is visible read-only while only the selected repository
-        # is rebound writable. Writable temporary state lives under DevAgent's sandboxed
-        # HOME so repositories under /tmp remain addressable. Network is removed unless
-        # explicitly inherited for a trusted verification/install phase.
+        # The host filesystem is visible read-only while the selected repository and
+        # explicit per-run state directories are rebound writable. This is important
+        # when DevAgent executes in a retained external worktree while artifacts/HOME
+        # remain under the source repository. Network is removed unless explicitly
+        # inherited for a trusted verification/install phase.
+        writable: list[Path] = [self.root]
+        for item in writable_paths:
+            candidate = Path(item).expanduser().resolve()
+            if not candidate.exists():
+                raise RuntimePolicyError(f"Sandbox writable path does not exist: {candidate}")
+            if candidate == self.root or candidate.is_relative_to(self.root):
+                continue
+            if candidate not in writable:
+                writable.append(candidate)
+
         wrapped: list[str] = [
             self._bwrap,
             "--die-with-parent",
@@ -126,19 +138,22 @@ class RuntimeExecutor:
             "--ro-bind",
             "/",
             "/",
-            "--bind",
-            str(self.root),
-            str(self.root),
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--chdir",
-            str(self.root),
-            "--unshare-pid",
-            "--unshare-ipc",
-            "--unshare-uts",
         ]
+        for candidate in writable:
+            wrapped.extend(("--bind", str(candidate), str(candidate)))
+        wrapped.extend(
+            (
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--chdir",
+                str(self.root),
+                "--unshare-pid",
+                "--unshare-ipc",
+                "--unshare-uts",
+            )
+        )
         if effective_network is NetworkMode.DENY:
             wrapped.append("--unshare-net")
         wrapped.extend(("--", *command))
