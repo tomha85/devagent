@@ -138,4 +138,4 @@ def test_cli_can_configure_role_and_show_model_routing(
     assert "DEVAGENT MODEL ROUTING" in output
     assert "default: openai/gpt-default" in output
     assert "reviewer: anthropic/claude-review" in output
-    assert "investigator: openai/gpt-default (default)" in output
+    assert "investigator: openai/gpt-default [CONTRACT-QUALIFIED] (default)" in output

@@ -30,6 +30,12 @@ from devagent.technical_review import analyze_developer_review
 
 _MAX_INPUT_BYTES = 2_000_000
 _PROVIDER_CHOICES = ("openai", "anthropic", "claude", "xai", "grok", "gemini", "google", "compatible")
+_LIVE_PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean", "const": True}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
 
 
 def _top_parser() -> argparse.ArgumentParser:
@@ -116,7 +122,27 @@ def _api_key_available(config: ProviderConfig) -> bool:
     return config.provider == "compatible" or not config.api_key_env or bool(os.getenv(config.api_key_env))
 
 
-def _doctor() -> int:
+def _live_probe(label: str, config: ProviderConfig) -> bool:
+    try:
+        response = create_provider(config).request(
+            role="doctor",
+            payload={
+                "instruction": "Return ok=true. This is a DevAgent structured-output readiness probe."
+            },
+            schema=_LIVE_PROBE_SCHEMA,
+        )
+    except ProviderError as exc:
+        print(f"LIVE FAIL  {label} {config.provider}/{config.model}: {exc}")
+        return False
+    okay = response.get("ok") is True
+    print(
+        f"{'LIVE PASS' if okay else 'LIVE FAIL'}  {label} "
+        f"{config.provider}/{config.model}"
+    )
+    return okay
+
+
+def _doctor(*, live: bool = False) -> int:
     config = load_config()
     role_configs = load_role_configs()
     checks = {
@@ -126,20 +152,40 @@ def _doctor() -> int:
         "api_key": _api_key_available(config),
     }
     print("DEVAGENT DOCTOR")
+    all_ok = True
     for name, okay in checks.items():
         print(f"{'OK' if okay else 'WARN'}  {name}")
+        all_ok = all_ok and okay
+    role_readiness: dict[str, bool] = {}
     for role in ROLE_NAMES:
         role_config = role_configs.get(role)
         if role_config is None:
             continue
         okay = _sdk_available(role_config) and _api_key_available(role_config)
+        role_readiness[role] = okay
+        all_ok = all_ok and okay
         print(
             f"{'OK' if okay else 'WARN'}  role:{role} "
             f"{role_config.provider}/{role_config.model}"
         )
     if not checks["configuration"]:
         print("Run `devagent setup` before a cloud-provider engineering run.")
-    return 0
+    if live:
+        if checks["provider_sdk"] and checks["api_key"]:
+            all_ok = _live_probe("default", config) and all_ok
+        else:
+            print("LIVE SKIP  default static readiness failed")
+            all_ok = False
+        for role in ROLE_NAMES:
+            role_config = role_configs.get(role)
+            if role_config is None:
+                continue
+            if role_readiness.get(role, False):
+                all_ok = _live_probe(f"role:{role}", role_config) and all_ok
+            else:
+                print(f"LIVE SKIP  role:{role} static readiness failed")
+                all_ok = False
+    return 0 if all_ok else 1
 
 
 def _models() -> int:
@@ -262,10 +308,15 @@ def _run(argv: Sequence[str]) -> int:
             default_model, default_key_env = _defaults(args.provider)
         else:
             default_model, default_key_env = configured.model, configured.api_key_env
+        inherited_base_url = (
+            configured.base_url
+            if not args.provider or args.provider == configured.provider
+            else None
+        )
         config = ProviderConfig(
             provider=selected_provider,
             model=args.model or default_model,
-            base_url=args.base_url or configured.base_url,
+            base_url=args.base_url if args.base_url is not None else inherited_base_url,
             api_key_env=default_key_env,
             timeout_seconds=configured.timeout_seconds,
         )
@@ -344,8 +395,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments and arguments[0] == "setup":
         return _setup(arguments[1:])
     if arguments and arguments[0] == "doctor":
-        argparse.ArgumentParser(prog="devagent doctor", description="Check local DevAgent readiness").parse_args(arguments[1:])
-        return _doctor()
+        parser = argparse.ArgumentParser(
+            prog="devagent doctor",
+            description="Check local DevAgent readiness; --live performs real structured provider probes",
+        )
+        parser.add_argument(
+            "--live",
+            action="store_true",
+            help="Send one minimal structured-output probe to the default and configured role models",
+        )
+        return _doctor(live=parser.parse_args(arguments[1:]).live)
     if arguments and arguments[0] == "models":
         argparse.ArgumentParser(prog="devagent models", description="Show configured model routing").parse_args(arguments[1:])
         return _models()

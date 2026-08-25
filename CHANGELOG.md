@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 - Trust and security hardening
+
+- Prevent explicit provider switches from inheriting a stale base URL from a different configured provider.
+- Add `devagent doctor --live` structured provider/model probes with non-zero failure status.
+- Expose bounded provider adapter status in `devagent models` without overstating paid-model qualification.
+- Disable repository-controlled Git hooks during deterministic VERIFIED commit/push publication.
+- Extend Production Qualification v4 with trust/security regression cases.
+
 ## 0.5.0 - 2026-08-25
 
 - Add a pinned real-world repository benchmark harness with exact commit-SHA provenance, deterministic defect injection, baseline oracle failure checks, and independent final oracle verification.

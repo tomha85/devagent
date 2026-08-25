@@ -371,6 +371,30 @@
       "category": "realworld_benchmark",
       "pytest_node": "tests/test_realworld_benchmark.py::test_oracle_environment_does_not_expose_credentials",
       "expected": "external benchmark oracle commands run without cloud or package-registry credentials"
+    },
+    {
+      "id": "provider-switch-base-url-isolated",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_cli.py::test_explicit_provider_switch_does_not_inherit_previous_base_url",
+      "expected": "PASS"
+    },
+    {
+      "id": "doctor-live-structured-probe",
+      "category": "provider_contract",
+      "pytest_node": "tests/test_cli.py::test_doctor_live_probes_default_and_role_models",
+      "expected": "PASS"
+    },
+    {
+      "id": "provider-qualification-visible",
+      "category": "model_routing",
+      "pytest_node": "tests/test_cli.py::test_models_show_bounded_provider_qualification",
+      "expected": "PASS"
+    },
+    {
+      "id": "publication-disables-repository-hooks",
+      "category": "source_control_safety",
+      "pytest_node": "tests/test_source_control_publish.py::test_publication_disables_repository_git_hooks",
+      "expected": "PASS"
     }
   ]
 }

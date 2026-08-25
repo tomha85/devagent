@@ -266,3 +266,25 @@ def test_continue_mode_blocks_when_remote_moves_during_run(tmp_path: Path) -> No
     assert publication.committed is False
     assert publication.error is not None
     assert "Remote branch changed during run" in publication.error
+
+
+def test_publication_disables_repository_git_hooks(tmp_path: Path) -> None:
+    source, working, _remote = _repo_with_bare_remote(tmp_path)
+    hooks = source / ".git" / "hooks"
+    for name in ("pre-commit", "pre-push"):
+        hook = hooks / name
+        hook.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        hook.chmod(0o755)
+
+    (working / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\ndef multiply(a, b):\n    return a * b\n",
+        encoding="utf-8",
+    )
+    publication = publish_verified_branch(
+        _result(source, working),
+        branch="devagent/hooks-disabled",
+    )
+
+    assert publication.committed is True
+    assert publication.pushed is True
+    assert publication.error is None
