@@ -116,8 +116,9 @@ class RuntimeExecutor:
             return command
 
         # The host filesystem is visible read-only while only the selected repository
-        # is rebound writable. /tmp is ephemeral and the process cannot outlive the
-        # parent DevAgent process. Network is removed unless explicitly inherited.
+        # is rebound writable. Writable temporary state lives under DevAgent's sandboxed
+        # HOME so repositories under /tmp remain addressable. Network is removed unless
+        # explicitly inherited for a trusted verification/install phase.
         wrapped: list[str] = [
             self._bwrap,
             "--die-with-parent",
@@ -128,8 +129,6 @@ class RuntimeExecutor:
             "--bind",
             str(self.root),
             str(self.root),
-            "--tmpfs",
-            "/tmp",
             "--proc",
             "/proc",
             "--dev",
