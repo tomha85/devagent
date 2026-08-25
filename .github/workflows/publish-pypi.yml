@@ -42,7 +42,7 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           expected = tag.removeprefix("v")
           project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-          assert project["name"] == "devagent", project["name"]
+          assert project["name"] == "devagent-ai", project["name"]
           assert project["version"] == expected, (project["version"], expected)
           PY
 
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/devagent/
+      url: https://pypi.org/project/devagent-ai/
     permissions:
       id-token: write
 
