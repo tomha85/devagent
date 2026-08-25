@@ -10,15 +10,26 @@ from pathlib import Path
 from typing import Sequence
 
 from devagent import __version__
-from devagent.config import ProviderConfig, config_path, load_config, save_config
+from devagent.config import (
+    ROLE_NAMES,
+    ProviderConfig,
+    config_path,
+    load_config,
+    load_role_configs,
+    provider_defaults,
+    save_config,
+    save_role_config,
+)
 from devagent.models import Outcome, SourceControlResult, jsonable
 from devagent.providers import ProviderError, create_provider
+from devagent.routing import create_routed_provider, routing_lines
 from devagent.safety import is_secret_path
 from devagent.source_control import PublicationPlan, prepare_publication, publish_verified_branch
 from devagent.technical_review import analyze_developer_review
 
 
 _MAX_INPUT_BYTES = 2_000_000
+_PROVIDER_CHOICES = ("openai", "anthropic", "claude", "xai", "grok", "compatible")
 
 
 def _top_parser() -> argparse.ArgumentParser:
@@ -33,7 +44,7 @@ def _top_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Read the requirement from any local UTF-8 text file path; extension is unrestricted",
     )
-    parser.add_argument("--provider", choices=("openai", "anthropic", "claude", "xai", "grok", "compatible"))
+    parser.add_argument("--provider", choices=_PROVIDER_CHOICES)
     parser.add_argument("--model")
     parser.add_argument("--base-url")
     parser.add_argument("--verbose", action="store_true", help="Show state transitions")
@@ -61,8 +72,12 @@ def _top_parser() -> argparse.ArgumentParser:
 
 
 def _setup_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="devagent setup", description="Configure the default model provider")
-    parser.add_argument("--provider", choices=("openai", "anthropic", "xai", "compatible"), default="openai")
+    parser = argparse.ArgumentParser(
+        prog="devagent setup",
+        description="Configure the default model provider or one engineering role",
+    )
+    parser.add_argument("--role", choices=ROLE_NAMES, help="Optional engineering role to configure")
+    parser.add_argument("--provider", choices=_PROVIDER_CHOICES, default="openai")
     parser.add_argument("--model")
     parser.add_argument("--base-url")
     parser.add_argument("--api-key-env")
@@ -70,37 +85,69 @@ def _setup_parser() -> argparse.ArgumentParser:
 
 
 def _defaults(provider: str) -> tuple[str, str]:
-    provider = {"claude": "anthropic", "grok": "xai"}.get(provider, provider)
-    return {
-        "openai": ("gpt-5", "OPENAI_API_KEY"),
-        "anthropic": ("claude-sonnet-4-20250514", "ANTHROPIC_API_KEY"),
-        "xai": ("grok-4", "XAI_API_KEY"),
-        "compatible": ("local-model", "DEVAGENT_API_KEY"),
-    }[provider]
+    return provider_defaults(provider)
 
 
 def _setup(argv: Sequence[str]) -> int:
     args = _setup_parser().parse_args(argv)
     model, key_env = _defaults(args.provider)
-    target = save_config(ProviderConfig(args.provider, args.model or model, args.base_url, args.api_key_env or key_env))
-    print(f"Configured {args.provider} in {target}")
+    config = ProviderConfig(
+        args.provider,
+        args.model or model,
+        args.base_url,
+        args.api_key_env or key_env,
+    )
+    if args.role:
+        target = save_role_config(args.role, config)
+        print(f"Configured {args.role} role with {args.provider} in {target}")
+    else:
+        target = save_config(config)
+        print(f"Configured {args.provider} in {target}")
     print(f"API keys are not stored; set {args.api_key_env or key_env} in your environment.")
     return 0
 
 
+def _sdk_available(config: ProviderConfig) -> bool:
+    package = "anthropic" if config.provider in {"anthropic", "claude"} else "openai"
+    return importlib.util.find_spec(package) is not None
+
+
+def _api_key_available(config: ProviderConfig) -> bool:
+    return config.provider == "compatible" or not config.api_key_env or bool(os.getenv(config.api_key_env))
+
+
 def _doctor() -> int:
     config = load_config()
+    role_configs = load_role_configs()
     checks = {
         "git": shutil.which("git") is not None,
         "configuration": config_path().is_file(),
-        "provider_sdk": importlib.util.find_spec("anthropic" if config.provider in {"anthropic", "claude"} else "openai") is not None,
-        "api_key": config.provider == "compatible" or not config.api_key_env or bool(os.getenv(config.api_key_env)),
+        "provider_sdk": _sdk_available(config),
+        "api_key": _api_key_available(config),
     }
     print("DEVAGENT DOCTOR")
     for name, okay in checks.items():
         print(f"{'OK' if okay else 'WARN'}  {name}")
+    for role in ROLE_NAMES:
+        role_config = role_configs.get(role)
+        if role_config is None:
+            continue
+        okay = _sdk_available(role_config) and _api_key_available(role_config)
+        print(
+            f"{'OK' if okay else 'WARN'}  role:{role} "
+            f"{role_config.provider}/{role_config.model}"
+        )
     if not checks["configuration"]:
         print("Run `devagent setup` before a cloud-provider engineering run.")
+    return 0
+
+
+def _models() -> int:
+    default = load_config()
+    roles = load_role_configs()
+    print("DEVAGENT MODEL ROUTING")
+    for line in routing_lines(default, roles):
+        print(line)
     return 0
 
 
@@ -209,6 +256,7 @@ def _run(argv: Sequence[str]) -> int:
             )
 
         configured = load_config()
+        role_configs = load_role_configs()
         selected_provider = args.provider or configured.provider
         if args.provider and args.provider != configured.provider:
             default_model, default_key_env = _defaults(args.provider)
@@ -221,12 +269,25 @@ def _run(argv: Sequence[str]) -> int:
             api_key_env=default_key_env,
             timeout_seconds=configured.timeout_seconds,
         )
+        explicit_run_model = bool(args.provider or args.model or args.base_url)
+        if explicit_run_model:
+            model_provider = create_provider(config)
+        else:
+            model_provider = create_routed_provider(
+                config,
+                role_configs,
+                provider_factory=create_provider,
+            )
+            if role_configs:
+                print("Model routing:")
+                for line in routing_lines(config, role_configs):
+                    print(f"  {line}")
         print("DevAgent is working...")
         from devagent.orchestrator import DevAgent
         from devagent.report import recommendations_for, render_report
 
         result = DevAgent(
-            create_provider(config),
+            model_provider,
             isolate=not args.no_isolation,
             verbose=args.verbose,
             status=print,
@@ -285,6 +346,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments and arguments[0] == "doctor":
         argparse.ArgumentParser(prog="devagent doctor", description="Check local DevAgent readiness").parse_args(arguments[1:])
         return _doctor()
+    if arguments and arguments[0] == "models":
+        argparse.ArgumentParser(prog="devagent models", description="Show configured model routing").parse_args(arguments[1:])
+        return _models()
     if arguments and arguments[0] == "status":
         parser = argparse.ArgumentParser(prog="devagent status", description="Show the latest local run")
         parser.add_argument("--repo", "-r", type=Path, default=Path.cwd())
