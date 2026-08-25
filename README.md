@@ -38,13 +38,13 @@ Core principles:
 From PyPI:
 
 ```bash
-python -m pip install devagent
+python -m pip install devagent-ai
 ```
 
 For an isolated CLI installation, `pipx` is recommended:
 
 ```bash
-pipx install devagent
+pipx install devagent-ai
 ```
 
 Or install and develop directly from a source checkout:
@@ -58,7 +58,7 @@ python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-Both installation paths expose the same `devagent` CLI. A source checkout remains the best option for contributors; the PyPI package is the easiest option for normal users.
+Both installation paths expose the same `devagent` CLI. The PyPI distribution is named `devagent-ai`; a source checkout remains the best option for contributors.
 
 ### Configure an AI provider
 

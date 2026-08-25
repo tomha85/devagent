@@ -6,7 +6,7 @@ All notable changes to DevAgent are documented here.
 
 ### Packaging and distribution
 
-- Renamed the Python distribution from `devagent-local` to `devagent` so users can install with `pip install devagent` or `pipx install devagent`.
+- Published the Python distribution as `devagent-ai` so users can install with `pip install devagent-ai` or `pipx install devagent-ai`, while the CLI command remains `devagent`.
 - Kept source-checkout and editable installation fully supported with `pip install -e ".[dev]"`.
 - Added a PyPI Trusted Publishing workflow triggered by published GitHub releases.
 - Added release-tag/package-version validation before PyPI publication.

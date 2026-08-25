@@ -13,7 +13,7 @@ from devagent import __version__
 def test_pypi_distribution_and_cli_metadata_are_release_consistent() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
 
-    assert project["name"] == "devagent"
+    assert project["name"] == "devagent-ai"
     assert project["version"] == __version__
     assert project["scripts"]["devagent"] == "devagent.cli:main"
 
