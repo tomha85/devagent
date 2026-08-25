@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from devagent.models import FailureClass, RunResult, VerificationResult
+from devagent.models import FailureClass, Outcome, RunResult, VerificationResult
 
 
 def _bounded_output(value: str, limit: int = 1200) -> str:
@@ -13,7 +13,14 @@ def _bounded_output(value: str, limit: int = 1200) -> str:
 def _verification_line(verification: VerificationResult) -> str:
     status = "✓" if verification.passed else "✗"
     command = " ".join(verification.command)
-    details = [f"phase={verification.phase}", f"exit={verification.exit_code}", f"{verification.duration_seconds:.2f}s"]
+    details = [
+        f"phase={verification.phase}",
+        f"revision={verification.revision}",
+        f"exit={verification.exit_code}",
+        f"{verification.duration_seconds:.2f}s",
+    ]
+    if verification.baseline:
+        details.append("baseline=true")
     if verification.tests_run is not None:
         details.append(f"tests={verification.tests_passed}/{verification.tests_run}")
     if verification.classification:
@@ -59,35 +66,117 @@ def recommendations_for(result: RunResult) -> list[str]:
     return unique
 
 
+def _acceptance_summary(result: RunResult) -> tuple[int, int]:
+    required = [criterion for criterion in result.task.acceptance_criteria if criterion.required]
+    evidenced = [criterion for criterion in required if criterion.evidence]
+    return len(evidenced), len(required)
+
+
+def _final_verification(result: RunResult) -> list[VerificationResult]:
+    final = [verification for verification in result.verification if verification.phase == "final"]
+    return final or [verification for verification in result.verification if not verification.baseline]
+
+
+def _completeness_lines(result: RunResult) -> list[str]:
+    acceptance_done, acceptance_total = _acceptance_summary(result)
+    final = _final_verification(result)
+    final_passed = sum(1 for verification in final if verification.passed)
+    final_failed = sum(1 for verification in final if not verification.passed)
+    review_status = "APPROVED" if result.review and result.review.approved else "NOT APPROVED"
+
+    if result.outcome is Outcome.VERIFIED:
+        verdict = "COMPLETE FOR DEVELOPER REVIEW: all required DevAgent verification/evidence gates passed on the final revision."
+    elif result.outcome is Outcome.PARTIALLY_VERIFIED:
+        verdict = "NOT FULLY PROVEN: implementation evidence exists, but at least one required verification/evidence gate is incomplete."
+    else:
+        verdict = "NOT READY FOR MERGE: DevAgent was blocked before it could safely prove the requested change."
+
+    return [
+        f"Outcome: {result.outcome.value}",
+        f"Required acceptance criteria evidenced: {acceptance_done}/{acceptance_total}",
+        f"Final/current verification checks: {final_passed} passed, {final_failed} failed",
+        f"Independent review: {review_status}",
+        f"Changed files: {result.changes.files_changed}",
+        f"Changed source symbols identified: {len(result.developer_review.changed_symbols)}",
+        f"Test cases identified in changed test files: {len(result.developer_review.test_cases)}",
+        verdict,
+    ]
+
+
 def render_report(result: RunResult) -> str:
     passed = [verification for verification in result.verification if verification.passed]
     failed = [verification for verification in result.verification if not verification.passed]
     lines = [
-        "DEVAGENT REPORT",
+        "DEVAGENT ENGINEERING REVIEW REPORT",
         "",
         "STATUS",
         result.outcome.value,
         "",
         "TASK",
         result.task.goal,
+        f"Task type: {result.task.task_type.value}",
+        f"Risk: {result.task.risk.value}",
         "",
         "REPOSITORY",
         result.repository.root,
+        f"Source branch: {result.repository.git_branch or '(not a Git branch)'}",
+        f"Source HEAD: {result.repository.git_head or '(unknown)'}",
+        f"Working root: {result.working_root}",
         "",
-        "WORKING BRANCH",
-        result.repository.git_branch or "(not a Git branch)",
+        "WHY THIS CHANGE",
+        result.root_cause or "Root cause/design reason was not established",
         "",
-        "WORKING ROOT",
-        result.working_root,
-        "",
-        "ROOT CAUSE",
-        result.root_cause or "Not established",
-        "",
-        "IMPLEMENTATION",
+        "IMPLEMENTATION DECISIONS",
     ]
     lines.extend(f"- {item}" for item in result.implementation or ["No implementation completed"])
-    lines.extend(["", "FILES CHANGED"])
-    lines.extend(result.changes.paths or ["(none)"])
+
+    lines.extend(
+        [
+            "",
+            "TECHNICAL CHANGE SUMMARY",
+            f"Files changed: {result.changes.files_changed}",
+            f"Lines added: {result.changes.lines_added}",
+            f"Lines deleted: {result.changes.lines_deleted}",
+            "Changed paths:",
+        ]
+    )
+    lines.extend(f"- {path}" for path in result.changes.paths or ["(none)"])
+
+    lines.extend(["", "FUNCTIONS / CLASSES / SYMBOLS CHANGED"])
+    if result.developer_review.changed_symbols:
+        for symbol in result.developer_review.changed_symbols:
+            line = f":{symbol.line}" if symbol.line is not None else ""
+            lines.append(f"- {symbol.change} | {symbol.kind} | {symbol.path}{line} | {symbol.name}")
+    else:
+        lines.append("(none identified)")
+
+    lines.extend(["", "TEST CASES / UNIT TESTS"])
+    if result.developer_review.test_cases:
+        for test in result.developer_review.test_cases:
+            line = f":{test.line}" if test.line is not None else ""
+            lines.append(f"- {test.change} | {test.kind} | {test.path}{line} | {test.name}")
+    else:
+        lines.append("(none identified)")
+    if result.developer_review.test_files:
+        lines.append("Test files:")
+        lines.extend(f"- {path}" for path in result.developer_review.test_files)
+    if result.developer_review.notes:
+        lines.append("Technical inventory notes:")
+        lines.extend(f"- {note}" for note in result.developer_review.notes)
+
+    lines.extend(["", "ACCEPTANCE CRITERIA + EVIDENCE"])
+    if result.task.acceptance_criteria:
+        for index, criterion in enumerate(result.task.acceptance_criteria, start=1):
+            status = "✓" if criterion.evidence else "✗"
+            requirement = "REQUIRED" if criterion.required else "OPTIONAL"
+            lines.append(f"{status} AC-{index} [{requirement}] {criterion.description}")
+            if criterion.evidence:
+                for evidence in criterion.evidence:
+                    lines.append(f"  evidence: {evidence}")
+            else:
+                lines.append("  evidence: NONE")
+    else:
+        lines.append("(no explicit acceptance criteria recorded)")
 
     lines.extend(
         [
@@ -96,7 +185,7 @@ def render_report(result: RunResult) -> str:
             f"Passed checks: {len(passed)}",
             f"Failed checks: {len(failed)}",
             "",
-            "VERIFICATION RESULTS",
+            "VERIFICATION MATRIX",
         ]
     )
     lines.extend(_verification_line(verification) for verification in result.verification)
@@ -111,8 +200,10 @@ def render_report(result: RunResult) -> str:
                 [
                     f"- {' '.join(verification.command)}",
                     f"  phase: {verification.phase}",
+                    f"  revision: {verification.revision}",
                     f"  classification: {classification}",
                     f"  exit code: {verification.exit_code}",
+                    f"  timed out: {'YES' if verification.timed_out else 'NO'}",
                     "  stdout:",
                     "    " + _bounded_output(verification.stdout).replace("\n", "\n    "),
                     "  stderr:",
@@ -130,9 +221,12 @@ def render_report(result: RunResult) -> str:
     else:
         lines.append("Not completed")
 
+    lines.extend(["", "COMPLETENESS ASSESSMENT"])
+    lines.extend(_completeness_lines(result))
+
     lines.extend(["", "NEW REGRESSIONS", "0" if result.outcome.value == "VERIFIED" else "Not proven"])
     if result.not_run:
-        lines.extend(["", "NOT RUN"])
+        lines.extend(["", "KNOWN GAPS / NOT RUN"])
         lines.extend(f"- {reason}" for reason in result.not_run)
 
     recommendations = recommendations_for(result)
@@ -158,10 +252,21 @@ def render_report(result: RunResult) -> str:
         lines.extend(["Publishing: not requested", "No commit", "No push"])
     lines.extend(["Pull request: NOT CREATED", "Merge: NOT PERFORMED"])
 
-    lines.extend(["", "DEVELOPER ACTION"])
+    lines.extend(
+        [
+            "",
+            "DEVELOPER REVIEW CHECKLIST",
+            "1. Confirm the requirement and root-cause/design explanation match the intended product behavior.",
+            "2. Inspect every changed path and changed symbol; reject unrelated or unexpectedly broad changes.",
+            "3. Confirm each REQUIRED acceptance criterion has concrete evidence on the final revision.",
+            "4. Review the listed unit/test cases for happy paths, edge cases, regression coverage, and missing scenarios.",
+            "5. Review every failed check, NOT RUN item, review issue, and recommendation before accepting the change.",
+            "6. Confirm final verification ran after the last code change and no known new regression remains.",
+            "7. If a branch was pushed, inspect that exact commit/branch before creating any human PR or merge.",
+        ]
+    )
     if source.pushed:
         lines.append(f"Review remote branch: {source.remote}/{source.branch}")
-        lines.append("Create a PR or merge only after developer review, if desired.")
     else:
-        lines.append(f"Review: git -C {result.working_root} diff")
+        lines.append(f"Review local diff: git -C {result.working_root} diff")
     return "\n".join(lines)
