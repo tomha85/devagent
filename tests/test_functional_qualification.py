@@ -59,7 +59,7 @@ def test_v3_catalog_covers_production_toolchains_provider_parity_and_release_int
     root = Path(__file__).resolve().parents[1]
     payload, cases = load_catalog(root / "evaluation" / "benchmark_v3.json")
 
-    assert len(cases) == 50
+    assert len(cases) == 52
     assert {"provider_parity", "real_stack", "release_integrity"} <= set(
         payload["required_categories"]
     )
@@ -70,6 +70,8 @@ def test_v3_catalog_covers_production_toolchains_provider_parity_and_release_int
         "real-stack-go",
         "real-stack-rust",
         "real-stack-cpp-make",
+        "multilang-review-symbol-test-evidence",
+        "real-multistack-devagent-e2e",
     }
     _assert_catalog_nodes(root, payload, cases)
 
