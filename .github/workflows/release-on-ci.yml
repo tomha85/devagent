@@ -1,0 +1,96 @@
+name: Release version after green main CI
+
+on:
+  workflow_run:
+    workflows: ["Production CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-version-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create GitHub release when version is new
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the exact verified main revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve and validate release version
+        id: version
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import tomllib
+
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          version = project["version"]
+          assert project["name"] == "devagent-ai", project["name"]
+          assert re.fullmatch(r"\d+\.\d+\.\d+", version), version
+
+          init_text = pathlib.Path("devagent/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_text)
+          assert match and match.group(1) == version, (match.group(1) if match else None, version)
+
+          with pathlib.Path("release-version.txt").open("w", encoding="utf-8") as handle:
+              handle.write(f"v{version}\n")
+          PY
+          echo "tag=$(cat release-version.txt)" >> "$GITHUB_OUTPUT"
+          rm release-version.txt
+
+      - name: Verify the workflow is releasing the CI-tested commit
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
+
+      - name: Check existing tag and release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          git fetch --tags --prune
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            TAG_SHA="$(git rev-list -n 1 "$TAG")"
+            if [ "$TAG_SHA" != "$VERIFIED_SHA" ]; then
+              echo "Existing tag $TAG points to $TAG_SHA, expected $VERIFIED_SHA" >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+            echo "create=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "create=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag and GitHub release
+        if: steps.existing.outputs.create == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$VERIFIED_SHA" \
+            --title "DevAgent $TAG" \
+            --generate-notes
