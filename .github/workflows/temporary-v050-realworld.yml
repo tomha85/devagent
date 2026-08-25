@@ -55,7 +55,8 @@ jobs:
           python -m pytest -q \
             tests/test_retrieval.py \
             tests/test_realworld_benchmark.py \
-            tests/test_cli.py
+            tests/test_cli.py \
+            tests/test_production_v040.py
 
       - name: Full tests with coverage
         run: |
@@ -91,6 +92,7 @@ jobs:
             devagent/retrieval.py \
             devagent/workspace.py \
             tests/test_cli.py \
+            tests/test_production_v040.py \
             tests/test_realworld_benchmark.py \
             tests/test_retrieval.py \
             evaluation/benchmark_v4.json \
