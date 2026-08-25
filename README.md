@@ -121,6 +121,39 @@ reviewer     → independently review final diff
 
 The deterministic harness remains responsible for safety, tool execution, verification validity, acceptance adjudication, final status, reporting, and source-control publication regardless of which model handles a role.
 
+#### Example: use multiple AI models in one DevAgent run
+
+You do not have to use one AI model for every reasoning step. If you believe different models are better suited to different engineering roles, configure a default model plus any role-specific overrides. Roles that are not explicitly configured fall back to the default model.
+
+```bash
+# Keep credentials in environment variables; DevAgent does not store the keys.
+export OPENAI_API_KEY=...
+export GEMINI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export XAI_API_KEY=...
+
+# Default/fallback model.
+devagent setup --provider openai --model YOUR_OPENAI_MODEL
+
+# Optional per-role models.
+devagent setup --role investigator --provider gemini --model YOUR_GEMINI_MODEL
+devagent setup --role planner --provider anthropic --model YOUR_CLAUDE_MODEL
+devagent setup --role implementer --provider openai --model YOUR_OPENAI_MODEL
+devagent setup --role reviewer --provider xai --model YOUR_GROK_MODEL
+
+# Inspect routing and optionally probe every configured cloud model.
+devagent models
+devagent doctor --live
+
+# Run normally; saved role routing is applied automatically.
+cd my-repo
+devagent "Fix the checkout race condition and add regression coverage."
+```
+
+For example, a user may choose a fast or lower-cost model for repository investigation, a different model for planning, a preferred coding model for implementation, and another provider for independent review. This can be useful for cost, latency, provider diversity, or model-strength preferences, but it does not guarantee a better result. DevAgent still requires the same repository evidence, acceptance gates, deterministic verification, and publication rules.
+
+When using saved role routing, run the task without run-level `--provider`, `--model`, or `--base-url` overrides. Supplying those flags explicitly selects one provider/model for that run instead of the saved per-role routing.
+
 ## Run
 
 From the application repository:
