@@ -38,7 +38,7 @@ Changes should follow these rules:
 3. Add or update meaningful tests for behavior changes.
 4. Preserve developer dirty work and backup-before-edit behavior.
 5. Do not weaken workspace confinement or secret-path protections.
-6. Do not add automatic commit, push, merge, rebase, or deploy behavior.
+6. Keep commit/push automation explicit, post-`VERIFIED`, deterministic, isolated-worktree-only, limited to a new non-protected branch, and outside model-facing command execution. Never add automatic PR, merge, rebase, force-push, or deploy behavior.
 7. Do not fabricate command execution or verification results.
 8. Keep provider-specific behavior behind the provider abstraction when possible.
 9. Treat `BLOCKED` or `PARTIALLY_VERIFIED` as valid outcomes when evidence is insufficient.
@@ -50,7 +50,9 @@ Bug fixes should include a regression test that fails before the fix when practi
 
 Features should include tests for the new behavior and relevant edge cases.
 
-Changes to orchestration, safety, verification, review, provider contracts, worktrees, or repository discovery should include focused regression coverage because these areas directly affect the trustworthiness of final outcomes.
+Changes to orchestration, safety, verification, review, provider contracts, worktrees, repository discovery, or branch publishing should include focused regression coverage because these areas directly affect the trustworthiness of final outcomes.
+
+Branch-publishing tests should use local bare Git repositories where possible and must prove that protected/non-VERIFIED publication attempts are rejected.
 
 ## Pull requests
 
