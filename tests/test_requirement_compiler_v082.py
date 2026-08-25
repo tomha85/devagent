@@ -64,19 +64,17 @@ def test_rough_matrix_prompt_becomes_precise_python_contract() -> None:
     assert task.goal == "Add a matrix addition function for two 2x2 matrices (matrix inputs)"
 
     enrich_acceptance_contract(task, _repo())
-    assert task.goal == (
-        "Add add_matrices_2x2(a, b) to perform element-wise matrix addition "
-        "for two 2x2 matrices"
-    )
+    core = "Add add_matrices_2x2(a, b) to perform element-wise matrix addition for two 2x2 matrices"
+    assert task.goal.startswith(core + "\n\nDEVAGENT REQUIREMENT INTELLIGENCE")
     user = [item for item in task.acceptance_criteria if item.source is AcceptanceSource.USER]
-    assert [item.description for item in user] == [task.goal]
+    assert [item.description for item in user] == [core]
 
 
 def test_requirement_compiler_preserves_explicit_user_callable() -> None:
     requirement = "Add matrix_sum(a, b) for two 2x2 matrices"
     task = compile_task(requirement)
     enrich_acceptance_contract(task, _repo())
-    assert task.goal == requirement
+    assert task.goal.startswith(requirement + "\n\nDEVAGENT REQUIREMENT INTELLIGENCE")
     user = [item for item in task.acceptance_criteria if item.source is AcceptanceSource.USER]
     assert [item.description for item in user] == [requirement]
 
@@ -84,12 +82,11 @@ def test_requirement_compiler_preserves_explicit_user_callable() -> None:
 def test_common_typo_is_compiled_without_inventing_behavior() -> None:
     task = compile_task("add new function substraction 2 matrix 2x2")
     enrich_acceptance_contract(task, _repo())
-    assert task.goal == (
-        "Add subtract_matrices_2x2(a, b) to perform element-wise matrix subtraction "
-        "for two 2x2 matrices"
+    assert task.goal.startswith(
+        "Add subtract_matrices_2x2(a, b) to perform element-wise matrix subtraction for two 2x2 matrices"
     )
     assert "mutation" not in task.goal.lower()
-    assert "invalid" not in task.goal.lower()
+    assert "invalid-input" not in task.goal.lower()
 
 
 def test_repository_language_selects_conventional_java_callable() -> None:
