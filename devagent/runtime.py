@@ -131,6 +131,55 @@ class RuntimeExecutor:
             )
         return None
 
+    def _linked_git_metadata(self) -> tuple[Path, ...]:
+        """Return external Git metadata required by a linked worktree/submodule.
+
+        A normal repository has a .git directory inside the writable workspace and needs
+        no carve-out. Linked worktrees and submodules have a small .git text file pointing
+        outside the workspace. When /tmp is masked, that external metadata must be reopened
+        read-only or even `git diff`/`git status` cannot operate.
+        """
+        marker = self.root / ".git"
+        if not marker.is_file():
+            return ()
+        try:
+            first_line = marker.read_text(encoding="utf-8", errors="strict").splitlines()[0]
+        except (OSError, UnicodeDecodeError, IndexError):
+            return ()
+        prefix = "gitdir:"
+        if not first_line.casefold().startswith(prefix):
+            return ()
+        raw = first_line[len(prefix):].strip()
+        if not raw:
+            return ()
+        git_dir = Path(raw).expanduser()
+        if not git_dir.is_absolute():
+            git_dir = marker.parent / git_dir
+        try:
+            git_dir = git_dir.resolve(strict=True)
+        except OSError:
+            return ()
+        if not git_dir.is_dir():
+            return ()
+
+        common_file = git_dir / "commondir"
+        if common_file.is_file():
+            try:
+                raw_common = common_file.read_text(encoding="utf-8", errors="strict").strip()
+            except (OSError, UnicodeDecodeError):
+                raw_common = ""
+            if raw_common:
+                common = Path(raw_common).expanduser()
+                if not common.is_absolute():
+                    common = git_dir / common
+                try:
+                    common = common.resolve(strict=True)
+                except OSError:
+                    common = git_dir
+                if common.is_dir():
+                    return (common,)
+        return (git_dir,)
+
     def prepare(
         self,
         argv: Sequence[str],
@@ -150,20 +199,22 @@ class RuntimeExecutor:
                 )
             return command
 
-        readable: list[Path] = []
+        readable: list[Path] = list(self._linked_git_metadata())
         for item in readable_paths:
             candidate = Path(item).expanduser().resolve()
             if not candidate.exists():
                 raise RuntimePolicyError(f"Sandbox readable path does not exist: {candidate}")
+            if candidate == self.root or candidate.is_relative_to(self.root):
+                continue
             if candidate not in readable:
                 readable.append(candidate)
 
         # The selected repository/worktree is writable. Explicit per-run state directories
-        # may also be writable. Readable carve-outs (notably the source repository that owns
-        # Git common metadata for an isolated worktree) are rebound read-only first so later
-        # writable child binds win. /tmp is private tmpfs: normal toolchain temp files work,
-        # while host temp state remains hidden. bubblewrap resolves bind sources from the old
-        # root, so paths physically below host /tmp can be reopened after the tmpfs mask.
+        # may also be writable. Readable carve-outs (notably external Git common metadata)
+        # are rebound read-only first so later writable child binds win. /tmp is private
+        # tmpfs: normal toolchain temp files work while host temp state remains hidden.
+        # bubblewrap resolves bind sources from the old root, so paths physically below
+        # host /tmp can be reopened after the tmpfs mask.
         writable: list[Path] = [self.root]
         for item in writable_paths:
             candidate = Path(item).expanduser().resolve()
