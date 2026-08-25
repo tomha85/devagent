@@ -136,6 +136,7 @@ class RuntimeExecutor:
         argv: Sequence[str],
         *,
         network: NetworkMode | None = None,
+        readable_paths: Sequence[Path | str] = (),
         writable_paths: Sequence[Path | str] = (),
     ) -> tuple[str, ...]:
         command = tuple(str(item) for item in argv)
@@ -149,12 +150,20 @@ class RuntimeExecutor:
                 )
             return command
 
-        # The host filesystem is visible read-only while the selected repository and
-        # explicit per-run state directories are rebound writable. /tmp is replaced
-        # with a private writable tmpfs so compilers and test runners can use conventional
-        # temporary paths without mutating or observing host temporary state. bubblewrap
-        # resolves bind sources from the old root, so repository/worktree paths that are
-        # themselves below /tmp can still be rebound after the tmpfs mask is installed.
+        readable: list[Path] = []
+        for item in readable_paths:
+            candidate = Path(item).expanduser().resolve()
+            if not candidate.exists():
+                raise RuntimePolicyError(f"Sandbox readable path does not exist: {candidate}")
+            if candidate not in readable:
+                readable.append(candidate)
+
+        # The selected repository/worktree is writable. Explicit per-run state directories
+        # may also be writable. Readable carve-outs (notably the source repository that owns
+        # Git common metadata for an isolated worktree) are rebound read-only first so later
+        # writable child binds win. /tmp is private tmpfs: normal toolchain temp files work,
+        # while host temp state remains hidden. bubblewrap resolves bind sources from the old
+        # root, so paths physically below host /tmp can be reopened after the tmpfs mask.
         writable: list[Path] = [self.root]
         for item in writable_paths:
             candidate = Path(item).expanduser().resolve()
@@ -175,6 +184,8 @@ class RuntimeExecutor:
             "--tmpfs",
             "/tmp",
         ]
+        for candidate in readable:
+            wrapped.extend(("--ro-bind", str(candidate), str(candidate)))
         for candidate in writable:
             wrapped.extend(("--bind", str(candidate), str(candidate)))
         wrapped.extend(
