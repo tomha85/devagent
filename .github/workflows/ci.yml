@@ -54,12 +54,16 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-      - name: Smoke-test CLI
+      - name: Smoke-test CLIs
         run: |
           devagent --version
           devagent --help >/dev/null
           devagent benchmark --help >/dev/null
           devagent-ui-check --help >/dev/null
+          devagent-autonomy --help >/dev/null
+          devagent-skills --help >/dev/null
+          devagent-automation --help >/dev/null
+          devagent-provider-benchmark --help >/dev/null
 
       - name: Validate installed dependencies
         run: python -m pip check
@@ -152,7 +156,7 @@ jobs:
                   raise SystemExit(1)
           PY
 
-      - name: Run production qualification catalog in required sandbox
+      - name: Run v4 production qualification catalog in required sandbox
         env:
           DEVAGENT_SANDBOX: required
           DEVAGENT_NETWORK: deny
@@ -161,12 +165,23 @@ jobs:
             --catalog evaluation/benchmark_v4.json \
             --report .devagent/production-qualification-v4.json
 
+      - name: Run v5 autonomy qualification catalog in required sandbox
+        env:
+          DEVAGENT_SANDBOX: required
+          DEVAGENT_NETWORK: deny
+        run: |
+          python -m devagent.qualification \
+            --catalog evaluation/benchmark_v5.json \
+            --report .devagent/production-qualification-v5.json
+
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: production-qualification-v4
-          path: .devagent/production-qualification-v4.json
+          name: production-qualification-v080
+          path: |
+            .devagent/production-qualification-v4.json
+            .devagent/production-qualification-v5.json
           if-no-files-found: warn
 
   package:
@@ -197,4 +212,8 @@ jobs:
           /tmp/devagent-wheel-smoke/bin/devagent --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent benchmark --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent-ui-check --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent-autonomy --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent-skills --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent-automation --help >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent-provider-benchmark --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/python -m pip check
