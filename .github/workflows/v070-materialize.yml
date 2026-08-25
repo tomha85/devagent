@@ -1,3 +1,4 @@
+# One-time branch-only materialization; this file removes itself from the final candidate.
 name: v0.7 one-time materializer
 
 on:
