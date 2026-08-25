@@ -2,6 +2,16 @@
 
 All notable changes to DevAgent are documented here.
 
+## 0.3.1 — 2026-08-24
+
+### Packaging and distribution
+
+- Renamed the Python distribution from `devagent-local` to `devagent` so users can install with `pip install devagent` or `pipx install devagent`.
+- Kept source-checkout and editable installation fully supported with `pip install -e ".[dev]"`.
+- Added a PyPI Trusted Publishing workflow triggered by published GitHub releases.
+- Added release-tag/package-version validation before PyPI publication.
+- Added packaging metadata regression tests for the distribution name, version, CLI entry point, and development extras.
+
 ## 0.3.0 — 2026-08-24
 
 ### Production quality and evaluation

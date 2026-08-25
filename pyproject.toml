@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "devagent-local"
-version = "0.3.0"
+name = "devagent"
+version = "0.3.1"
 description = "Evidence-driven local autonomous software engineering agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,7 @@ devagent = "devagent.cli:main"
 Homepage = "https://github.com/tomha85/devagent"
 Repository = "https://github.com/tomha85/devagent"
 Issues = "https://github.com/tomha85/devagent/issues"
+Changelog = "https://github.com/tomha85/devagent/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["devagent*", "agent*"]
