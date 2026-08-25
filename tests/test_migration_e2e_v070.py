@@ -130,12 +130,17 @@ def test_sqlite_migration_forward_rollback_and_existing_state_are_verified(tmp_p
 
     result = DevAgent(ScriptedFakeProvider(responses)).run(
         tmp_path,
-        "Add a database migration for a nullable `email` column, preserve existing rows, support rollback, and add representative migration tests.",
+        "Add a database migration implementing `upgrade_add_email` and `downgrade_add_email`.",
     )
 
+    diagnostic = [
+        (item.description, item.status.value, item.reason, item.evidence)
+        for item in result.task.acceptance_criteria
+        if item.required
+    ]
     assert result.task.task_type is TaskType.MIGRATION
-    assert result.outcome is Outcome.VERIFIED
-    assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required)
+    assert result.outcome is Outcome.VERIFIED, diagnostic
+    assert all(item.status is AcceptanceStatus.SATISFIED for item in result.task.acceptance_criteria if item.required), diagnostic
     assert any(item.phase == "final" and item.command == ("python", "-m", "pytest", "-q") and item.passed for item in result.verification)
     working = Path(result.working_root)
     assert "upgrade_add_email" in (working / "migrations.py").read_text(encoding="utf-8")
