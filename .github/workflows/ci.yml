@@ -102,6 +102,37 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Smoke-test real Linux sandbox backend
+        env:
+          DEVAGENT_SANDBOX: required
+          DEVAGENT_NETWORK: deny
+        run: |
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+          from devagent.artifacts import RunArtifacts
+          from devagent.workspace import Workspace
+
+          with tempfile.TemporaryDirectory(prefix="devagent-bwrap-smoke-") as temporary:
+              base = Path(temporary)
+              source = base / "source"
+              worktree = base / "worktree"
+              source.mkdir()
+              worktree.mkdir()
+              artifacts = RunArtifacts(source, run_id="ci-real-bwrap")
+              result = Workspace(worktree, artifacts).run(
+                  (sys.executable, "--version"),
+                  phase="sandbox-smoke",
+              )
+              print("sandbox backend:", Workspace(worktree, artifacts).runtime.backend)
+              print("exit:", result.exit_code)
+              print("stdout:", result.stdout)
+              print("stderr:", result.stderr)
+              if not result.passed:
+                  raise SystemExit(1)
+          PY
+
       - name: Run production qualification catalog in required sandbox
         env:
           DEVAGENT_SANDBOX: required
