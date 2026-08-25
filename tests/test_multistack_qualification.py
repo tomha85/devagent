@@ -19,6 +19,11 @@ def _require_tool(name: str) -> None:
     assert shutil.which(name), f"required production qualification tool is unavailable: {name}"
 
 
+def _languages(root: Path) -> set[str]:
+    repository = discover_repository(root, probe_capabilities=False)
+    return {language for component in repository.components for language in component.languages}
+
+
 def _run_capability(root: Path, kind: str) -> tuple[str, ...]:
     repository = discover_repository(root, probe_capabilities=False)
     capabilities = [item for item in repository.capabilities if item.kind == kind and item.trusted]
@@ -56,7 +61,7 @@ def test_python_pytest_stack_is_discovered_and_executes(tmp_path: Path) -> None:
     command = _run_capability(tmp_path, "test")
 
     assert command[:3] == ("python", "-m", "pytest")
-    assert "python" in discover_repository(tmp_path, probe_capabilities=False).languages
+    assert "python" in _languages(tmp_path)
 
 
 def test_node_typescript_stack_is_discovered_and_executes(tmp_path: Path) -> None:
@@ -85,11 +90,11 @@ def test_node_typescript_stack_is_discovered_and_executes(tmp_path: Path) -> Non
     )
 
     command = _run_capability(tmp_path, "test")
-    repository = discover_repository(tmp_path, probe_capabilities=False)
 
     assert command == ("npm", "run", "test")
-    assert "typescript" in repository.languages
-    assert "javascript" in repository.languages
+    languages = _languages(tmp_path)
+    assert "typescript" in languages
+    assert "javascript" in languages
 
 
 def test_go_stack_is_discovered_and_executes(tmp_path: Path) -> None:
@@ -109,7 +114,7 @@ def test_go_stack_is_discovered_and_executes(tmp_path: Path) -> None:
     command = _run_capability(tmp_path, "test")
 
     assert command == ("go", "test", "./...")
-    assert "go" in discover_repository(tmp_path, probe_capabilities=False).languages
+    assert "go" in _languages(tmp_path)
 
 
 def test_rust_stack_is_discovered_and_executes_test_and_build(tmp_path: Path) -> None:
@@ -132,7 +137,7 @@ def test_rust_stack_is_discovered_and_executes_test_and_build(tmp_path: Path) ->
 
     assert test_command == ("cargo", "test")
     assert build_command == ("cargo", "check")
-    assert "rust" in discover_repository(tmp_path, probe_capabilities=False).languages
+    assert "rust" in _languages(tmp_path)
 
 
 def test_cpp_make_stack_is_discovered_and_executes(tmp_path: Path) -> None:
@@ -155,4 +160,4 @@ def test_cpp_make_stack_is_discovered_and_executes(tmp_path: Path) -> None:
     command = _run_capability(tmp_path, "test")
 
     assert command == ("make", "test")
-    assert "c++" in discover_repository(tmp_path, probe_capabilities=False).languages
+    assert "c++" in _languages(tmp_path)
