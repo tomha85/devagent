@@ -137,12 +137,15 @@ class CommandPolicy:
 
         forbidden_flags = {
             "-e", "--editable", "--index-url", "--extra-index-url", "--trusted-host",
-            "--find-links", "--registry", "--global", "-g",
+            "--find-links", "--registry", "--global", "-g", "--no-binary",
         }
         for token in args:
             normalized = token.lower()
             if normalized in forbidden_flags or normalized.startswith(
-                ("--index-url=", "--extra-index-url=", "--trusted-host=", "--find-links=", "--registry=")
+                (
+                    "--index-url=", "--extra-index-url=", "--trusted-host=", "--find-links=",
+                    "--registry=", "--no-binary=",
+                )
             ):
                 raise SafetyError(f"Dependency install option is not allowed: {token}")
             if normalized.startswith(("http://", "https://", "ftp://", "git+", "ssh://")):
@@ -159,10 +162,13 @@ class CommandPolicy:
             if requirement.startswith("-") or is_secret_path(Path(requirement)):
                 raise SafetyError("Safe pip installation requires a non-sensitive requirement file")
             normalized = list(prefix) + args
-            if "--no-input" not in lowered:
+            lowered_normalized = tuple(token.lower() for token in normalized)
+            if "--no-input" not in lowered_normalized:
                 normalized.append("--no-input")
-            if "--disable-pip-version-check" not in lowered:
+            if "--disable-pip-version-check" not in lowered_normalized:
                 normalized.append("--disable-pip-version-check")
+            if not any(token.startswith("--only-binary") for token in lowered_normalized):
+                normalized.append("--only-binary=:all:")
             return tuple(normalized)
 
         if kind == "npm":
