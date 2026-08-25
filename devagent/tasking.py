@@ -63,6 +63,18 @@ _DIRECTIVE = re.compile(
     re.IGNORECASE,
 )
 
+# Bounded normalization for terse user intent. This is deliberately not a fuzzy
+# "guess what the user meant" layer: it corrects common engineering shorthand,
+# grammatical number, and operation wording while preserving identifiers,
+# quoted contracts, values, and explicit constraints. Task policy and repository
+# evidence still provide the verification/safety contract.
+_OPERATION_ALIASES: tuple[tuple[str, str], ...] = (
+    ("substraction", "subtraction"),
+    ("substract", "subtract"),
+    ("multipy", "multiply"),
+    ("mutiply", "multiply"),
+)
+
 
 def _classify(text: str) -> TaskType:
     lowered = text.lower()
@@ -96,6 +108,60 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(item)
             seen.add(normalized)
     return result
+
+
+def _normalize_terse_requirement(requirement: str) -> str:
+    """Compile common rough one-line prompts into a clearer engineering request.
+
+    The compiler is intentionally bounded. It may repair shorthand/grammar and
+    make an operation explicit, but it must not add product behavior the user did
+    not request. Structured/multi-line requirements are left intact.
+    """
+
+    value = re.sub(r"\s+", " ", requirement).strip()
+    if not value or "\n" in requirement or _section_header(value) is not None:
+        return value
+    # An explicit callable name is already a precise user contract; never rename it.
+    if re.search(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", value):
+        return value
+
+    for source, destination in _OPERATION_ALIASES:
+        value = re.sub(rf"\b{re.escape(source)}\b", destination, value, flags=re.IGNORECASE)
+
+    # Common shorthand from natural prompts such as "addition 2 matrix 2x2".
+    # Keep both "matrix" and "matrices" in the normalized contract so
+    # deterministic evidence can link either conventional symbol spelling.
+    matrix_match = re.search(
+        r"\b(add(?:ition)?|sum|subtract(?:ion)?|multiply|multiplication|divide|division)\b"
+        r"(?:\s+(?:of|for))?\s+(?:2|two)\s+matrix(?:es)?\s+(\d+x\d+)\b",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if matrix_match:
+        operation = matrix_match.group(1).lower()
+        dimension = matrix_match.group(2).lower()
+        canonical_operation = {
+            "add": "addition",
+            "addition": "addition",
+            "sum": "addition",
+            "subtract": "subtraction",
+            "subtraction": "subtraction",
+            "multiply": "multiplication",
+            "multiplication": "multiplication",
+            "divide": "division",
+            "division": "division",
+        }[operation]
+        prefix = "Add" if re.search(r"\b(add|new|function|implement)\b", value, re.IGNORECASE) else "Implement"
+        return (
+            f"{prefix} a matrix {canonical_operation} function for two {dimension} matrices "
+            f"(matrix inputs)"
+        )
+
+    # Repair simple count+noun shorthand without inventing domain behavior.
+    value = re.sub(r"\b2\s+matrix\b", "two matrices", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b2\s+file\b", "two files", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b2\s+test\b", "two tests", value, flags=re.IGNORECASE)
+    return value
 
 
 def _section_header(line: str) -> tuple[str, str] | None:
@@ -182,15 +248,21 @@ def _append_criterion(
 
 
 def compile_task(requirement: str) -> TaskSpec:
-    goal = re.sub(r"\s+", " ", requirement).strip()
-    if not goal:
+    raw_goal = re.sub(r"\s+", " ", requirement).strip()
+    if not raw_goal:
         raise ValueError("Engineering requirement cannot be empty")
+    goal = _normalize_terse_requirement(requirement)
     task_type = _classify(goal)
     code_change = task_type is not TaskType.UNIT_TEST or "only" not in goal.lower()
     requires_tests = task_type is not TaskType.BUILD_FAILURE
 
     criteria: list[AcceptanceCriterion] = []
-    for item in _user_acceptance_items(requirement):
+    # Structured user requirements remain authoritative. Only an unstructured,
+    # terse prompt is compiled into the clearer canonical request.
+    user_items = _user_acceptance_items(requirement)
+    if len(user_items) == 1 and user_items[0] == raw_goal and goal != raw_goal:
+        user_items = [goal]
+    for item in user_items:
         _append_criterion(criteria, item, source=AcceptanceSource.USER)
 
     if task_type in {TaskType.BUG_FIX, TaskType.RUNTIME_ERROR, TaskType.TEST_FAILURE}:
@@ -240,9 +312,61 @@ def compile_task(requirement: str) -> TaskSpec:
     )
 
 
-def enrich_acceptance_contract(task: TaskSpec, repository: Any) -> TaskSpec:
-    """Add checks derived from trusted repository capabilities without replacing user intent."""
+def _repository_language(repository: Any) -> str | None:
+    languages = [
+        language.lower()
+        for component in repository.components
+        for language in component.languages
+    ]
+    for preferred in ("python", "java", "csharp", "c#", "javascript", "typescript", "go", "rust"):
+        if preferred in languages:
+            return preferred
+    return languages[0] if languages else None
 
+
+def _matrix_operation_contract(task: TaskSpec, repository: Any) -> None:
+    """Turn the bounded matrix shorthand compiler output into a repo-style callable contract."""
+
+    match = re.fullmatch(
+        r"(?:Add|Implement) a matrix (addition|subtraction|multiplication|division) "
+        r"function for two (\d+x\d+) matrices \(matrix inputs\)",
+        task.goal,
+    )
+    if match is None:
+        return
+
+    operation, dimension = match.groups()
+    verb = {
+        "addition": "add",
+        "subtraction": "subtract",
+        "multiplication": "multiply",
+        "division": "divide",
+    }[operation]
+    compact_dimension = dimension.replace("x", "x")
+    language = _repository_language(repository)
+    if language in {"java", "javascript", "typescript"}:
+        symbol = f"{verb}Matrices{compact_dimension}"
+    elif language in {"csharp", "c#"}:
+        symbol = f"{verb.capitalize()}Matrices{compact_dimension}"
+    else:
+        symbol = f"{verb}_matrices_{compact_dimension}"
+
+    compiled = (
+        f"Add {symbol}(a, b) to perform element-wise matrix {operation} "
+        f"for two {dimension} matrices"
+    )
+    task.goal = compiled
+    user_criteria = [
+        criterion for criterion in task.acceptance_criteria if criterion.source is AcceptanceSource.USER
+    ]
+    if len(user_criteria) == 1:
+        user_criteria[0].description = compiled
+
+
+def enrich_acceptance_contract(task: TaskSpec, repository: Any) -> TaskSpec:
+    """Compile safe repository-aware defaults, then add trusted repository checks."""
+
+    _matrix_operation_contract(task, repository)
     seen_commands: set[tuple[str, ...]] = set()
     for capability in repository.capabilities:
         if not capability.trusted:
