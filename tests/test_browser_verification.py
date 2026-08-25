@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from devagent.browser import BrowserVerificationError, normalize_target
+from devagent.browser import BrowserVerificationError, normalize_target, verify_browser
 
 
 def test_browser_file_target_must_stay_inside_repository(tmp_path: Path) -> None:
@@ -37,3 +37,28 @@ def test_browser_rejects_file_url_outside_repository(tmp_path: Path) -> None:
             normalize_target(tmp_path, outside.as_uri())
     finally:
         outside.unlink(missing_ok=True)
+
+
+def test_offline_browser_check_fails_closed_without_os_sandbox(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "index.html").write_text("<h1>offline</h1>\n", encoding="utf-8")
+    monkeypatch.setattr("devagent.browser.find_browser", lambda: "/usr/bin/chromium")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "deny")
+
+    with pytest.raises(BrowserVerificationError, match="unenforced network denial"):
+        verify_browser(tmp_path, "index.html")
+
+
+def test_localhost_browser_check_requires_explicit_network_inherit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("devagent.browser.find_browser", lambda: "/usr/bin/chromium")
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    monkeypatch.setenv("DEVAGENT_NETWORK", "deny")
+
+    with pytest.raises(BrowserVerificationError, match="DEVAGENT_NETWORK=inherit"):
+        verify_browser(tmp_path, "http://localhost:4173")
