@@ -146,9 +146,58 @@ class Workspace:
         self.modified_paths.add(self._relative(target))
         self.artifacts.record("text_replaced", path=path, count=count, revision=self.revision)
 
+    def _validate_python_requirement_file(self, target: Path) -> None:
+        if target.stat().st_size > 1_000_000:
+            raise SafetyError(f"Dependency requirement file is too large: {self._relative(target)}")
+        try:
+            lines = target.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            raise SafetyError("Dependency requirement file must be UTF-8 text") from exc
+
+        blocked_prefixes = (
+            "-e ",
+            "--editable ",
+            "-r ",
+            "--requirement ",
+            "-c ",
+            "--constraint ",
+            "--index-url",
+            "--extra-index-url",
+            "--trusted-host",
+            "--find-links",
+            "--no-binary",
+        )
+        blocked_fragments = (
+            "http://",
+            "https://",
+            "ftp://",
+            "file://",
+            "git+",
+            "hg+",
+            "svn+",
+            "bzr+",
+            "ssh://",
+        )
+        for line_number, raw_line in enumerate(lines, 1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            lowered = line.casefold()
+            if lowered.startswith(blocked_prefixes):
+                raise SafetyError(
+                    f"Unsafe dependency directive in {self._relative(target)}:{line_number}"
+                )
+            if any(fragment in lowered for fragment in blocked_fragments) or " @ " in lowered:
+                raise SafetyError(
+                    f"Direct dependency source is blocked in {self._relative(target)}:{line_number}"
+                )
+            if line.startswith(("/", "./", "../", "~")):
+                raise SafetyError(
+                    f"Local dependency path is blocked in {self._relative(target)}:{line_number}"
+                )
+
     def _validate_dependency_files(self, argv: tuple[str, ...]) -> None:
         executable = Path(argv[0]).name.lower()
-        lowered = tuple(token.lower() for token in argv)
         if executable in {"python", "python3"}:
             args = argv[4:]
         elif executable in {"pip", "pip3"}:
@@ -164,6 +213,7 @@ class Workspace:
                     target = self.paths.resolve(args[index + 1], allow_missing=False)
                     if not target.is_file():
                         raise SafetyError(f"Dependency requirement is not a file: {args[index + 1]}")
+                    self._validate_python_requirement_file(target)
                     return
             raise SafetyError("Safe pip installation requires a repository requirement file")
 
