@@ -24,7 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: Apply accuracy hardening
-        run: python .devagent-v040-accuracy-hardening.py
+        run: |
+          python .devagent-v040-accuracy-hardening.py
+          python .devagent-v040-wording-fix.py
 
       - name: Install development package
         run: |
