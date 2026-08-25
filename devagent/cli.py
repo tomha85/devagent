@@ -14,7 +14,7 @@ from devagent.config import ProviderConfig, config_path, load_config, save_confi
 from devagent.models import Outcome, SourceControlResult, jsonable
 from devagent.providers import ProviderError, create_provider
 from devagent.safety import is_secret_path
-from devagent.source_control import publish_verified_branch
+from devagent.source_control import PublicationPlan, prepare_publication, publish_verified_branch
 from devagent.technical_review import analyze_developer_review
 
 
@@ -41,7 +41,7 @@ def _top_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--publish-branch",
-        help="New branch name to commit and push after a VERIFIED report",
+        help="Explicitly start a new branch for the VERIFIED result",
     )
     parser.add_argument(
         "--publish-remote",
@@ -169,6 +169,14 @@ def _run(argv: Sequence[str]) -> int:
         if publish_requested and args.no_isolation:
             raise ValueError("Automatic branch publishing requires isolation; use isolation or add --no-publish")
 
+        publication_plan: PublicationPlan | None = None
+        if publish_requested:
+            publication_plan = prepare_publication(
+                args.repo,
+                explicit_branch=args.publish_branch,
+                remote=args.publish_remote,
+            )
+
         configured = load_config()
         selected_provider = args.provider or configured.provider
         if args.provider and args.provider != configured.provider:
@@ -191,11 +199,16 @@ def _run(argv: Sequence[str]) -> int:
             isolate=not args.no_isolation,
             verbose=args.verbose,
             status=print,
+            base_commit=publication_plan.base_commit if publication_plan else None,
         ).run(args.repo, requirement)
 
         result.developer_review = analyze_developer_review(result.working_root, result.changes.paths)
 
-        target_branch = args.publish_branch or f"devagent/{result.run_id}"
+        target_branch = (
+            args.publish_branch
+            or (publication_plan.branch if publication_plan else None)
+            or f"devagent/{result.run_id}"
+        )
         if publish_requested:
             result.source_control = SourceControlResult(
                 requested=True,
@@ -213,6 +226,10 @@ def _run(argv: Sequence[str]) -> int:
                 result,
                 branch=target_branch,
                 remote=args.publish_remote,
+                mode=publication_plan.mode if publication_plan else "new",
+                expected_remote_head=(
+                    publication_plan.expected_remote_head if publication_plan else None
+                ),
             )
             result.recommendations = recommendations_for(result)
             print(_publication_receipt(result.source_control))

@@ -16,7 +16,7 @@ from devagent.models import (
     VerificationResult,
 )
 from devagent.report import render_report
-from devagent.source_control import publish_verified_branch
+from devagent.source_control import prepare_publication, publish_verified_branch
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -153,3 +153,116 @@ def test_report_includes_failure_detail_recommendation_and_source_control(tmp_pa
     assert "Pushed: NO" in report
     assert "Pull request: NOT CREATED" in report
     assert "Merge: NOT PERFORMED" in report
+
+def test_prepare_publication_continues_current_development_branch(tmp_path: Path) -> None:
+    source, _working, _remote = _repo_with_bare_remote(tmp_path)
+    assert _git(source, "switch", "-c", "feature/calculator").returncode == 0
+    baseline = _git(source, "rev-parse", "HEAD").stdout.strip()
+    assert _git(source, "push", "-u", "origin", "feature/calculator").returncode == 0
+
+    plan = prepare_publication(source)
+
+    assert plan.mode == "continue"
+    assert plan.branch == "feature/calculator"
+    assert plan.base_commit == baseline
+    assert plan.expected_remote_head == baseline
+
+
+def test_prepare_publication_uses_remote_head_when_devagent_branch_is_ahead(tmp_path: Path) -> None:
+    source, _working, remote = _repo_with_bare_remote(tmp_path)
+    assert _git(source, "switch", "-c", "feature/calculator").returncode == 0
+    baseline = _git(source, "rev-parse", "HEAD").stdout.strip()
+    assert _git(source, "push", "-u", "origin", "feature/calculator").returncode == 0
+
+    other = tmp_path / "other"
+    cloned = subprocess.run(
+        ["git", "clone", "--branch", "feature/calculator", str(remote), str(other)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert cloned.returncode == 0
+    assert _git(other, "config", "user.name", "Other Developer").returncode == 0
+    assert _git(other, "config", "user.email", "other@example.com").returncode == 0
+    (other / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\ndef multiply(a, b):\n    return a * b\n",
+        encoding="utf-8",
+    )
+    assert _git(other, "add", "calculator.py").returncode == 0
+    assert _git(other, "commit", "-m", "previous DevAgent result").returncode == 0
+    assert _git(other, "push", "origin", "feature/calculator").returncode == 0
+    remote_head = _git(other, "rev-parse", "HEAD").stdout.strip()
+    assert remote_head != baseline
+
+    plan = prepare_publication(source)
+
+    assert plan.mode == "continue"
+    assert plan.branch == "feature/calculator"
+    assert plan.base_commit == remote_head
+    assert plan.expected_remote_head == remote_head
+    assert _git(source, "rev-parse", "HEAD").stdout.strip() == baseline
+
+
+def test_continue_mode_fast_forward_pushes_same_branch(tmp_path: Path) -> None:
+    source, working, remote = _repo_with_bare_remote(tmp_path)
+    assert _git(source, "switch", "-c", "feature/calculator").returncode == 0
+    baseline = _git(source, "rev-parse", "HEAD").stdout.strip()
+    assert _git(source, "push", "-u", "origin", "feature/calculator").returncode == 0
+    (working / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\ndef multiply(a, b):\n    return a * b\n",
+        encoding="utf-8",
+    )
+    result = _result(source, working)
+    result.repository.git_branch = "feature/calculator"
+    result.repository.git_head = baseline
+
+    publication = publish_verified_branch(
+        result,
+        branch="feature/calculator",
+        mode="continue",
+        expected_remote_head=baseline,
+    )
+
+    assert publication.pushed is True
+    assert publication.committed is True
+    assert publication.error is None
+    remote_head = _git(remote, "rev-parse", "refs/heads/feature/calculator").stdout.strip()
+    assert remote_head == publication.commit
+    parent = _git(remote, "rev-parse", f"{remote_head}^").stdout.strip()
+    assert parent == baseline
+
+
+def test_continue_mode_blocks_when_remote_moves_during_run(tmp_path: Path) -> None:
+    source, working, remote = _repo_with_bare_remote(tmp_path)
+    assert _git(source, "switch", "-c", "feature/calculator").returncode == 0
+    baseline = _git(source, "rev-parse", "HEAD").stdout.strip()
+    assert _git(source, "push", "-u", "origin", "feature/calculator").returncode == 0
+    (working / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\ndef multiply(a, b):\n    return a * b\n",
+        encoding="utf-8",
+    )
+    result = _result(source, working)
+    result.repository.git_branch = "feature/calculator"
+    result.repository.git_head = baseline
+
+    (source / "calculator.py").write_text(
+        "def divide(a, b):\n    return a / b\n\n# concurrent change\n",
+        encoding="utf-8",
+    )
+    assert _git(source, "add", "calculator.py").returncode == 0
+    assert _git(source, "commit", "-m", "concurrent update").returncode == 0
+    assert _git(source, "push", "origin", "feature/calculator").returncode == 0
+    moved = _git(remote, "rev-parse", "refs/heads/feature/calculator").stdout.strip()
+    assert moved != baseline
+
+    publication = publish_verified_branch(
+        result,
+        branch="feature/calculator",
+        mode="continue",
+        expected_remote_head=baseline,
+    )
+
+    assert publication.pushed is False
+    assert publication.committed is False
+    assert publication.error is not None
+    assert "Remote branch changed during run" in publication.error

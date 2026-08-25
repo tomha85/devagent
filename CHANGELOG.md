@@ -6,10 +6,10 @@ All notable changes to DevAgent are documented here.
 
 ### Developer review reporting and verified branch publishing
 
-- Added automatic post-report branch publication for `VERIFIED` runs: DevAgent prints the full engineering review report first, then deterministic harness code commits and pushes the verified change to a new branch.
-- Added `--no-publish` for developers who want a local review-only run; `--publish-branch` can select the new target branch explicitly.
+- Added automatic post-report branch publication for `VERIFIED` runs: DevAgent prints the full engineering review report first, then deterministic harness code commits and pushes the verified change. The current local non-protected development branch is continued by default; `main`, `master`, and `trunk` still cause creation of a new safe branch.
+- Added `--no-publish` for developers who want a local review-only run; `--publish-branch` explicitly starts a new target branch instead of continuing the current development branch.
 - Publishing is performed by deterministic harness code, not by the model or engineering command runner.
-- Publishing requires the default isolated worktree, refuses protected branches such as `main`, `master`, and `trunk`, refuses existing remote branches, stages only reviewed changed paths, creates one commit, and pushes to the selected remote branch.
+- Publishing requires the default isolated worktree, refuses direct publication to `main`, `master`, and `trunk`, supports safe continuation of the current local development branch, stages only reviewed changed paths, creates one commit, re-checks the expected remote HEAD, and uses normal fast-forward push semantics.
 - DevAgent still never creates pull requests or performs merges, rebases, deployments, force pushes, or destructive Git operations.
 - Expanded final reports with an implementation-logic summary first, exact Python function/class/test-symbol inventory, acceptance-criteria evidence, per-command verification phase/revision/exit code/duration/test counts, failure classifications, bounded stdout/stderr for failed checks, independent-review details, completeness assessment, and deterministic recommendations.
 - Added a post-report source-control publication receipt with remote, branch, commit SHA, commit status, push status, and any publication error.

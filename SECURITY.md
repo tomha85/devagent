@@ -33,7 +33,7 @@ Reports are especially important when they involve:
 - destructive Git operations,
 - publication before the engineering report is emitted,
 - publication of a non-`VERIFIED` run,
-- publication to protected or pre-existing remote branches,
+- publication to protected, unexpected, or diverged remote branches,
 - pull-request, merge, rebase, force-push, or deploy automation,
 - staging paths that were not part of the reviewed verified change,
 - modification of pre-existing dirty developer files,
@@ -46,7 +46,7 @@ Reports are especially important when they involve:
 
 DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a bounded publication boundary.
 
-Engineering/model-facing command execution continues to block Git write operations. For a normal isolated run, DevAgent prints the complete engineering review report first. Only after that report is emitted may the separate deterministic publication path commit and push a `VERIFIED` result to a new non-protected branch. The publication path stages only reviewed changed paths and refuses `main`, `master`, `trunk`, or an already-existing target branch. Developers can disable publication with `--no-publish`.
+Engineering/model-facing command execution continues to block Git write operations. For a normal isolated run, DevAgent prints the complete engineering review report first. Only after that report is emitted may the separate deterministic publication path commit and push a `VERIFIED` result. A current local non-protected development branch may be continued, but its remote HEAD is captured before model execution and checked again before publication; diverged or unexpectedly moved branches are blocked. When the developer is on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead of publishing to the protected branch. The publication path stages only reviewed changed paths and uses normal fast-forward push semantics without force push. Developers can disable publication with `--no-publish`.
 
 DevAgent does not create pull requests or perform merges, rebases, force pushes, or deployments.
 

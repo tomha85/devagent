@@ -18,6 +18,7 @@ from devagent.models import (
     TaskSpec,
     TaskType,
 )
+from devagent.source_control import PublicationPlan
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -93,6 +94,16 @@ def _patch_engineering_run(
     )
     monkeypatch.setattr("devagent.cli.create_provider", lambda _config: object())
     monkeypatch.setattr(
+        "devagent.cli.prepare_publication",
+        lambda _repo, *, explicit_branch=None, remote="origin": PublicationPlan(
+            mode="new",
+            remote=remote,
+            branch=explicit_branch,
+            base_commit="baseline",
+            expected_remote_head=None,
+        ),
+    )
+    monkeypatch.setattr(
         "devagent.cli.analyze_developer_review",
         lambda _root, _paths: DeveloperReviewEvidence(),
     )
@@ -128,6 +139,8 @@ def test_verified_run_prints_report_before_automatic_publish(
         *,
         branch: str | None = None,
         remote: str = "origin",
+        mode: str = "new",
+        expected_remote_head: str | None = None,
     ) -> SourceControlResult:
         events.append("publish")
         return SourceControlResult(
@@ -175,3 +188,63 @@ def test_no_publish_keeps_verified_run_local(
     assert "FULL ENGINEERING REPORT" in output
     assert "SOURCE CONTROL PUBLICATION RECEIPT" not in output
     assert result.source_control.requested is False
+
+def test_current_local_development_branch_is_continued_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events: list[str] = []
+    repo, result = _patch_engineering_run(tmp_path, monkeypatch, events)
+    result.repository.git_branch = "feature/calculator"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "devagent.cli.prepare_publication",
+        lambda _repo, *, explicit_branch=None, remote="origin": PublicationPlan(
+            mode="continue",
+            remote=remote,
+            branch="feature/calculator",
+            base_commit="remote123",
+            expected_remote_head="remote123",
+        ),
+    )
+
+    def fake_publish(
+        _result: RunResult,
+        *,
+        branch: str | None = None,
+        remote: str = "origin",
+        mode: str = "new",
+        expected_remote_head: str | None = None,
+    ) -> SourceControlResult:
+        events.append("publish")
+        captured.update(
+            branch=branch,
+            remote=remote,
+            mode=mode,
+            expected_remote_head=expected_remote_head,
+        )
+        return SourceControlResult(
+            requested=True,
+            remote=remote,
+            branch=branch,
+            commit="next456",
+            committed=True,
+            pushed=True,
+        )
+
+    monkeypatch.setattr("devagent.cli.publish_verified_branch", fake_publish)
+
+    assert main(["--repo", str(repo), "Add addition support"]) == 0
+
+    output = capsys.readouterr().out
+    assert events == ["run", "report", "publish"]
+    assert captured == {
+        "branch": "feature/calculator",
+        "remote": "origin",
+        "mode": "continue",
+        "expected_remote_head": "remote123",
+    }
+    assert "Branch: feature/calculator" in output
+    assert "Status: PUSHED" in output

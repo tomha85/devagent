@@ -5,7 +5,7 @@
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
 [![Production CI](https://github.com/tomha85/devagent/actions/workflows/ci.yml/badge.svg)](https://github.com/tomha85/devagent/actions/workflows/ci.yml)
 
-**A local, evidence-driven software engineering agent that turns a requirement into a tested, independently reviewed patch, prints a developer-grade engineering report, then automatically commits and pushes a `VERIFIED` result to a new branch — without creating a PR or merging code.**
+**A local, evidence-driven software engineering agent that turns a requirement into a tested, independently reviewed patch, prints a developer-grade engineering report, then automatically commits and fast-forward pushes a `VERIFIED` result to the developer's current local branch — creating a new safe branch only when starting from `main`, `master`, or `trunk` — without creating a PR or merging code.**
 
 DevAgent runs against a local repository. It discovers the application, gathers source evidence, compiles acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, reviews the final diff, prints a detailed engineering review report, and only then performs bounded source-control publication when the result is `VERIFIED`.
 
@@ -29,7 +29,7 @@ Core principles:
 - **Independent review** — the final diff is reviewed separately from implementation.
 - **Developer-grade reporting** — the report begins with implementation logic, then lists exact changed symbols, tests, acceptance evidence, failures, gaps, and completeness.
 - **Provider choice** — OpenAI, Anthropic/Claude, xAI/Grok, and OpenAI-compatible local endpoints.
-- **Bounded automatic publishing** — after the report, only a `VERIFIED` result may be committed and pushed, only to a new non-protected branch, and only from the isolated worktree.
+- **Bounded automatic publishing** — after the report, only a `VERIFIED` result may be committed and fast-forward pushed from the isolated worktree; normal development branches continue in place, while protected branches cause DevAgent to create a new safe branch.
 - **Review-only escape hatch** — `--no-publish` disables commit/push when the developer wants to inspect locally first.
 - **No PR or merge automation** — DevAgent never creates PRs, merges, rebases, force-pushes, or deploys.
 - **Evidence-backed outcomes** — final status is `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED`.
@@ -107,24 +107,25 @@ implement and verify
         ↓
 print the full engineering review report
         ↓
-create a new DevAgent branch
+continue the current local development branch
+(or create a new DevAgent branch from main/master/trunk)
         ↓
 commit only reviewed changed paths
         ↓
-push the new branch to origin
+fast-forward push that branch to origin
         ↓
 print a source-control publication receipt
         ↓
 STOP — no PR, no merge
 ```
 
-The default branch is unique per run, for example:
+By default, DevAgent treats the developer's current local Git branch as the working branch. Repeated prompts continue that same non-protected branch. If the developer is on `main`, `master`, or `trunk`, DevAgent creates a unique safe branch such as:
 
 ```text
 devagent/20260825T020000Z-ab12cd
 ```
 
-To choose the new branch name explicitly:
+To explicitly start a new branch instead of continuing the current development branch:
 
 ```bash
 devagent \
@@ -146,9 +147,11 @@ Automatic publication is intentionally narrow:
 - the engineering report is emitted before any commit or push,
 - the run must finish `VERIFIED`,
 - the default isolated worktree must be active,
-- the target branch must be new and cannot be `main`, `master`, or `trunk`,
+- `main`, `master`, and `trunk` are never publication targets; DevAgent creates a new safe branch when started there,
+- an existing branch may be continued only when it is the developer's current local non-protected branch and its remote history is compatible,
+- remote branch state is captured before model execution and checked again before publication,
 - only reviewed changed paths are staged,
-- one commit is created and pushed to the selected remote,
+- one commit is created and pushed with normal fast-forward Git semantics; no force push is used,
 - no pull request is created,
 - no merge, rebase, force push, or deployment is performed.
 
@@ -212,7 +215,7 @@ LEARN
   ↓
 REPORT
   ↓
-IF VERIFIED: COMMIT + PUSH NEW BRANCH
+IF VERIFIED: COMMIT + FAST-FORWARD PUSH WORKING BRANCH
   ↓
 STOP
 ```
