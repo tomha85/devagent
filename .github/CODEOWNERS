@@ -1,0 +1,5 @@
+# DevAgent repository ownership
+# When GitHub code-owner review is required for the protected `main` branch,
+# every change must be reviewed by the project owner before merge.
+
+* @tomha85
