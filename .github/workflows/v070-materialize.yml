@@ -1,0 +1,41 @@
+name: v0.7 one-time materializer
+
+on:
+  push:
+    branches: [feat/v070-engineering-breadth]
+    paths:
+      - scripts/materialize_v070.py
+      - .github/workflows/v070-materialize.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v070-materializer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/v070-engineering-breadth
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Materialize final v0.7 candidate
+        run: python scripts/materialize_v070.py
+
+      - name: Verify generated commit is clean
+        run: git status --short
+
+      - name: Push final candidate
+        run: git push origin HEAD:feat/v070-engineering-breadth
