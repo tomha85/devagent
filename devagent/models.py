@@ -219,6 +219,19 @@ class ChangeMetrics:
 
 
 @dataclass
+class SourceControlResult:
+    requested: bool = False
+    remote: str | None = None
+    branch: str | None = None
+    commit: str | None = None
+    committed: bool = False
+    pushed: bool = False
+    error: str | None = None
+    pull_request_created: bool = False
+    merged: bool = False
+
+
+@dataclass
 class RunResult:
     outcome: Outcome
     task: TaskSpec
@@ -234,6 +247,7 @@ class RunResult:
     recommendations: list[str]
     state_history: list[AgentState]
     working_root: str
+    source_control: SourceControlResult = field(default_factory=SourceControlResult)
 
 
 def jsonable(value: Any) -> Any:
