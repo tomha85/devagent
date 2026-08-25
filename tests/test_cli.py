@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from devagent import __version__
-from devagent.cli import main
+from devagent.cli import _read_requirement_file, main
 from devagent.config import ProviderConfig
 from devagent.models import (
     ChangeMetrics,
@@ -40,6 +40,76 @@ def test_setup_and_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsy
 def test_status_without_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["status", "--repo", str(tmp_path)]) == 0
     assert "No DevAgent runs" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["requirement.md", "requirement.txt", "requirement.yaml", "requirement.custom", "requirement"],
+)
+def test_requirement_file_extension_is_unrestricted(tmp_path: Path, filename: str) -> None:
+    requirement = tmp_path / filename
+    requirement.write_text("Add CSV export and preserve existing behavior.\n", encoding="utf-8")
+
+    assert _read_requirement_file(requirement) == "Add CSV export and preserve existing behavior."
+
+
+def test_requirement_file_accepts_relative_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    requirement = specs / "customer.requirement"
+    requirement.write_text("Fix reconnect handling.\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert _read_requirement_file(Path("specs/customer.requirement")) == "Fix reconnect handling."
+
+
+def test_requirement_file_accepts_home_relative_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    requirement = tmp_path / "task"
+    requirement.write_text("Add report filtering.\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert _read_requirement_file(Path("~/task")) == "Add report filtering."
+
+
+def test_requirement_file_rejects_binary_content(tmp_path: Path) -> None:
+    requirement = tmp_path / "requirement.anything"
+    requirement.write_bytes(b"Add feature\x00binary")
+
+    with pytest.raises(ValueError, match="appears to be binary"):
+        _read_requirement_file(requirement)
+
+
+def test_requirement_file_rejects_invalid_utf8(tmp_path: Path) -> None:
+    requirement = tmp_path / "requirement.data"
+    requirement.write_bytes(b"\xff\xfe\xfd")
+
+    with pytest.raises(ValueError, match="readable UTF-8 text"):
+        _read_requirement_file(requirement)
+
+
+def test_requirement_file_rejects_sensitive_path(tmp_path: Path) -> None:
+    requirement = tmp_path / ".env"
+    requirement.write_text("not a requirement", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sensitive input file"):
+        _read_requirement_file(requirement)
+
+
+def test_requirement_file_is_bounded(tmp_path: Path) -> None:
+    requirement = tmp_path / "large.spec"
+    requirement.write_bytes(b"x" * 2_000_001)
+
+    with pytest.raises(ValueError, match="exceeds 2000000 bytes"):
+        _read_requirement_file(requirement)
+
+
+def test_help_describes_unrestricted_input_path(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(["--help"])
+    assert raised.value.code == 0
+    output = capsys.readouterr().out
+    assert "--input PATH" in output
+    assert "extension is unrestricted" in output
 
 
 def _verified_result(repo: Path, run_dir: Path) -> RunResult:
@@ -188,6 +258,7 @@ def test_no_publish_keeps_verified_run_local(
     assert "FULL ENGINEERING REPORT" in output
     assert "SOURCE CONTROL PUBLICATION RECEIPT" not in output
     assert result.source_control.requested is False
+
 
 def test_current_local_development_branch_is_continued_by_default(
     tmp_path: Path,
