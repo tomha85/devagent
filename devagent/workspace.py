@@ -146,10 +146,15 @@ class Workspace:
         self.modified_paths.add(self._relative(target))
         self.artifacts.record("text_replaced", path=path, count=count, revision=self.revision)
 
+    def _reject_structural_symlinks(self, path: str) -> None:
+        lexical = self.root
+        for part in Path(path).parts:
+            lexical = lexical / part
+            if lexical.is_symlink():
+                raise SafetyError(f"Structural file operations do not follow symlinks: {path}")
+
     def _structural_file(self, path: str) -> Path:
-        lexical = self.root / path
-        if lexical.is_symlink():
-            raise SafetyError(f"Structural file operations do not follow symlinks: {path}")
+        self._reject_structural_symlinks(path)
         target = self._writable(path)
         if not target.exists() or not target.is_file():
             raise SafetyError(f"Structural operation requires an existing regular file: {path}")
@@ -168,9 +173,7 @@ class Workspace:
     def move_file(self, source: str, destination: str, *, operation: str = "move") -> None:
         """Move/rename one planned regular file without overwriting existing content."""
         source_target = self._structural_file(source)
-        destination_lexical = self.root / destination
-        if destination_lexical.is_symlink():
-            raise SafetyError(f"Structural destination cannot be a symlink: {destination}")
+        self._reject_structural_symlinks(destination)
         destination_target = self._writable(destination)
         source_relative = self._relative(source_target)
         destination_relative = self._relative(destination_target)

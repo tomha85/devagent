@@ -72,6 +72,27 @@ def test_structural_operations_protect_dirty_files_and_path_escape(tmp_path: Pat
         workspace.move_file("safe.py", "../escape.py")
 
 
+def test_structural_operations_reject_symlinked_parent_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "source.txt").write_text("payload\n", encoding="utf-8")
+    linked = tmp_path / "linked"
+    try:
+        linked.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+    workspace, _artifacts = _workspace(tmp_path)
+
+    with pytest.raises(SafetyError, match="do not follow symlinks"):
+        workspace.delete_file("linked/source.txt")
+    with pytest.raises(SafetyError, match="do not follow symlinks"):
+        workspace.move_file("real/source.txt", "linked/destination.txt")
+
+
+
 def test_structural_operations_reject_directories_and_symlinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEVAGENT_SANDBOX", "off")
     directory = tmp_path / "directory"

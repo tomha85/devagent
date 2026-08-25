@@ -21,7 +21,9 @@
     "real_stack",
     "release_integrity",
     "large_repo",
-    "realworld_benchmark"
+    "realworld_benchmark",
+    "structural_operations",
+    "migration_runtime"
   ],
   "cases": [
     {
@@ -395,6 +397,54 @@
       "category": "source_control_safety",
       "pytest_node": "tests/test_source_control_publish.py::test_publication_disables_repository_git_hooks",
       "expected": "PASS"
+    },
+    {
+      "id": "structured-structural-tools",
+      "category": "structural_operations",
+      "pytest_node": "tests/test_v070_engineering_breadth.py::test_structural_actions_are_first_class_strict_provider_contract",
+      "expected": "PASS"
+    },
+    {
+      "id": "structural-refactor-e2e",
+      "category": "structural_operations",
+      "pytest_node": "tests/test_structural_devagent_e2e_v070.py::test_structural_rename_delete_refactor_is_verified_end_to_end",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "java-gradle-discovery",
+      "category": "real_stack",
+      "pytest_node": "tests/test_v070_engineering_breadth.py::test_maven_and_gradle_kotlin_dsl_are_first_class_java_capabilities",
+      "expected": "PASS"
+    },
+    {
+      "id": "dotnet-project-solution-discovery",
+      "category": "real_stack",
+      "pytest_node": "tests/test_v070_engineering_breadth.py::test_dotnet_project_and_solution_discovery_is_first_class",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-java-maven",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_java_maven_stack_is_discovered_and_executes",
+      "expected": "PASS"
+    },
+    {
+      "id": "real-stack-dotnet-build",
+      "category": "real_stack",
+      "pytest_node": "tests/test_multistack_qualification.py::test_dotnet_stack_is_discovered_and_executes_build",
+      "expected": "PASS"
+    },
+    {
+      "id": "sqlite-migration-forward-rollback",
+      "category": "migration_runtime",
+      "pytest_node": "tests/test_migration_e2e_v070.py::test_sqlite_migration_forward_rollback_and_existing_state_are_verified",
+      "expected": "VERIFIED"
+    },
+    {
+      "id": "huge-monorepo-deep-manifest",
+      "category": "large_repo",
+      "pytest_node": "tests/test_huge_monorepo_v070.py::test_deep_dotnet_manifest_is_recovered_beyond_12000_file_walk_frontier",
+      "expected": "deep tracked manifest remains discoverable beyond bounded walk frontier"
     }
   ]
 }
