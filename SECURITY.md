@@ -21,7 +21,7 @@ Include, when possible:
 - reproduction steps,
 - expected versus observed behavior,
 - security impact,
-- whether the issue can escape the target workspace, expose secrets, run an unsafe command, modify protected developer work, or falsely report `VERIFIED`.
+- whether the issue can escape the target workspace, expose secrets, run an unsafe command, modify protected developer work, publish to an unauthorized branch, or falsely report `VERIFIED`.
 
 ## High-priority security areas
 
@@ -31,7 +31,10 @@ Reports are especially important when they involve:
 - secret or credential exposure,
 - unsafe shell or subprocess execution,
 - destructive Git operations,
-- automatic commit, push, merge, rebase, or deploy behavior,
+- model-driven or non-opt-in commit/push behavior,
+- publication to protected or pre-existing remote branches,
+- pull-request, merge, rebase, force-push, or deploy automation,
+- staging paths that were not part of the reviewed verified change,
 - modification of pre-existing dirty developer files,
 - bypass of backup-before-edit guarantees,
 - malicious repository content influencing unsafe tool execution,
@@ -40,9 +43,11 @@ Reports are especially important when they involve:
 
 ## Security model
 
-DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a strict no-publish boundary.
+DevAgent uses defense-in-depth controls, including path confinement, sensitive-path exclusions, bounded command execution, protected dirty files, backups before edits, verification invalidation after modification, and a bounded publication boundary.
 
-These controls reduce risk but do not make DevAgent an operating-system sandbox. Run DevAgent only in environments and repositories you are prepared to inspect, and review the final diff before publishing changes.
+Engineering/model-facing command execution continues to block Git write operations. Optional publication is a separate deterministic post-verification path that requires explicit user intent, a `VERIFIED` outcome, the default isolated worktree, a new non-protected branch, and staging limited to reviewed changed paths. DevAgent does not create pull requests or perform merges, rebases, force pushes, or deployments.
+
+These controls reduce risk but do not make DevAgent an operating-system sandbox. Run DevAgent only in environments and repositories you are prepared to inspect, and review the final report and pushed branch before integrating changes.
 
 ## Disclosure
 
