@@ -24,7 +24,7 @@ def test_delete_file_preserves_backup_and_records_modified_path(tmp_path: Path, 
 
     assert not target.exists()
     assert workspace.modified_paths == {"legacy.py"}
-    assert (artifacts.backup_dir / "legacy.py").read_text(encoding="utf-8") == "legacy = True\n"
+    assert (artifacts.backups / "legacy.py").read_text(encoding="utf-8") == "legacy = True\n"
 
 
 def test_move_file_preserves_backup_and_refuses_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,7 +39,7 @@ def test_move_file_preserves_backup_and_refuses_overwrite(tmp_path: Path, monkey
     assert not source.exists()
     assert (tmp_path / "new" / "service.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert workspace.modified_paths == {"old/service.py", "new/service.py"}
-    assert (artifacts.backup_dir / "old" / "service.py").is_file()
+    assert (artifacts.backups / "old" / "service.py").is_file()
 
     collision = tmp_path / "collision.py"
     collision.write_text("keep\n", encoding="utf-8")
@@ -90,7 +90,6 @@ def test_structural_operations_reject_symlinked_parent_directories(
         workspace.delete_file("linked/source.txt")
     with pytest.raises(SafetyError, match="do not follow symlinks"):
         workspace.move_file("real/source.txt", "linked/destination.txt")
-
 
 
 def test_structural_operations_reject_directories_and_symlinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
