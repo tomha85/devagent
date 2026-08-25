@@ -160,6 +160,20 @@ def test_developer_report_explains_why_symbols_tests_acceptance_and_completeness
     report = render_report(result)
 
     assert "DEVAGENT ENGINEERING REVIEW REPORT" in report
+    assert "IMPLEMENTATION LOGIC SUMMARY" in report
+    assert report.index("IMPLEMENTATION LOGIC SUMMARY") < report.index("TASK")
+    assert "Problem / design gap: The calculator has division support but no multiplication API." in report
+    assert "Chosen implementation logic:" in report
+    assert "Add multiply(a, b) without changing divide behavior" in report
+    assert "Code-level effect:" in report
+    assert "ADDED function multiply" in report
+    assert "Test / verification logic:" in report
+    assert "ADDED test test_multiply_positive" in report
+    assert "Preserved behavior / scope constraints:" in report
+    assert "Existing divide behavior remains covered" in report
+    assert "Why this result is considered sufficient / insufficient:" in report
+    assert "Required acceptance evidence: 2/2" in report
+    assert "Outcome decision: VERIFIED" in report
     assert "WHY THIS CHANGE" in report
     assert "FUNCTIONS / CLASSES / SYMBOLS CHANGED" in report
     assert "ADDED | function | calculator.py" in report
