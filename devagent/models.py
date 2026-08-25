@@ -186,6 +186,19 @@ class EngineeringPlan:
     verification: list[tuple[str, ...]]
     rationale: str
 
+    def __post_init__(self) -> None:
+        # A path-scoped `git diff -- <paths...>` is planner inspection, not a
+        # repository verification capability. DevAgent already captures and
+        # independently reviews the final diff. Keeping this command in the
+        # executable verification plan makes an otherwise valid plan fail the
+        # evidence-backed command allowlist before implementation can begin.
+        # Preserve real Git verification such as `git diff --check`.
+        self.verification = [
+            command
+            for command in self.verification
+            if not (len(command) > 3 and command[:3] == ("git", "diff", "--"))
+        ]
+
 
 _PRESERVATION_PATTERNS = (
     re.compile(r"\bpreserv(?:e|es|ed|ing)\s+(?:the\s+)?existing\s+([^.;\n]+)", re.IGNORECASE),
