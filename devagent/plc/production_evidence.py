@@ -5,6 +5,18 @@ from devagent.plc.production_models import EngineeringFinding, EvidenceItem, Sev
 from devagent.plc.rockwell_closeout import rockwell_capability_profile
 
 
+def _logic_paths_payload(logic) -> list[list[dict[str, object]]]:
+    """Serialize deterministic Boolean path terms into auditable evidence."""
+
+    return [
+        [
+            {"tag": term.tag, "required": term.required}
+            for term in path.terms
+        ]
+        for path in logic.paths
+    ]
+
+
 def evidence_index(engineering) -> list[EvidenceItem]:
     project = engineering.project
     capability = rockwell_capability_profile(project)
@@ -60,7 +72,13 @@ def evidence_index(engineering) -> list[EvidenceItem]:
             f"{logic.source.locator}: {logic.output_tag} via {logic.instruction} ({len(logic.paths)} modeled path(s))",
             logic.source.locator,
             project.metadata.source_sha256,
-            {"output_tag": logic.output_tag, "instruction": logic.instruction, "origin": logic.origin},
+            {
+                "output_tag": logic.output_tag,
+                "instruction": logic.instruction,
+                "origin": logic.origin,
+                "semantic_state": logic.semantic_state.value,
+                "paths": _logic_paths_payload(logic),
+            },
         ))
     for check in engineering.static_checks:
         evidence_id = f"CHECK:{check.id}"
