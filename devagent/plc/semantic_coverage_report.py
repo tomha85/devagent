@@ -16,6 +16,8 @@ def render_semantic_coverage_section(project) -> str:
     inventory = manifest["inventory"]
     summary = manifest["instruction_summary"]
     languages = manifest["language_summary"]
+    action = manifest["action_semantics"]
+    stateful = manifest["stateful_runtime_semantics"]
     boundaries = manifest["project_boundaries"]
     warnings = boundaries["warnings"]
     st = languages["structured_text"]
@@ -25,7 +27,7 @@ def render_semantic_coverage_section(project) -> str:
     lines = [
         "## Semantic Coverage / Proof Boundary",
         "",
-        "> This section separates deterministic behavior proof from structural parsing. Structural read/write/call recognition is not a behavioral PASS.",
+        "> This section separates deterministic behavior proof from structural parsing and runtime-required semantics. Structural recognition is not a behavioral PASS.",
         "",
         "### Project Inventory",
         "",
@@ -50,6 +52,10 @@ def render_semantic_coverage_section(project) -> str:
         f"- Program RLL unmodeled instruction occurrences: **{summary['unmodeled_occurrences']}** ({_pct(summary['unmodeled_pct'])})",
         f"- Deterministic Boolean RLL rungs: **{rll['deterministic_boolean_rungs']}**/{rll['program_rungs']}",
         f"- Bounded typed-compare RLL rungs: **{rll['bounded_compare_rungs']}**",
+        f"- Bounded data/compute action RLL rungs: **{rll['bounded_action_rungs']}**",
+        f"- Bounded action occurrences: **{action['modeled_actions']}** across **{action['modeled_rungs']}** rung(s)",
+        f"- Stateful timer/counter runtime models: **{stateful['modeled_occurrences']}**",
+        f"- Stateful runtime evidence required: **{'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}**",
         f"- ST statements discovered: **{st['statements']}**",
         f"- Reachable FULL ST dataflow: **{st['reachable_full_dataflow_statements']}**/{st['statements']} ({_pct(st['reachable_full_dataflow_pct'])})",
         f"- ST partial/unreachable: **{st['partial_or_unreachable_statements']}**",
