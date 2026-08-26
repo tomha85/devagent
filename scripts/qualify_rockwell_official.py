@@ -110,53 +110,67 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         raise RuntimeError(f"Unexpected processor type: {project.metadata.processor_type}")
     if project.metadata.software_revision != "36.00":
         raise RuntimeError(f"Unexpected Studio 5000 revision: {project.metadata.software_revision}")
+    if project.metadata.major_fault_program != "PXX_FaultHandler":
+        raise RuntimeError(
+            "Official controller MajorFaultProgram entrypoint drifted: "
+            f"expected PXX_FaultHandler, got {project.metadata.major_fault_program!r}"
+        )
     if not project.metadata.full_project:
         raise RuntimeError("Official Rockwell qualification artifact was not accepted as a full project")
     if project.metadata.source_sha256 != source_sha256:
         raise RuntimeError("Analyzer source SHA-256 does not match downloaded official artifact")
 
-    # Instruction-level directional semantics are a hard regression gate for
-    # this official sample. Branch-path proofs are intentionally narrower: the
-    # sample contains mixed-action branches (GSV/MOVE/CLR/SSV/OTE) that are not
-    # part of DevAgent's bounded Boolean branch theorem. Those branches must be
-    # reported as explicit fail-closed gaps rather than promoted to VERIFIED.
-    if project.instruction_semantic_count != project.instruction_total:
+    # The pinned bytes are a golden regression artifact. Both what is modeled
+    # and what is deliberately withheld are part of the contract: silently
+    # dropping branch support or falsely promoting mixed-action branches must
+    # fail the release-triggering qualification.
+    if project.instruction_semantic_count != 49:
         raise RuntimeError(
             "Official L85E instruction semantic coverage regressed: "
             f"{project.instruction_semantic_count}/{project.instruction_total}"
         )
-    if not 0 < project.branch_rung_semantic_count <= project.branch_rung_total:
+    if project.branch_rung_semantic_count != 1 or project.branch_rung_total != 8:
         raise RuntimeError(
-            "Official L85E branch semantic accounting is invalid: "
+            "Official L85E bounded branch profile drifted: expected 1 modeled / 7 unmodeled of 8, got "
             f"{project.branch_rung_semantic_count}/{project.branch_rung_total}"
         )
 
-    unmodeled_branches = project.branch_rung_total - project.branch_rung_semantic_count
-    if profile["static_gaps"].get("unmodeled_branches") != unmodeled_branches:
+    expected_static_gaps = {
+        "unsupported_routines": 0,
+        "protected_routines": 0,
+        "protected_aois": 0,
+        "unknown_instructions": 0,
+        "partial_instructions": 0,
+        "unmodeled_branches": 7,
+        "unmodeled_st_statements": 0,
+        "unmodeled_aoi_bodies": 0,
+        "unbound_aoi_calls": 0,
+        "indirect_rungs": 0,
+        "no_supported_logic": 0,
+        "dangling_aliases": 0,
+        "alias_cycles": 0,
+        "execution_structure_warnings": 0,
+        "scheduled_programs_without_main_routine": 0,
+        "unscheduled_executable_programs": 0,
+        "unmodeled_compare_rungs": 0,
+    }
+    if profile.get("static_gaps") != expected_static_gaps:
         raise RuntimeError(
-            "Official L85E capability profile branch gap disagrees with canonical IR: "
-            f"expected {unmodeled_branches}, got {profile['static_gaps'].get('unmodeled_branches')}"
+            "Official L85E complete fail-closed support-gap profile drifted: expected "
+            + json.dumps(expected_static_gaps, sort_keys=True)
+            + ", got "
+            + json.dumps(profile.get("static_gaps"), sort_keys=True)
         )
-
-    if unmodeled_branches:
-        if profile["static_contract"] != "PARTIAL_FAIL_CLOSED":
-            raise RuntimeError(
-                "Official L85E contains unmodeled branches and must remain PARTIAL_FAIL_CLOSED; got "
-                f"{profile['static_contract']}"
-            )
-        if engineering.outcome.value != "PARTIALLY_VERIFIED":
-            raise RuntimeError(
-                "Official L85E unmodeled branches must withhold full static verification; got "
-                f"{engineering.outcome.value}"
-            )
-    else:
-        if profile["static_contract"] != "COMPLETE":
-            raise RuntimeError(
-                "Official L85E has no static gaps but support contract is not COMPLETE: "
-                + json.dumps(profile["static_gaps"], sort_keys=True)
-            )
-        if engineering.outcome.value != "STATICALLY_VERIFIED":
-            raise RuntimeError(f"Official L85E static outcome regressed to {engineering.outcome.value}")
+    if profile["static_contract"] != "PARTIAL_FAIL_CLOSED":
+        raise RuntimeError(
+            "Official L85E contains seven unmodeled mixed-action branches and must remain PARTIAL_FAIL_CLOSED; got "
+            f"{profile['static_contract']}"
+        )
+    if engineering.outcome.value != "PARTIALLY_VERIFIED":
+        raise RuntimeError(
+            "Official L85E unmodeled branches must withhold full static verification; got "
+            f"{engineering.outcome.value}"
+        )
 
     if len(engineering.fat_tests) < 6:
         raise RuntimeError(
@@ -180,12 +194,14 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         "controller": project.metadata.controller_name,
         "processor_type": project.metadata.processor_type,
         "software_revision": project.metadata.software_revision,
+        "major_fault_program": project.metadata.major_fault_program,
         "source_sha256": source_sha256,
         "inventory": actual_inventory,
         "instruction_semantic_coverage": project.instruction_semantic_coverage,
         "branch_semantic_coverage": project.branch_semantic_coverage,
         "branch_modeled": project.branch_rung_semantic_count,
-        "branch_unmodeled": unmodeled_branches,
+        "branch_unmodeled": 7,
+        "static_gaps": profile["static_gaps"],
         "fat_candidates": len(engineering.fat_tests),
         "static_outcome": engineering.outcome.value,
         "support_contract": profile["static_contract"],
