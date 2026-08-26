@@ -1,34 +1,57 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from devagent.plc.analysis import analyze_rockwell_l5x
+from devagent.config import ProviderConfig, load_config, provider_defaults
 from devagent.plc.models import PLCOutcome, plc_jsonable
-from devagent.plc.report import render_fat_report
+from devagent.plc.production import run_production_verification, compute_requirements_sha256, compute_test_plan_sha256
+from devagent.plc.production_models import ReadinessStatus
+from devagent.plc.production_report import render_production_report
 from devagent.plc.rockwell_l5x import L5XError
+from devagent.providers import ProviderError, create_provider
+
+_STAGE_NAMES = (
+    "PROJECT VALIDATION",
+    "CANONICAL PLC IR",
+    "LOGIC SEMANTICS",
+    "DEPENDENCY GRAPH",
+    "AI ENGINEERING REVIEW",
+    "REQUIREMENT INGESTION",
+    "REQUIREMENT VERIFICATION",
+    "TEST GENERATION",
+    "TEST EXECUTION",
+    "RISK DETECTION",
+    "OPTIMIZATION REVIEW",
+    "REGRESSION ANALYSIS",
+    "RECOMMENDATIONS",
+    "EVIDENCE + FAT REPORT",
+    "RELEASE READINESS",
+)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent plc",
-        description="Analyze a Rockwell full-project L5X export using deterministic PLC engineering verification",
+        description="Evidence-driven PLC engineering review, requirements verification, FAT, regression, and release-readiness analysis",
     )
     parser.add_argument("project", type=Path, help="Rockwell Studio 5000 full-project .L5X export")
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Write canonical IR, graph, FAT tests, verification evidence, and report here",
-    )
-    parser.add_argument(
-        "--no-write",
-        action="store_true",
-        help="Print the engineering verification report without writing run artifacts",
-    )
+    parser.add_argument("--requirements", action="append", default=[], type=Path, metavar="FILE", help="Requirement artifact (.txt/.md/.csv/.json/.docx; .pdf when pypdf is installed). Repeatable.")
+    parser.add_argument("--baseline", type=Path, help="Previous full-project L5X for semantic regression analysis")
+    parser.add_argument("--execution-results", type=Path, help="JSON execution evidence from an approved simulator/HIL/controller test backend")
+    parser.add_argument("--approval", type=Path, help="JSON human engineering approval bound to the exact project SHA-256")
+    parser.add_argument("--ai", action="store_true", help="Enable evidence-constrained AI engineering review and requirement trace candidates")
+    parser.add_argument("--require-ai", action="store_true", help="Fail the run if requested AI review cannot complete")
+    parser.add_argument("--provider", help="Override configured AI provider for this PLC run")
+    parser.add_argument("--model", help="Override configured AI model for this PLC run")
+    parser.add_argument("--base-url", help="Override OpenAI-compatible base URL for this PLC run")
+    parser.add_argument("--output-dir", type=Path, help="Write the complete evidence/FAT package here")
+    parser.add_argument("--no-write", action="store_true", help="Print the report without writing run artifacts")
     return parser
 
 
@@ -38,48 +61,120 @@ def _default_output_dir(project: Path) -> Path:
 
 
 def _write_json(path: Path, value) -> None:
-    path.write_text(json.dumps(plc_jsonable(value), indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(plc_jsonable(value), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _persist_run(output_dir: Path, result, report: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=False)
-    _write_json(output_dir / "canonical_ir.json", result.project)
-    _write_json(output_dir / "dependency_graph.json", result.graph)
-    _write_json(output_dir / "fat_tests.json", result.fat_tests)
-    _write_json(
-        output_dir / "static_verification.json",
-        {
-            "outcome": result.outcome,
-            "checks": result.static_checks,
-            "limitations": result.limitations,
+    files: dict[str, object | str] = {
+        "canonical_ir.json": result.engineering.project,
+        "dependency_graph.json": result.engineering.graph,
+        "static_verification.json": {"outcome": result.engineering.outcome, "checks": result.engineering.static_checks, "limitations": result.engineering.limitations},
+        "engineering_review.json": result.engineering_findings,
+        "requirements.json": result.requirements,
+        "requirement_verification.json": result.requirement_verification,
+        "fat_tests.json": result.engineering.fat_tests,
+        "execution_plan.json": {
+            "schema": "devagent-plc-execution-plan-v1",
+            "project_sha256": result.engineering.project.metadata.source_sha256,
+            "test_plan_sha256": compute_test_plan_sha256(result.engineering.fat_tests),
+            "requirements_sha256": compute_requirements_sha256(result.requirements),
+            "tests": result.engineering.fat_tests,
         },
-    )
-    (output_dir / "fat_report.md").write_text(report, encoding="utf-8")
+        "test_execution.json": result.executions,
+        "risks.json": result.risks,
+        "optimizations.json": result.optimizations,
+        "regression.json": result.regression_changes,
+        "recommendations.json": result.recommendations,
+        "evidence_manifest.json": {"project_sha256": result.engineering.project.metadata.source_sha256, "items": result.evidence, "warnings": result.warnings},
+        "release_readiness.json": result.readiness,
+        "pipeline_stages.json": result.stages,
+        "fat_report.md": report,
+    }
+    written: list[Path] = []
+    for name, value in files.items():
+        path = output_dir / name
+        if isinstance(value, str):
+            path.write_text(value, encoding="utf-8")
+        else:
+            _write_json(path, value)
+        written.append(path)
+    manifest = {
+        "schema": "devagent-plc-run-v3",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "project_source": result.engineering.project.metadata.source_path,
+        "project_sha256": result.engineering.project.metadata.source_sha256,
+        "ai_provider": result.ai_provider,
+        "ai_model": result.ai_model,
+        "readiness": result.readiness.status.value if result.readiness else "NOT_EVALUATED",
+        "test_plan_sha256": compute_test_plan_sha256(result.engineering.fat_tests),
+        "requirements_sha256": compute_requirements_sha256(result.requirements),
+        "artifacts": {path.name: _sha256(path) for path in written},
+    }
+    _write_json(output_dir / "run_manifest.json", manifest)
+
+
+def _provider_from_args(args) -> tuple[object | None, str | None, str | None]:
+    if not args.ai:
+        return None, None, None
+    config = load_config()
+    if args.provider:
+        provider = args.provider.lower()
+        default_model, default_env = provider_defaults(provider)
+        config = ProviderConfig(
+            provider=provider,
+            model=args.model or default_model,
+            base_url=args.base_url,
+            api_key_env=default_env,
+            timeout_seconds=config.timeout_seconds,
+        )
+    else:
+        config = ProviderConfig(
+            provider=config.provider,
+            model=args.model or config.model,
+            base_url=args.base_url or config.base_url,
+            api_key_env=config.api_key_env,
+            timeout_seconds=config.timeout_seconds,
+        )
+    return create_provider(config), config.provider, config.model
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.require_ai:
+        args.ai = True
     try:
+        provider, provider_name, model_name = _provider_from_args(args)
+        result = run_production_verification(
+            args.project,
+            requirement_paths=args.requirements,
+            baseline_path=args.baseline,
+            execution_results_path=args.execution_results,
+            approval_path=args.approval,
+            provider=provider,
+            ai_enabled=args.ai,
+            require_ai=args.require_ai,
+            ai_provider_name=provider_name,
+            ai_model_name=model_name,
+        )
+        report = render_production_report(result)
         print("DevAgent PLC is working...")
-        print("[1/8] ROCKWELL L5X VALIDATION")
-        result = analyze_rockwell_l5x(args.project)
-        print("[2/8] CANONICAL PLC IR")
-        print("[3/8] RLL BRANCH + AOI + ST SEMANTICS")
-        print("[4/8] DEPENDENCY GRAPH")
-        print("[5/8] FAT TEST GENERATION")
-        print("[6/8] STATIC VERIFICATION")
-        print("[7/8] EVIDENCE ASSEMBLY")
-        report = render_fat_report(result)
-        print("[8/8] ENGINEERING VERIFICATION REPORT")
+        for stage in result.stages:
+            print(f"[{stage.number:2d}/15] {stage.name:<26} {stage.status.value}")
+        print("")
         print(report, end="")
-
         if not args.no_write:
             output_dir = args.output_dir.expanduser().resolve(strict=False) if args.output_dir else _default_output_dir(args.project)
             _persist_run(output_dir, result, report)
             print(f"Artifacts: {output_dir}")
-
-        return 0 if result.outcome is PLCOutcome.STATICALLY_VERIFIED else 2
-    except (L5XError, OSError, ValueError) as exc:
+        if result.readiness and result.readiness.status in {ReadinessStatus.READY_FOR_ENGINEERING_APPROVAL, ReadinessStatus.APPROVED_FOR_RELEASE}:
+            return 0
+        return 2
+    except (L5XError, OSError, ValueError, ProviderError) as exc:
         print(f"DevAgent PLC failed: {exc}", file=sys.stderr)
         return 1
 
