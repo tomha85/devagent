@@ -2,7 +2,7 @@ name: Rockwell Production Qualification
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feat/rockwell-*"]
   pull_request:
     branches: [main]
   workflow_dispatch:

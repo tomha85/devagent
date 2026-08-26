@@ -14,15 +14,25 @@ from devagent.plc.rockwell_general_actions import (
     generate_action_fat_tests,
     rockwell_action_check,
 )
+from devagent.plc.rockwell_motion_runtime_v11 import (
+    generate_motion_runtime_fat_tests,
+    motion_runtime_check,
+)
 from devagent.plc.rockwell_standard_catalog import (
     augment_standard_catalog,
     standard_catalog_check,
+)
+from devagent.plc.rockwell_state_machine_v11 import (
+    add_state_machine_edges,
+    generate_state_machine_fat_tests,
+    state_machine_check,
 )
 from devagent.plc.rockwell_stateful_runtime import (
     augment_stateful_semantics,
     generate_stateful_fat_tests,
     stateful_runtime_check,
 )
+from devagent.plc.rockwell_st_case_v11 import augment_st_case_dataflow
 from devagent.plc.rockwell_structure import (
     add_rockwell_structure_edges,
     augment_rockwell_structure,
@@ -144,6 +154,10 @@ def analyze_rockwell_l5x(path):
     augment_rockwell_structure(project)
     augment_compare_instruction_semantics(project)
     enforce_v2_guardrails(project)
+    # V11 may promote only bounded reachable CASE/OF source-level dataflow after
+    # the V2 guardrail has removed ambiguous ST claims. Runtime proof remains a
+    # separate downstream concern.
+    augment_st_case_dataflow(project)
     augment_closeout_semantics(project)
     augment_stateful_semantics(project)
     # Known-standard instruction families should be distinguishable from truly
@@ -155,6 +169,7 @@ def analyze_rockwell_l5x(path):
     add_rockwell_structure_edges(project, graph)
     _add_compare_dependencies(project, graph)
     add_action_dependencies(project, graph)
+    add_state_machine_edges(project, graph)
 
     fat_tests = _base.generate_fat_tests(project)
     known_ids = {item.id for item in fat_tests}
@@ -162,6 +177,8 @@ def analyze_rockwell_l5x(path):
         generate_compare_fat_tests,
         generate_action_fat_tests,
         generate_stateful_fat_tests,
+        generate_motion_runtime_fat_tests,
+        generate_state_machine_fat_tests,
     ):
         for item in generator(project):
             if item.id not in known_ids:
@@ -173,6 +190,8 @@ def analyze_rockwell_l5x(path):
     compare_check = _bounded_compare_check(project)
     action_check = rockwell_action_check(project)
     stateful_check = stateful_runtime_check(project)
+    motion_check = motion_runtime_check(project)
+    state_machine = state_machine_check(project)
     catalog_check = standard_catalog_check(project)
     support_check = rockwell_support_check(project)
     checks.extend((
@@ -180,6 +199,8 @@ def analyze_rockwell_l5x(path):
         compare_check,
         action_check,
         stateful_check,
+        motion_check,
+        state_machine,
         catalog_check,
         support_check,
     ))
@@ -211,6 +232,14 @@ def analyze_rockwell_l5x(path):
     if stateful_check.status is StaticCheckStatus.WARN:
         limitations.append(
             "Timer/counter FAT candidates require qualified runtime evidence for controller time, edge transitions, prescan, and retentive state; static analysis alone cannot mark them PASS."
+        )
+    if motion_check.status is StaticCheckStatus.WARN:
+        limitations.append(
+            "Motion FAT contracts are generated as runtime scenarios only. MAH/MAJ/MCPM/MCS/MCTO/MDCC behavior remains PARTIAL until authenticated qualified Logix Echo/HIL/controller evidence is attached."
+        )
+    if state_machine.status is StaticCheckStatus.WARN:
+        limitations.append(
+            "State-machine transitions discovered on rungs containing behavior outside the bounded compare/MOV grammar remain traceable runtime candidates rather than static PASS claims."
         )
     result.limitations = list(dict.fromkeys(limitations))
     return result
