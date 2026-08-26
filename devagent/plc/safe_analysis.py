@@ -9,6 +9,11 @@ from devagent.plc.rockwell_compare import (
     generate_compare_fat_tests,
     rockwell_compare_check,
 )
+from devagent.plc.rockwell_general_actions import (
+    add_action_dependencies,
+    generate_action_fat_tests,
+    rockwell_action_check,
+)
 from devagent.plc.rockwell_structure import (
     add_rockwell_structure_edges,
     augment_rockwell_structure,
@@ -121,7 +126,7 @@ def _limitations(project, state, compare_check, support_check) -> list[str]:
 
 
 def analyze_rockwell_l5x(path):
-    """Run guarded Rockwell V9 production analysis with fail-closed semantics."""
+    """Run guarded Rockwell production analysis with fail-closed semantics."""
 
     result = _BASE_ANALYZE(path)
     # The base parser records the source hash before later passes re-read the
@@ -135,15 +140,17 @@ def analyze_rockwell_l5x(path):
     # aliases after the base pass without inventing semantics for complex rungs.
     augment_compare_instruction_semantics(project)
     enforce_v2_guardrails(project)
-    # V9 classifies additional Rockwell instruction families as PARTIAL rather
-    # than UNKNOWN. This improves support accounting but never promotes their
-    # semantic coverage or creates proof/FAT by classification alone.
+    # Classify additional Rockwell instruction families as PARTIAL rather than
+    # UNKNOWN. Classification alone never creates behavioral proof/FAT.
     augment_closeout_semantics(project)
 
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
     add_rockwell_structure_edges(project, graph)
     _add_compare_dependencies(project, graph)
+    # Add dependency edges only for action instructions whose complete rung-in
+    # grammar and fixed destination identity are deterministically modeled.
+    add_action_dependencies(project, graph)
 
     fat_tests = _base.generate_fat_tests(project)
     known_ids = {item.id for item in fat_tests}
@@ -151,12 +158,17 @@ def analyze_rockwell_l5x(path):
         if item.id not in known_ids:
             fat_tests.append(item)
             known_ids.add(item.id)
+    for item in generate_action_fat_tests(project):
+        if item.id not in known_ids:
+            fat_tests.append(item)
+            known_ids.add(item.id)
 
     checks = _base.static_verify(project, graph, fat_tests)
     structure_check = rockwell_structure_check(project)
     compare_check = _bounded_compare_check(project)
+    action_check = rockwell_action_check(project)
     support_check = rockwell_support_check(project)
-    checks.extend((structure_check, compare_check, support_check))
+    checks.extend((structure_check, compare_check, action_check, support_check))
     state = _base._coverage_state(project)
     incomplete = (
         any(
@@ -169,6 +181,7 @@ def analyze_rockwell_l5x(path):
         )
         or structure_check.status is not StaticCheckStatus.PASS
         or compare_check.status is not StaticCheckStatus.PASS
+        or action_check.status is not StaticCheckStatus.PASS
         or support_check.status is not StaticCheckStatus.PASS
     )
 
@@ -176,5 +189,10 @@ def analyze_rockwell_l5x(path):
     result.graph = graph
     result.fat_tests = fat_tests
     result.static_checks = checks
-    result.limitations = _limitations(project, state, compare_check, support_check)
+    limitations = _limitations(project, state, compare_check, support_check)
+    if action_check.status is not StaticCheckStatus.PASS:
+        limitations.append(
+            "One or more reachable MOV/MOVE/COP/CPS/CLR/math/CPT/RES rungs contain control semantics or destination addressing outside the bounded action-path theorem; behavioral FAT is withheld for those rungs."
+        )
+    result.limitations = list(dict.fromkeys(limitations))
     return result
