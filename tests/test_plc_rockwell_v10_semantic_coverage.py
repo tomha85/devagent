@@ -94,13 +94,13 @@ def test_manifest_reports_inventory_language_and_project_boundaries_without_over
     assert rll["program_rungs"] == 4
     assert rll["deterministic_boolean_rungs"] == 1
     assert st["statements"] == 1
-    # Sequence is not the program Main routine and is never reached by a JSR.
-    # Parser-level ST recognition is retained, but proof-grade reachable coverage
-    # must fail closed rather than count dead/uninvoked code as understood.
-    assert st["parser_semantic_count"] == 1
+    # Sequence is discovered in the project inventory but is not the Main routine
+    # and is never reached by a JSR. The final semantic state therefore stays
+    # partial/unreachable and must not be reported as parser-level semantic proof.
     assert st["reachable_full_dataflow_statements"] == 0
     assert st["partial_or_unreachable_statements"] == 1
     assert st["reachable_full_dataflow_pct"] == 0.0
+    assert "parser_semantic_count" not in st
     assert aoi["internal_rll_statements"] == 0
     assert aoi["internal_st_statements"] == 0
     assert "MAJ" in boundaries["partially_modeled_instruction_names"]
@@ -131,7 +131,9 @@ def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) 
     assert "| MOV | 1 | STRUCTURAL_RW=1 |" in section
     assert "| MAJ | 1 | PARTIAL=1 |" in section
     assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
+    assert "ST statements discovered: **1**" in section
     assert "Reachable FULL ST dataflow: **0**/1 (0.0%)" in section
+    assert "parser-level recognition" not in section
     assert "Analysis warnings:" in section
 
 
