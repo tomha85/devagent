@@ -119,6 +119,17 @@ def _reachable_routines(project) -> set[tuple[str, str]]:
     return reachable
 
 
+def rung_has_execution_entry(project, rung) -> bool:
+    """Return True only when a rung is reachable from a concrete controller/task entry."""
+
+    if not rung.program or not rung.routine:
+        return False
+    program_key = rung.program.casefold()
+    if program_key in _programs_without_executable_entry(project):
+        return False
+    return (program_key, rung.routine.casefold()) in _reachable_routines(project)
+
+
 def _withhold_unreachable_semantics(project) -> None:
     blocked_programs = _programs_without_executable_entry(project)
     entry_programs = _entry_program_names(project)
@@ -161,4 +172,4 @@ def install() -> None:
     _structure.augment_rockwell_structure = augment_rockwell_structure
 
 
-__all__ = ["augment_rockwell_structure", "install"]
+__all__ = ["augment_rockwell_structure", "install", "rung_has_execution_entry"]
