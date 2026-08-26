@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -12,6 +13,7 @@ from devagent.plc.rockwell_alias_hardening import (
 _UNKNOWN_WARNING_PREFIX = "Instruction semantics not modeled for: "
 _V2_PARTIAL_WARNING_PREFIX = "Recognized but directionally partial Rockwell motion instructions: "
 _CLOSEOUT_WARNING_PREFIX = "Rockwell V9 support contract: "
+_SUBSCRIPT = re.compile(r"\[([^\]]+)\]")
 
 # These instructions are intentionally *recognized but not promoted to FULL*.
 # Classification improves engineering visibility without inventing behavior.
@@ -54,6 +56,36 @@ def _program_from_scope(scope: str) -> str | None:
 
 def instruction_family(name: str) -> str | None:
     return _INSTRUCTION_TO_FAMILY.get(name.upper())
+
+
+def _has_variable_subscript(value: str) -> bool:
+    for match in _SUBSCRIPT.finditer(value):
+        expression = match.group(1).strip()
+        if not re.fullmatch(r"[-+]?\d+", expression):
+            return True
+    return False
+
+
+def _indirect_rungs(project) -> list[str]:
+    return [
+        rung.id
+        for rung in project.rungs
+        if any(
+            _has_variable_subscript(argument)
+            for instruction in rung.instructions
+            for argument in instruction.arguments
+        )
+    ]
+
+
+def _has_supported_logic(project) -> bool:
+    if project.rungs:
+        return True
+    if project.logic_statements:
+        return True
+    if project.output_logic:
+        return True
+    return False
 
 
 def augment_closeout_semantics(project) -> None:
@@ -146,6 +178,8 @@ def rockwell_capability_profile(project) -> dict[str, Any]:
     protected_routines = [routine for routine in project.routines if routine.source_protected]
     protected_aois = [aoi for aoi in project.aois if aoi.source_protected]
     resolved_aliases, dangling_aliases, alias_cycles = _alias_health(project)
+    indirect_rungs = _indirect_rungs(project)
+    no_supported_logic = bool(project.routines) and not _has_supported_logic(project)
 
     static_gaps = {
         "unsupported_routines": len(unsupported_routines),
@@ -157,6 +191,8 @@ def rockwell_capability_profile(project) -> dict[str, Any]:
         "unmodeled_st_statements": max(0, project.st_statement_total - project.st_statement_semantic_count),
         "unmodeled_aoi_bodies": max(0, project.aoi_internal_total - project.aoi_internal_modeled_count),
         "unbound_aoi_calls": max(0, project.aoi_call_total - project.aoi_call_bound_count),
+        "indirect_rungs": len(indirect_rungs),
+        "no_supported_logic": int(no_supported_logic),
         "dangling_aliases": len(dangling_aliases),
         "alias_cycles": len(alias_cycles),
     }
@@ -213,6 +249,10 @@ def rockwell_capability_profile(project) -> dict[str, Any]:
             "dangling": len(dangling_aliases),
             "cycles": len(alias_cycles),
         },
+        "indirect_addressing": {
+            "rungs": len(indirect_rungs),
+            "evidence_ids": indirect_rungs,
+        },
         "static_gaps": static_gaps,
         "static_contract": "COMPLETE" if static_complete else "PARTIAL_FAIL_CLOSED",
         "dynamic_contract": {
@@ -249,9 +289,12 @@ def rockwell_support_check(project) -> StaticCheck:
             if any(instruction.name.casefold() in partial_or_unknown for instruction in rung.instructions)
         )
 
+    evidence.extend(profile["indirect_addressing"]["evidence_ids"])
     _, dangling_aliases, alias_cycles = _alias_health(project)
     evidence.extend(dangling_aliases)
     evidence.extend(alias_cycles)
+    if gaps["no_supported_logic"]:
+        evidence.extend(routine.id for routine in project.routines)
     evidence = list(dict.fromkeys(evidence))
 
     nonzero = [f"{name}={value}" for name, value in gaps.items() if value]
