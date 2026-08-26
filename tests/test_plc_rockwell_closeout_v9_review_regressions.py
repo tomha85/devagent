@@ -16,19 +16,17 @@ def _write_project(
         for name in tag_names
     )
     payload = f'''<?xml version="1.0" encoding="UTF-8"?>
-<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="V9Review" TargetType="Controller">
-  <Controller Use="Target" Name="V9Review" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="ReviewRegression" TargetType="Controller">
+  <Controller Use="Target" Name="ReviewRegression" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
     <DataTypes />
     <Modules><Module Name="Local" CatalogNumber="1756-L85E" Vendor="1" /></Modules>
     <AddOnInstructionDefinitions />
     <Tags>{tags}</Tags>
-    <Programs>
-      <Program Name="MainProgram" MainRoutineName="MainRoutine"><Routines>
-        <Routine Name="MainRoutine" Type="RLL"><RLLContent>
-          <Rung Number="0"><Text><![CDATA[{rung_text}]]></Text></Rung>
-        </RLLContent></Routine>
-      </Routines></Program>
-    </Programs>
+    <Programs><Program Name="MainProgram" MainRoutineName="MainRoutine"><Routines>
+      <Routine Name="MainRoutine" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[{rung_text}]]></Text></Rung>
+      </RLLContent></Routine>
+    </Routines></Program></Programs>
     <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms>
       <ScheduledProgram Name="MainProgram" />
     </ScheduledPrograms></Task></Tasks>
@@ -77,4 +75,4 @@ def test_v9_multi_output_change_does_not_mark_unchanged_output_affected(tmp_path
     affected = {tag.casefold() for tag in logic_changes[0].affected_tags}
     assert "fan" not in affected
     assert affected == {"fan2", "fan3"}
-    assert "Fan" not in logic_changes[0].subject
+    assert logic_changes[0].subject.endswith("::Fan2, Fan3")
