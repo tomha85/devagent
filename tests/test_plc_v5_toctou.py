@@ -4,7 +4,6 @@ import base64
 import json
 from pathlib import Path
 
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -41,9 +40,9 @@ def _sign(private: Ed25519PrivateKey, payload: dict) -> dict:
     return signed
 
 
-def test_v5_detects_backend_registry_change_after_signature_verification(
+def test_v5_evaluates_the_exact_registry_bytes_that_were_authenticated(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch,
 ) -> None:
     private = Ed25519PrivateKey.generate()
     public = private.public_key().public_bytes(
@@ -91,17 +90,27 @@ def test_v5_detects_backend_registry_change_after_signature_verification(
 
     original_run = production_v5.run_v4_verification
 
-    def mutate_then_run(*args, **kwargs):
+    def mutate_source_then_run(*args, **kwargs):
         tampered = json.loads(registry.read_text(encoding="utf-8"))
-        tampered["approved_by"] = "Changed after signature verification"
+        tampered["approved_by"] = "Changed after authentication"
         registry.write_text(json.dumps(tampered, sort_keys=True), encoding="utf-8")
+        # V5 must never pass the signed registry source path to V4.
+        assert kwargs.get("execution_backend_registry_path") is None
+        assert kwargs.get("execution_results_path") is None
         return original_run(*args, **kwargs)
 
-    monkeypatch.setattr(production_v5, "run_v4_verification", mutate_then_run)
+    monkeypatch.setattr(production_v5, "run_v4_verification", mutate_source_then_run)
 
-    with pytest.raises(ValueError, match="changed between signature verification and deterministic use"):
-        production_v5.run_production_verification_v5(
-            project,
-            execution_backend_registry_path=registry,
-            trust_store_path=trust,
-        )
+    result = production_v5.run_production_verification_v5(
+        project,
+        execution_backend_registry_path=registry,
+        trust_store_path=trust,
+    )
+
+    assert result.execution_backend_registry is not None
+    assert result.execution_backend_registry["approved_by"] == "Controls Owner"
+    assert json.loads(registry.read_text(encoding="utf-8"))["approved_by"] == "Changed after authentication"
+    assert any(
+        item.get("purpose") == "EXECUTION_BACKEND_REGISTRY"
+        for item in result.verified_signatures
+    )
