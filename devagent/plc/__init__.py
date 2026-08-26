@@ -4,13 +4,15 @@ from devagent.plc import analysis as _analysis
 from devagent.plc.rockwell_compare_hardening import install as _install_rockwell_compare_hardening
 from devagent.plc.rockwell_alias_hardening import install as _install_rockwell_alias_hardening
 from devagent.plc.rockwell_entrypoint_hardening import install as _install_rockwell_entrypoint_hardening
+from devagent.plc.rockwell_st_v10 import install as _install_rockwell_st_v10
 
-# Install fail-closed compare, alias, and controller-entrypoint guards before
+# Install fail-closed compare, alias, controller-entrypoint, and ST guards before
 # production verification is imported. Every downstream Rockwell proof must
 # share the same canonical writer identity and executable-entrypoint model.
 _install_rockwell_compare_hardening()
 _install_rockwell_alias_hardening()
 _install_rockwell_entrypoint_hardening()
+_install_rockwell_st_v10()
 
 from devagent.plc.rockwell_compare_reachability_hardening import (
     install as _install_rockwell_compare_reachability_hardening,
