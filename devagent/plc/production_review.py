@@ -105,6 +105,18 @@ def detect_risks(
                 item.confidence,
                 "AI_CANDIDATE" if item.ai_assisted else "DETERMINISTIC",
             ))
+        elif item.status is RequirementStatus.ACTION_EFFECT_PROVEN:
+            risks.append(RiskFinding(
+                stable_id("RISK", "REQ_ACTION", item.requirement_id),
+                "REQUIREMENT",
+                f"Requirement {item.requirement_id} has a proven local action effect but no final-state proof",
+                Severity.MEDIUM,
+                item.summary,
+                "A local OTL/OTU write is proven, but retained/final scan state can still depend on later or overlapping writers and runtime ordering.",
+                "Execute the linked FAT case or establish deterministic writer ordering before treating the requirement as fully verified.",
+                item.evidence_ids,
+                item.confidence,
+            ))
         elif item.status is RequirementStatus.TRACEABLE_NOT_PROVEN:
             risks.append(RiskFinding(
                 stable_id("RISK", "REQ_PARTIAL", item.requirement_id),
