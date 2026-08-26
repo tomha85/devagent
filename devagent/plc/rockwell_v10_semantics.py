@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import re
 from dataclasses import replace
 from typing import Callable
@@ -14,9 +15,12 @@ from devagent.plc.production_models import (
 from devagent.plc.production_utils import explicit_bool
 from devagent.plc.rockwell_alias_hardening import (
     canonical_tag_identity,
+    canonical_writer_sources,
     distinct_named_tag_identities,
     identity_is_resolved,
+    storage_identities_overlap,
 )
+from devagent.plc.rockwell_entrypoint_hardening import routine_has_execution_entry
 from devagent.plc.rockwell_semantic_capabilities import retentive_action_value
 
 _PREVIOUS_VERIFY_REQUIREMENT: Callable | None = None
@@ -64,6 +68,109 @@ def _path_activation(logic, assignment: dict[str, bool]) -> str:
     return "IMPOSSIBLE"
 
 
+def _rung_for_logic(project, logic):
+    if not logic.source.program or not logic.source.routine or logic.source.rung is None:
+        return None
+    matches = [
+        rung
+        for rung in project.rungs
+        if rung.program.casefold() == logic.source.program.casefold()
+        and rung.routine.casefold() == logic.source.routine.casefold()
+        and str(rung.source.rung if rung.source.rung is not None else rung.number) == str(logic.source.rung)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _same_routine_scan_final_state(project, output: str, program: str | None, assignment: dict[str, bool], relevant):
+    """Return a proven final Boolean state for one deliberately narrow Rockwell scan theorem.
+
+    The theorem is intentionally bounded to a single active program Main RLL
+    routine. Every executable writer occurrence touching the same canonical
+    storage must be represented by exactly one FULL OTL/OTU output-logic object,
+    writer rungs must be uniquely ordered, and explicit condition tags must not
+    themselves be written by reachable PLC logic. Anything outside this boundary
+    returns ``None`` and therefore cannot upgrade a local action effect to a
+    final-state proof.
+    """
+
+    if not program or not assignment or not relevant:
+        return None
+
+    target = canonical_tag_identity(project, output, program)
+    if not identity_is_resolved(target):
+        return None
+
+    programs = [item for item in project.programs if item.name.casefold() == program.casefold()]
+    if len(programs) != 1 or not programs[0].main_routine_name:
+        return None
+    main_routine = programs[0].main_routine_name
+
+    if any(
+        not logic.source.program
+        or not logic.source.routine
+        or logic.source.program.casefold() != program.casefold()
+        or logic.source.routine.casefold() != main_routine.casefold()
+        or logic.language.upper() != "RLL"
+        or logic.semantic_state is not PLCSemanticState.FULL
+        or retentive_action_value(logic.instruction) is None
+        for logic in relevant
+    ):
+        return None
+    if not routine_has_execution_entry(project, program, main_routine):
+        return None
+
+    # Conditions must be stable with respect to the PLC program during this
+    # bounded scan theorem. External/input values with no reachable PLC writer
+    # are allowed; internally rewritten conditions are withheld for a later
+    # dataflow-aware theorem.
+    for tag in assignment:
+        if canonical_writer_sources(project, tag, program):
+            return None
+
+    rung_by_logic = []
+    for logic in relevant:
+        rung = _rung_for_logic(project, logic)
+        if rung is None:
+            return None
+        rung_by_logic.append((logic, rung))
+
+    # The current canonical IR has rung-level source identity, not instruction
+    # index identity inside one rung. Multiple writes to the same physical tag
+    # on one rung therefore remain ambiguous and must fail closed.
+    expected_occurrences = [rung.id for _, rung in rung_by_logic]
+    if len(set(expected_occurrences)) != len(expected_occurrences):
+        return None
+
+    actual_occurrences = canonical_writer_sources(project, output, program)
+    if Counter(actual_occurrences) != Counter(expected_occurrences):
+        return None
+
+    routine_rungs = [
+        rung
+        for rung in project.rungs
+        if rung.program.casefold() == program.casefold()
+        and rung.routine.casefold() == main_routine.casefold()
+    ]
+    order = {rung.id: index for index, rung in enumerate(routine_rungs)}
+    if any(rung.id not in order for _, rung in rung_by_logic):
+        return None
+
+    state: bool | None = None
+    for logic, rung in sorted(rung_by_logic, key=lambda item: order[item[1].id]):
+        activation = _path_activation(logic, assignment)
+        effect = retentive_action_value(logic.instruction)
+        assert effect is not None
+        if activation == "PROVEN":
+            state = effect
+        elif activation == "POSSIBLE":
+            # If the previous state is already the same value, either firing or
+            # not firing leaves it unchanged. Otherwise the result is unknown.
+            if state is not effect:
+                state = None
+        # IMPOSSIBLE preserves the prior state.
+    return state
+
+
 def _retentive_action_proof(requirement, engineering, tests, previous: RequirementVerification):
     if previous.status is not RequirementStatus.TRACEABLE_NOT_PROVEN:
         return previous
@@ -107,24 +214,31 @@ def _retentive_action_proof(requirement, engineering, tests, previous: Requireme
     if not assignment:
         return previous
 
-    relevant = [
-        logic
-        for logic in project.output_logic
-        if logic.semantic_state is PLCSemanticState.FULL
-        and not logic.origin.startswith("AOI_INTERNAL:")
-        and logic.output_tag.casefold() == output.casefold()
-        and retentive_action_value(logic.instruction) is not None
-        and (
-            qualified_program is None
-            or (logic.source.program or "").casefold() == qualified_program.casefold()
-        )
-    ]
+    target = canonical_tag_identity(project, output, qualified_program)
+    if not identity_is_resolved(target):
+        return previous
+
+    relevant = []
+    for logic in project.output_logic:
+        if (
+            logic.semantic_state is not PLCSemanticState.FULL
+            or logic.origin.startswith("AOI_INTERNAL:")
+            or retentive_action_value(logic.instruction) is None
+        ):
+            continue
+        identity = canonical_tag_identity(project, logic.output_tag, logic.source.program)
+        if not identity_is_resolved(identity) or not storage_identities_overlap(identity, target):
+            continue
+        if qualified_program is not None and (
+            not logic.source.program
+            or logic.source.program.casefold() != qualified_program.casefold()
+        ):
+            continue
+        relevant.append(logic)
+
     proven = []
     opposing_possible = []
     for logic in relevant:
-        identity = canonical_tag_identity(project, logic.output_tag, logic.source.program)
-        if not identity_is_resolved(identity):
-            continue
         activation = _path_activation(logic, assignment)
         effect = retentive_action_value(logic.instruction)
         if activation == "PROVEN" and effect is expected:
@@ -132,13 +246,70 @@ def _retentive_action_proof(requirement, engineering, tests, previous: Requireme
         elif activation != "IMPOSSIBLE" and effect is not expected:
             opposing_possible.append(logic)
 
+    theorem_program = qualified_program
+    if theorem_program is None:
+        programs = {
+            logic.source.program
+            for logic in relevant
+            if logic.source.program
+        }
+        if len(programs) == 1:
+            theorem_program = next(iter(programs))
+
+    final_state = _same_routine_scan_final_state(
+        project,
+        output,
+        theorem_program,
+        assignment,
+        relevant,
+    )
+    if final_state is not None:
+        status = (
+            RequirementStatus.STATICALLY_VERIFIED
+            if final_state is expected
+            else RequirementStatus.CONFLICT
+        )
+        ordered_evidence = tuple(
+            logic.id
+            for logic in sorted(
+                relevant,
+                key=lambda item: next(
+                    (
+                        index
+                        for index, rung in enumerate(project.rungs)
+                        if _rung_for_logic(project, item) is not None
+                        and rung.id == _rung_for_logic(project, item).id
+                    ),
+                    len(project.rungs),
+                ),
+            )
+        )
+        summary = (
+            f"Deterministic same-routine Rockwell scan ordering proves final {output}="
+            f"{'TRUE' if final_state else 'FALSE'} for the specified stable Boolean conditions. "
+            "All reachable writers touching the canonical storage are FULL OTL/OTU actions in one active Main RLL routine, "
+            "and their rung order is explicit in the authenticated L5X. "
+            "This is a bounded software scan-state proof; physical I/O, controller scheduling outside this routine, and process behavior are not inferred."
+        )
+        return RequirementVerification(
+            requirement_id=previous.requirement_id,
+            status=status,
+            summary=summary,
+            evidence_ids=tuple(dict.fromkeys([*previous.evidence_ids, *ordered_evidence])),
+            matched_tags=previous.matched_tags,
+            linked_test_ids=(),
+            confidence=1.0,
+            ai_assisted=False,
+        )
+
     if not proven:
         return previous
 
     proven_sources = {logic.source.locator for logic in proven}
     linked = set(previous.linked_test_ids)
     for test in tests:
-        if test.output_tag.casefold() != output.casefold():
+        test_identity = canonical_tag_identity(project, test.output_tag, test.source.program)
+        if not identity_is_resolved(test_identity) or not storage_identities_overlap(test_identity, target):
             continue
         if test.source.locator not in proven_sources:
             continue
@@ -180,7 +351,7 @@ def _retentive_action_proof(requirement, engineering, tests, previous: Requireme
 
 
 def verify_requirement(requirement, engineering, evidence, tests):
-    """Extend the installed V9 theorem with bounded OTL/OTU action-effect proof."""
+    """Extend the installed V9 theorem with bounded OTL/OTU action and scan-state proof."""
 
     if _PREVIOUS_VERIFY_REQUIREMENT is None:  # pragma: no cover - install contract
         raise RuntimeError("Rockwell V10 semantics were not installed")
