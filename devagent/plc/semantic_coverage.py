@@ -49,6 +49,10 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     * PARTIAL: DevAgent recognizes the family or statement but explicitly
       withholds complete/reachable behavior semantics.
     * UNMODELED: the instruction is present but no supported semantics apply.
+
+    Structured Text reporting deliberately uses the final reachability-hardened
+    semantic state. Parser discovery is represented by the statement inventory;
+    it is not mislabeled as semantic proof.
     """
 
     deterministic_rung_keys = {
@@ -184,10 +188,6 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 "reachable_full_dataflow_pct": pct(st_full, project.st_statement_total),
                 "partial_or_unreachable_statements": st_states[PLCSemanticState.PARTIAL.value],
                 "opaque_statements": st_states[PLCSemanticState.OPAQUE.value],
-                "parser_semantic_count": project.st_statement_semantic_count,
-                "parser_semantic_coverage_pct": pct(
-                    project.st_statement_semantic_count, project.st_statement_total
-                ),
             },
             "aoi": {
                 "definitions": len(project.aois),
