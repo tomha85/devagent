@@ -7,13 +7,14 @@ from devagent.plc.models import PLCOutcome, PLCSemanticState, StaticCheckStatus
 
 
 def _write(tmp_path: Path, body: str, *, tags: str = "", aoi: str = "<AddOnInstructionDefinitions />") -> Path:
+    main_routine = body.split('<Routine Name="', 1)[1].split('"', 1)[0]
     content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="V2" TargetType="Controller">
   <Controller Name="V2" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
     {aoi}
     <Tags>{tags}</Tags>
-    <Programs><Program Name="MainProgram"><Routines>{body}</Routines></Program></Programs>
-    <Tasks><Task Name="MainTask" Type="CONTINUOUS" /></Tasks>
+    <Programs><Program Name="MainProgram" MainRoutineName="{main_routine}"><Routines>{body}</Routines></Program></Programs>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms></Task></Tasks>
   </Controller>
 </RSLogix5000Content>'''
     path = tmp_path / "V2.L5X"

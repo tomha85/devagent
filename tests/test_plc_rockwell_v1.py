@@ -25,14 +25,14 @@ FULL_PROJECT_L5X = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <Tag Name="MotorRun" TagType="Base" DataType="BOOL" ExternalAccess="Read/Write" />
       <Tag Name="MotorLatched" TagType="Base" DataType="BOOL" ExternalAccess="Read/Write" />
     </Tags>
-    <Programs><Program Name="MainProgram">
+    <Programs><Program Name="MainProgram" MainRoutineName="MainRoutine">
       <Tags><Tag Name="LocalPermissive" TagType="Base" DataType="BOOL" ExternalAccess="Read/Write" /></Tags>
       <Routines><Routine Name="MainRoutine" Type="RLL"><RLLContent>
         <Rung Number="0" Type="N"><Comment>Motor start command</Comment><Text><![CDATA[XIC(StartPB)XIC(GuardClosed)XIO(MotorFault)OTE(MotorRun);]]></Text></Rung>
         <Rung Number="1" Type="N"><Text><![CDATA[XIC(MotorRun)OTL(MotorLatched);]]></Text></Rung>
       </RLLContent></Routine></Routines>
     </Program></Programs>
-    <Tasks><Task Name="MainTask" Type="CONTINUOUS" Priority="10" Rate="10" /></Tasks>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS" Priority="10" Rate="10"><ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms></Task></Tasks>
   </Controller>
 </RSLogix5000Content>
 """
@@ -96,6 +96,10 @@ def test_l5x_with_dtd_or_entity_is_rejected_before_xml_parse(tmp_path: Path) -> 
 
 def test_supported_st_logic_is_normalized_in_v2(tmp_path: Path) -> None:
     mixed = FULL_PROJECT_L5X.replace(
+        "</RLLContent>",
+        '<Rung Number="2" Type="N"><Text><![CDATA[JSR(SequenceST,0);]]></Text></Rung></RLLContent>',
+        1,
+    ).replace(
         "</Routines>",
         '<Routine Name="SequenceST" Type="ST"><STContent><Line Number="0">MotorRun := StartPB;</Line></STContent></Routine></Routines>',
         1,

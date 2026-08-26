@@ -33,10 +33,10 @@ PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
       <Tag Name="Guard" TagType="Base" DataType="BOOL" />
       <Tag Name="Run" TagType="Base" DataType="BOOL" />
     </Tags>
-    <Programs><Program Name="Main"><Routines><Routine Name="Logic" Type="RLL"><RLLContent>
+    <Programs><Program Name="Main" MainRoutineName="Logic"><Routines><Routine Name="Logic" Type="RLL"><RLLContent>
       <Rung Number="0"><Text><![CDATA[XIC(Start)XIC(Guard)OTE(Run);]]></Text></Rung>
     </RLLContent></Routine></Routines></Program></Programs>
-    <Tasks><Task Name="MainTask" Type="CONTINUOUS" /></Tasks>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms><ScheduledProgram Name="Main" /></ScheduledPrograms></Task></Tasks>
   </Controller>
 </RSLogix5000Content>
 """

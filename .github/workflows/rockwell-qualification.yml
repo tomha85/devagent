@@ -1,0 +1,60 @@
+name: Rockwell Production Qualification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rockwell-production-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rockwell:
+    name: Rockwell V9 qualification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install development package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile PLC sources
+        run: python -m compileall -q devagent/plc scripts/qualify_rockwell_official.py
+
+      - name: Run complete PLC regression suite
+        run: python -m pytest -q tests/test_plc*.py
+
+      - name: Run pinned official Rockwell qualification
+        run: |
+          python scripts/qualify_rockwell_official.py \
+            --report .devagent/rockwell-official-qualification-v9.json
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Upload Rockwell qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rockwell-production-qualification-v9
+          path: .devagent/rockwell-official-qualification-v9.json
+          if-no-files-found: warn

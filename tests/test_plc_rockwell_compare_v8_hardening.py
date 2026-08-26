@@ -91,7 +91,7 @@ def test_v8_rejects_non_integral_requirement_threshold_for_dint(tmp_path: Path) 
         "IF Temperature > 80.5 THEN Fan=TRUE",
     )
     assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
-    assert "not exactly representable" in verification.summary
+    assert "no representable DINT witness" in verification.summary
 
 
 def test_v8_withholds_vacuous_integer_boundary_requirement(tmp_path: Path) -> None:

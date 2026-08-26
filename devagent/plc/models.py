@@ -214,6 +214,7 @@ class PLCProjectMetadata:
     major_revision: str | None
     minor_revision: str | None
     full_project: bool
+    major_fault_program: str | None = None
 
 
 @dataclass
