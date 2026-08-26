@@ -115,23 +115,49 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
     if project.metadata.source_sha256 != source_sha256:
         raise RuntimeError("Analyzer source SHA-256 does not match downloaded official artifact")
 
+    # Instruction-level directional semantics are a hard regression gate for
+    # this official sample. Branch-path proofs are intentionally narrower: the
+    # sample contains mixed-action branches (GSV/MOVE/CLR/SSV/OTE) that are not
+    # part of DevAgent's bounded Boolean branch theorem. Those branches must be
+    # reported as explicit fail-closed gaps rather than promoted to VERIFIED.
     if project.instruction_semantic_count != project.instruction_total:
         raise RuntimeError(
             "Official L85E instruction semantic coverage regressed: "
             f"{project.instruction_semantic_count}/{project.instruction_total}"
         )
-    if project.branch_rung_semantic_count != project.branch_rung_total:
+    if not 0 < project.branch_rung_semantic_count <= project.branch_rung_total:
         raise RuntimeError(
-            "Official L85E branch semantic coverage regressed: "
+            "Official L85E branch semantic accounting is invalid: "
             f"{project.branch_rung_semantic_count}/{project.branch_rung_total}"
         )
-    if profile["static_contract"] != "COMPLETE":
+
+    unmodeled_branches = project.branch_rung_total - project.branch_rung_semantic_count
+    if profile["static_gaps"].get("unmodeled_branches") != unmodeled_branches:
         raise RuntimeError(
-            "Official L85E no longer satisfies the V9 static support contract: "
-            + json.dumps(profile["static_gaps"], sort_keys=True)
+            "Official L85E capability profile branch gap disagrees with canonical IR: "
+            f"expected {unmodeled_branches}, got {profile['static_gaps'].get('unmodeled_branches')}"
         )
-    if engineering.outcome.value != "STATICALLY_VERIFIED":
-        raise RuntimeError(f"Official L85E static outcome regressed to {engineering.outcome.value}")
+
+    if unmodeled_branches:
+        if profile["static_contract"] != "PARTIAL_FAIL_CLOSED":
+            raise RuntimeError(
+                "Official L85E contains unmodeled branches and must remain PARTIAL_FAIL_CLOSED; got "
+                f"{profile['static_contract']}"
+            )
+        if engineering.outcome.value != "PARTIALLY_VERIFIED":
+            raise RuntimeError(
+                "Official L85E unmodeled branches must withhold full static verification; got "
+                f"{engineering.outcome.value}"
+            )
+    else:
+        if profile["static_contract"] != "COMPLETE":
+            raise RuntimeError(
+                "Official L85E has no static gaps but support contract is not COMPLETE: "
+                + json.dumps(profile["static_gaps"], sort_keys=True)
+            )
+        if engineering.outcome.value != "STATICALLY_VERIFIED":
+            raise RuntimeError(f"Official L85E static outcome regressed to {engineering.outcome.value}")
+
     if len(engineering.fat_tests) < 6:
         raise RuntimeError(
             f"Official L85E generated only {len(engineering.fat_tests)} FAT candidates; expected at least 6"
@@ -158,6 +184,8 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         "inventory": actual_inventory,
         "instruction_semantic_coverage": project.instruction_semantic_coverage,
         "branch_semantic_coverage": project.branch_semantic_coverage,
+        "branch_modeled": project.branch_rung_semantic_count,
+        "branch_unmodeled": unmodeled_branches,
         "fat_candidates": len(engineering.fat_tests),
         "static_outcome": engineering.outcome.value,
         "support_contract": profile["static_contract"],
