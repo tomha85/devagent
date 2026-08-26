@@ -59,8 +59,13 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
 
 
 def _project_scope(value: Any, backend_id: str) -> tuple[str, ...]:
+    # Fail closed: registry authors must explicitly declare either a bounded
+    # project SHA-256 scope or the global wildcard "*". Missing/misspelled
+    # project_sha256 must never silently authorize all PLC projects.
     if value is None:
-        return ("*",)
+        raise ValueError(
+            f"Backend {backend_id} requires explicit project_sha256 scope; use '*' only for intentional global qualification"
+        )
     if isinstance(value, str):
         values = [value]
     elif isinstance(value, list):
