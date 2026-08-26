@@ -21,11 +21,16 @@ _install_rockwell_risk_hardening()
 # check must already be visible when safe_analysis is first loaded.
 _install_rockwell_closeout_gate_hardening()
 
-from devagent.plc.rockwell_regression_evidence_hardening import install as _install_rockwell_regression_evidence_hardening
+from devagent.plc.rockwell_regression_evidence_hardening import (
+    install as _install_rockwell_regression_evidence_hardening,
+    install_domain_evidence as _install_rockwell_regression_domain_evidence,
+)
 
 _install_rockwell_regression_evidence_hardening()
 
 from devagent.plc.production_v5 import run_production_verification_v5
+# Production is now loaded; bind the stage-14 baseline evidence augmentation.
+_install_rockwell_regression_domain_evidence()
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
 
 # Keep existing imports from ``devagent.plc.analysis`` on the guarded public path.
