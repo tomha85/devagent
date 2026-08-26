@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,25 @@ class PLCReleasePolicy:
             "source_sha256": self.source_sha256,
             "builtin": self.builtin,
         }
+
+
+def _parse_timestamp(value: str, *, field: str) -> datetime:
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"PLC release policy {field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"PLC release policy {field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _boolean(value: Any, *, field: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"PLC release policy {field} must be a JSON boolean")
+    return value
 
 
 def _criticalities(value: Any, *, field: str) -> tuple[RequirementCriticality, ...]:
@@ -128,7 +148,11 @@ def _builtin_policy() -> PLCReleasePolicy:
         "max_deterministic_risks": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 10000},
         "require_all_generated_tests_pass": True,
         "require_human_approval": True,
-        "require_signatures_for": [],
+        "require_signatures_for": [
+            "EXECUTION_BACKEND_REGISTRY",
+            "EXECUTION_RESULTS",
+            "HUMAN_APPROVAL",
+        ],
     }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -145,7 +169,11 @@ def _builtin_policy() -> PLCReleasePolicy:
         max_deterministic_medium=10_000,
         require_all_generated_tests_pass=True,
         require_human_approval=True,
-        require_signatures_for=(),
+        require_signatures_for=(
+            "EXECUTION_BACKEND_REGISTRY",
+            "EXECUTION_RESULTS",
+            "HUMAN_APPROVAL",
+        ),
         source_path="<builtin>",
         source_sha256=digest,
         builtin=True,
@@ -169,8 +197,19 @@ def load_release_policy(path: Path | None) -> PLCReleasePolicy:
     approved_at = str(loaded.get("approved_at") or "").strip()
     if not policy_id or not approved_by or not approved_at:
         raise ValueError("PLC release policy requires policy_id, approved_by, and approved_at")
-    if loaded.get("require_human_approval") is False:
+    _parse_timestamp(approved_at, field="approved_at")
+    require_human_approval = _boolean(
+        loaded.get("require_human_approval"),
+        field="require_human_approval",
+        default=True,
+    )
+    if not require_human_approval:
         raise ValueError("PLC release policy cannot disable human engineering approval")
+    require_all_tests = _boolean(
+        loaded.get("require_all_generated_tests_pass"),
+        field="require_all_generated_tests_pass",
+        default=True,
+    )
     limits = loaded.get("max_deterministic_risks")
     return PLCReleasePolicy(
         policy_id=policy_id,
@@ -182,7 +221,7 @@ def load_release_policy(path: Path | None) -> PLCReleasePolicy:
         max_deterministic_critical=_risk_limit(limits, "CRITICAL", 0),
         max_deterministic_high=_risk_limit(limits, "HIGH", 0),
         max_deterministic_medium=_risk_limit(limits, "MEDIUM", 10_000),
-        require_all_generated_tests_pass=bool(loaded.get("require_all_generated_tests_pass", True)),
+        require_all_generated_tests_pass=require_all_tests,
         require_human_approval=True,
         require_signatures_for=_signature_purposes(loaded.get("require_signatures_for", [])),
         source_path=str(target),
