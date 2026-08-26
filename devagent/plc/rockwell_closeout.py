@@ -33,7 +33,6 @@ _PARTIAL_INSTRUCTION_FAMILIES: dict[str, frozenset[str]] = {
     ),
     "SEQUENCER": frozenset({"SQI", "SQO", "SQL"}),
     "COMMUNICATION": frozenset({"MSG"}),
-    "SYSTEM": frozenset({"GSV", "SSV"}),
     "PROCESS_CONTROL": frozenset({"PID", "PIDE"}),
     "PROGRAM_CONTROL": frozenset({"MCR", "JMP", "LBL"}),
     "ALARM": frozenset({"ALMA", "ALMD"}),
