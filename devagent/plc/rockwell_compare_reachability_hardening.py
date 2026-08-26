@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from devagent.plc import rockwell_alias_hardening as _alias
@@ -9,37 +10,64 @@ from devagent.plc.rockwell_entrypoint_hardening import (
     routine_has_execution_entry,
     rung_has_execution_entry,
 )
+from devagent.plc.rockwell_l5x import _instruction_semantics
 
 _ORIGINAL_COMPARE_MODELS = _hardening.compare_models
 _INSTALLED = False
+_ST_ASSIGNMENT_LHS = re.compile(
+    r"(?P<lhs>[A-Za-z_][A-Za-z0-9_:.]*(?:\[[^\]]+\])?(?:\.[A-Za-z_][A-Za-z0-9_:.]*(?:\[[^\]]+\])?)*)\s*:=",
+    re.IGNORECASE,
+)
+
+
+def _rung_write_occurrences(project, rung) -> list[str]:
+    """Return one item per modeled write instruction operand, preserving multiplicity."""
+
+    aoi_parameters = {aoi.name: aoi.parameters for aoi in project.aois}
+    result: list[str] = []
+    for instruction in rung.instructions:
+        _, writes, _, _, _ = _instruction_semantics(instruction, aoi_parameters)
+        result.extend(sorted(writes, key=str.casefold))
+    # If an instruction family was only directionally normalized upstream, keep
+    # the rung-level writes conservatively rather than losing a possible writer.
+    if not result:
+        result.extend(rung.writes)
+    return result
+
+
+def _statement_write_occurrences(statement) -> list[str]:
+    """Return every assignment occurrence in a statement, including multi-assignment ST lines."""
+
+    if statement.language.upper() == "ST":
+        parsed = [match.group("lhs") for match in _ST_ASSIGNMENT_LHS.finditer(statement.text)]
+        if parsed:
+            return parsed
+    return list(statement.writes)
 
 
 def canonical_writer_sources(project, ref: str, default_program: str | None) -> tuple[str, ...]:
-    """Return alias-aware writer sources only from the executable routine closure."""
+    """Return alias-aware executable writer occurrences from the concrete routine closure.
+
+    The same source ID may intentionally appear more than once when one rung/ST
+    line writes overlapping storage multiple times. Callers use occurrence count
+    for the single-writer theorem while evidence packaging can still de-duplicate
+    the underlying source object ID.
+    """
 
     target = _alias.canonical_tag_identity(project, ref, default_program)
     if not _alias.identity_is_resolved(target):
         return ()
-    sources: dict[tuple[str, str, str, str], str] = {}
+    sources: list[str] = []
 
     for rung in project.rungs:
         if not rung_has_execution_entry(project, rung):
             continue
-        if not any(
-            _alias.storage_identities_overlap(
+        for write in _rung_write_occurrences(project, rung):
+            if _alias.storage_identities_overlap(
                 _alias.canonical_tag_identity(project, write, rung.program),
                 target,
-            )
-            for write in rung.writes
-        ):
-            continue
-        key = (
-            str(rung.source.aoi or ""),
-            str(rung.source.program or rung.program or ""),
-            str(rung.source.routine or rung.routine or ""),
-            str(rung.source.rung if rung.source.rung is not None else rung.number),
-        )
-        sources.setdefault(key, rung.id)
+            ):
+                sources.append(rung.id)
 
     for statement in project.logic_statements:
         if statement.owner_type == "aoi":
@@ -53,29 +81,14 @@ def canonical_writer_sources(project, ref: str, default_program: str | None) -> 
                 continue
         # A statement without a concrete program/routine cannot be proven
         # unreachable, so keep it conservatively as a possible writer.
-        if not any(
-            _alias.storage_identities_overlap(
+        for write in _statement_write_occurrences(statement):
+            if _alias.storage_identities_overlap(
                 _alias.canonical_tag_identity(project, write, statement_program),
                 target,
-            )
-            for write in statement.writes
-        ):
-            continue
-        key = (
-            str(statement.source.aoi or ""),
-            str(statement.source.program or statement_program or ""),
-            str(statement.source.routine or statement.routine or ""),
-            str(
-                statement.source.rung
-                if statement.source.rung is not None
-                else statement.source.line
-                if statement.source.line is not None
-                else statement.locator
-            ),
-        )
-        sources.setdefault(key, statement.id)
+            ):
+                sources.append(statement.id)
 
-    return tuple(sorted(sources.values(), key=str.casefold))
+    return tuple(sorted(sources, key=str.casefold))
 
 
 def compare_models(project):
