@@ -29,7 +29,7 @@ def _project(tmp_path: Path, rung_text: str, *, aoi_xml: str = "<AddOnInstructio
       <Tag Name="OutputTag" TagType="Base" DataType="BOOL" />
     </Tags>
     <Programs>
-      <Program Name="MainProgram">
+      <Program Name="MainProgram" MainRoutineName="MainRoutine">
         <Routines>
           <Routine Name="MainRoutine" Type="RLL">
             <RLLContent>
@@ -39,7 +39,7 @@ def _project(tmp_path: Path, rung_text: str, *, aoi_xml: str = "<AddOnInstructio
         </Routines>
       </Program>
     </Programs>
-    <Tasks><Task Name="MainTask" Type="CONTINUOUS" /></Tasks>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms></Task></Tasks>
   </Controller>
 </RSLogix5000Content>
 '''
