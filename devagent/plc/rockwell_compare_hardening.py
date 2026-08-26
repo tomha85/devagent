@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import re
+import struct
+import sys
 from dataclasses import replace
 
 from devagent.plc import rockwell_compare as _base
@@ -22,8 +24,13 @@ _INTEGER_RANGES = {
     "DINT": (-2147483648, 2147483647),
     "LINT": (-(2**63), 2**63 - 1),
 }
+_REAL_MAX = 3.4028234663852886e38
+_REAL_MIN_NORMAL = 1.1754943508222875e-38
+_LREAL_MAX = sys.float_info.max
+_LREAL_MIN_NORMAL = sys.float_info.min
 _DISJUNCTION = re.compile(r"\b(?:OR|XOR)\b|\|\|", re.IGNORECASE)
 _NEGATION = re.compile(r"\bNOT\b", re.IGNORECASE)
+_UNSUPPORTED_BOOLEAN = re.compile(r"\b(?:NAND|NOR|XNOR|OR|XOR|NOT)\b|&&|\|\|", re.IGNORECASE)
 _IF_THEN = re.compile(
     r"^\s*(?:IF|WHEN|WHENEVER)\b(?P<antecedent>.+?)\bTHEN\b(?P<consequent>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -39,31 +46,92 @@ _BOOL_WORDS = {
 }
 
 
-def _representable(data_type: str, value: int | float) -> bool:
+def _normalize_model_value(data_type: str, value: int | float) -> int | float | None:
     bounds = _INTEGER_RANGES.get(data_type)
     if bounds is not None:
-        return isinstance(value, int) and not isinstance(value, bool) and bounds[0] <= value <= bounds[1]
+        if not isinstance(value, int) or isinstance(value, bool) or not (bounds[0] <= value <= bounds[1]):
+            return None
+        return value
     try:
-        return math.isfinite(float(value))
+        numeric = float(value)
     except (TypeError, ValueError, OverflowError):
-        return False
+        return None
+    if not math.isfinite(numeric):
+        return None
+    if data_type == "REAL":
+        try:
+            normalized = struct.unpack(">f", struct.pack(">f", numeric))[0]
+        except (OverflowError, struct.error):
+            return None
+        if not math.isfinite(normalized) or abs(normalized) > _REAL_MAX:
+            return None
+        if normalized != 0.0 and abs(normalized) < _REAL_MIN_NORMAL:
+            return None
+        return float(normalized)
+    if data_type == "LREAL":
+        if abs(numeric) > _LREAL_MAX:
+            return None
+        if numeric != 0.0 and abs(numeric) < _LREAL_MIN_NORMAL:
+            return None
+        return numeric
+    return None
+
+
+def _representable(data_type: str, value: int | float) -> bool:
+    return _normalize_model_value(data_type, value) is not None
 
 
 def _condition_has_witness(data_type: str, operator: str, threshold: int | float) -> bool:
-    if not _representable(data_type, threshold):
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
         return False
+    try:
+        numeric = float(threshold)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not math.isfinite(numeric):
+        return False
+
     bounds = _INTEGER_RANGES.get(data_type)
-    if bounds is None:
-        return True
-    low, high = bounds
-    return {
-        ">": high > threshold,
-        ">=": high >= threshold,
-        "<": low < threshold,
-        "<=": low <= threshold,
-        "==": True,
-        "!=": low != high or low != threshold,
-    }[operator]
+    if bounds is not None:
+        if not _representable(data_type, threshold):
+            return False
+        low, high = bounds
+        return {
+            ">": high > threshold,
+            ">=": high >= threshold,
+            "<": low < threshold,
+            "<=": low <= threshold,
+            "==": True,
+            "!=": low != high or low != threshold,
+        }[operator]
+
+    if data_type == "REAL":
+        if abs(numeric) > _REAL_MAX:
+            return operator in {"<", "<=", "!="} if numeric > 0 else operator in {">", ">=", "!="}
+        if operator == "==":
+            normalized = _normalize_model_value("REAL", numeric)
+            return normalized is not None and normalized == numeric
+        return {
+            ">": _REAL_MAX > numeric,
+            ">=": _REAL_MAX >= numeric,
+            "<": -_REAL_MAX < numeric,
+            "<=": -_REAL_MAX <= numeric,
+            "!=": True,
+        }[operator]
+
+    if data_type == "LREAL":
+        if abs(numeric) > _LREAL_MAX:
+            return False
+        if operator == "==":
+            return _representable("LREAL", numeric)
+        return {
+            ">": _LREAL_MAX > numeric,
+            ">=": _LREAL_MAX >= numeric,
+            "<": -_LREAL_MAX < numeric,
+            "<=": -_LREAL_MAX <= numeric,
+            "!=": True,
+        }[operator]
+    return False
 
 
 def _final_ote(project, rung_id: str) -> bool:
@@ -105,8 +173,6 @@ def _canonical_tag_identity(project, ref: str, default_program: str | None) -> t
     ]
     if len(controller) == 1:
         return "controller", controller[0].name.casefold() + suffix
-    # Unknown normalized references are kept program-scoped so equal spellings
-    # in the same executable program still collide conservatively.
     fallback_scope = f"program:{default_program}".casefold() if default_program else "unresolved"
     return fallback_scope, value.casefold()
 
@@ -119,8 +185,6 @@ def _has_other_writer(project, model) -> bool:
         if any(_canonical_tag_identity(project, write, rung.program) == target for write in rung.writes):
             return True
     for statement in project.logic_statements:
-        # V2 can expose an RLL statement mirroring the same source rung. That is
-        # evidence for the same writer, not an independent writer.
         if statement.language == "RLL" and _same_source(statement, model):
             continue
         statement_program = statement.source.program or (
@@ -140,48 +204,78 @@ def compare_models(project):
     for model in _ORIGINAL_COMPARE_MODELS(project):
         if not _final_ote(project, model.rung_id):
             continue
-        if not _representable(model.input_type, model.threshold):
+        threshold = _normalize_model_value(model.input_type, model.threshold)
+        if threshold is None:
             continue
         result.append(
             replace(
                 model,
-                single_writer=model.single_writer and not _has_other_writer(project, model),
+                threshold=threshold,
+                # Recompute from canonical identities instead of retaining the
+                # original raw global writer-name count.
+                single_writer=not _has_other_writer(project, model),
             )
         )
     return result
 
 
+def _model_key(model) -> tuple[str | None, str | None, str | None, str]:
+    return (model.source.program, model.source.routine, model.source.rung, model.output_tag.casefold())
+
+
 def generate_compare_fat_tests(project):
-    # The original generator resolves compare_models from rockwell_compare's
-    # module globals, which __init__ binds to the guarded implementation.
-    return _ORIGINAL_GENERATE_FAT(project)
+    models = {_model_key(model): model for model in compare_models(project)}
+    result = []
+    for test in _ORIGINAL_GENERATE_FAT(project):
+        key = (test.source.program, test.source.routine, test.source.rung, test.output_tag.casefold())
+        model = models.get(key)
+        if model is None or not model.single_writer:
+            continue
+        raw_value = test.preconditions.get(model.input_tag)
+        if not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+            continue
+        normalized = _normalize_model_value(model.input_type, raw_value)
+        if normalized is None:
+            continue
+        expected_true = test.scenario == "THRESHOLD_TRUE"
+        if _base._eval(model.operator, normalized, model.threshold) != expected_true:
+            continue
+        preconditions = dict(test.preconditions)
+        preconditions[model.input_tag] = normalized
+        result.append(replace(test, preconditions=dict(sorted(preconditions.items()))))
+    return result
 
 
 def rockwell_compare_check(project):
-    # Same shared-global behavior makes excluded unsafe rungs show as WARN.
     check = _ORIGINAL_COMPARE_CHECK(project)
     models = compare_models(project)
-    boundary_models = []
     multi_writer_models = [model for model in models if not model.single_writer]
-    for model in models:
-        true_value, false_value = _base._sample_pair(model)
-        if true_value is None or false_value is None:
-            boundary_models.append(model)
-    if not boundary_models and not multi_writer_models:
+    generated = generate_compare_fat_tests(project)
+    scenarios: dict[tuple[str | None, str | None, str | None, str], set[str]] = {}
+    for test in generated:
+        key = (test.source.program, test.source.routine, test.source.rung, test.output_tag.casefold())
+        scenarios.setdefault(key, set()).add(test.scenario)
+    incomplete_witness_models = [
+        model
+        for model in models
+        if model.single_writer
+        and scenarios.get(_model_key(model), set()) != {"THRESHOLD_TRUE", "THRESHOLD_FALSE"}
+    ]
+    if not incomplete_witness_models and not multi_writer_models:
         return check
     evidence = tuple(
         dict.fromkeys(
             [
                 *check.evidence,
-                *(item.rung_id for item in boundary_models),
+                *(item.rung_id for item in incomplete_witness_models),
                 *(item.rung_id for item in multi_writer_models),
             ]
         )
     )
     details = []
-    if boundary_models:
+    if incomplete_witness_models:
         details.append(
-            f"{len(boundary_models)} modeled rung(s) cannot produce both TRUE and FALSE representable FAT witnesses at the data-type boundary."
+            f"{len(incomplete_witness_models)} modeled rung(s) cannot produce both TRUE and FALSE representable FAT witnesses in the declared data-type domain."
         )
     if multi_writer_models:
         details.append(
@@ -208,14 +302,17 @@ def _split_conditional(text: str) -> tuple[str, str] | None:
     return match.group("antecedent").strip(), match.group("consequent").strip()
 
 
-def _parse_numeric_condition(segment: str, tag: str):
+def _numeric_condition_pattern(tag: str) -> re.Pattern[str]:
     escaped = re.escape(tag)
-    pattern = re.compile(
+    return re.compile(
         rf"(?<![A-Za-z0-9_]){escaped}\s*(>=|<=|<>|!=|==|=|>|<)\s*"
         rf"((?:(?:SINT|INT|DINT|LINT|REAL|LREAL)#)?[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)",
         re.IGNORECASE,
     )
-    matches = list(pattern.finditer(segment))
+
+
+def _parse_numeric_condition(segment: str, tag: str):
+    matches = list(_numeric_condition_pattern(tag).finditer(segment))
     if len(matches) != 1:
         return None
     operator = {"=": "==", "<>": "!="}.get(matches[0].group(1), matches[0].group(1))
@@ -223,7 +320,16 @@ def _parse_numeric_condition(segment: str, tag: str):
     return None if threshold is None else (operator, threshold)
 
 
-def _explicit_bool_assertions(segment: str, tag: str) -> list[bool]:
+def _full_numeric_condition(segment: str, tag: str):
+    match = _numeric_condition_pattern(tag).fullmatch(segment.strip())
+    if match is None:
+        return None
+    operator = {"=": "==", "<>": "!="}.get(match.group(1), match.group(1))
+    threshold = _base._numeric(match.group(2))
+    return None if threshold is None else (operator, threshold)
+
+
+def _full_bool_assertion(segment: str, tag: str) -> bool | None:
     escaped = re.escape(tag)
     patterns = [
         re.compile(
@@ -237,11 +343,38 @@ def _explicit_bool_assertions(segment: str, tag: str) -> list[bool]:
             re.IGNORECASE,
         ),
     ]
-    matches: list[tuple[int, bool]] = []
-    for pattern in patterns:
-        for match in pattern.finditer(segment):
-            matches.append((match.start(), _BOOL_WORDS[match.group(1).casefold()]))
-    return [value for _, value in sorted(matches)]
+    matches = [match for pattern in patterns for match in [pattern.fullmatch(segment.strip())] if match]
+    if len(matches) != 1:
+        return None
+    return _BOOL_WORDS[matches[0].group(1).casefold()]
+
+
+def _parse_supported_antecedent(antecedent: str, model):
+    if _UNSUPPORTED_BOOLEAN.search(antecedent) or any(char in antecedent for char in "()"):
+        return None
+    clauses = [item.strip() for item in re.split(r"\bAND\b", antecedent, flags=re.IGNORECASE)]
+    if not clauses or any(not item for item in clauses):
+        return None
+    condition = None
+    seen_contacts: set[str] = set()
+    for clause in clauses:
+        numeric = _full_numeric_condition(clause, model.input_tag)
+        if numeric is not None:
+            if condition is not None:
+                return None
+            condition = numeric
+            continue
+        matched_contact = None
+        for tag, _ in model.contacts:
+            value = _full_bool_assertion(clause, tag)
+            if value is not None:
+                if matched_contact is not None or tag.casefold() in seen_contacts:
+                    return None
+                matched_contact = tag
+        if matched_contact is None:
+            return None
+        seen_contacts.add(matched_contact.casefold())
+    return condition
 
 
 def _unsafe_requirement(requirement, model, reason: str) -> RequirementVerification:
@@ -255,7 +388,7 @@ def _unsafe_requirement(requirement, model, reason: str) -> RequirementVerificat
 
 
 def verify_typed_compare_requirement(requirement, engineering, evidence, tests):
-    """Require a conjunctive antecedent and explicit consequent before proof."""
+    """Require a fully parsed conjunctive antecedent and explicit consequent."""
     project = engineering.project
     for model in compare_models(project):
         if not _base.tag_occurs(requirement.text, model.input_tag):
@@ -290,35 +423,22 @@ def verify_typed_compare_requirement(requirement, engineering, evidence, tests):
                 "Typed requirement places the PLC output in the antecedent or compare input in the consequent; implication direction is not proven.",
             )
 
-        condition = _parse_numeric_condition(antecedent, model.input_tag)
-        output_assertions = _explicit_bool_assertions(consequent, model.output_tag)
-        if condition is None or len(output_assertions) != 1:
+        condition = _parse_supported_antecedent(antecedent, model)
+        output_state = _full_bool_assertion(consequent, model.output_tag)
+        if condition is None:
             return _unsafe_requirement(
                 requirement,
                 model,
-                "Typed requirement does not contain exactly one unambiguous output-state assertion in the consequent and one supported numeric antecedent.",
+                "Typed requirement antecedent is outside the supported conjunction grammar; unparsed Boolean operators or clauses cannot be statically proven.",
             )
-        if _parse_numeric_condition(consequent, model.input_tag) is not None:
+        if output_state is None:
             return _unsafe_requirement(
                 requirement,
                 model,
-                "Numeric compare condition appears in the consequent; implication direction is not proven.",
+                "Typed requirement does not contain exactly one unambiguous output-state assertion as the complete consequent.",
             )
-        for tag, _ in model.contacts:
-            if _base.explicit_bool(consequent, tag) is not None:
-                return _unsafe_requirement(
-                    requirement,
-                    model,
-                    "A rung permissive is asserted in the consequent rather than the antecedent; static proof is withheld.",
-                )
 
         operator, threshold = condition
-        if not _representable(model.input_type, threshold):
-            return _unsafe_requirement(
-                requirement,
-                model,
-                f"Requirement threshold {threshold!r} is not exactly representable in {model.input_type}; typed static proof is withheld.",
-            )
         if not _condition_has_witness(model.input_type, operator, threshold):
             return _unsafe_requirement(
                 requirement,
