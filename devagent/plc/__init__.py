@@ -38,9 +38,16 @@ from devagent.plc.rockwell_regression_evidence_hardening import (
 
 _install_rockwell_regression_evidence_hardening()
 
-from devagent.plc.production_v5 import run_production_verification_v5
-# Production is now loaded; bind the stage-14 baseline evidence augmentation.
+from devagent.plc import production_v5 as _production_v5
+from devagent.plc.project_test_plan_hardening import install as _install_project_test_plan_hardening
+
+# Production is now loaded; bind stage-14 baseline evidence and V10 generic
+# project-specific test planning. The V10 planner consumes normalized semantics
+# only and deliberately has no equipment/domain-name rules.
 _install_rockwell_regression_domain_evidence()
+_install_project_test_plan_hardening()
+run_production_verification_v5 = _production_v5.run_production_verification_v5
+
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
 
 # Keep existing imports from ``devagent.plc.analysis`` on the guarded public path.
