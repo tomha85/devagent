@@ -12,11 +12,11 @@ _ORIGINAL_CHECK = _closeout.rockwell_support_check
 
 
 def _scheduled_program_names(project) -> set[str]:
-    return {
-        name.casefold()
-        for task in project.tasks
-        for name in task.scheduled_programs
-    }
+    major_fault = getattr(project.metadata, "major_fault_program", None)
+    result = set(_entry_program_names(project))
+    if major_fault:
+        result.discard(major_fault.casefold())
+    return result
 
 
 def _program_has_concrete_main(project, program) -> bool:
@@ -35,7 +35,7 @@ def _entry_programs_without_main(project):
     return [
         program
         for program in project.programs
-        if program.name.casefold() in entries and program.routine_ids and not _program_has_concrete_main(project, program)
+        if program.name.casefold() in entries and not _program_has_concrete_main(project, program)
     ]
 
 
@@ -48,7 +48,7 @@ def _missing_controller_entry_programs(project) -> list[str]:
 
 
 def _unscheduled_executable_programs(project):
-    """Programs containing exported routines but no task/controller entry path."""
+    """Programs containing exported routines but no active task/controller entry path."""
 
     entries = _entry_program_names(project)
     return [
@@ -96,6 +96,7 @@ def rockwell_capability_profile(project):
     unscheduled = _unscheduled_executable_programs(project)
     unreachable_routines = _unreachable_entry_routines(project)
     complex_compare = _complex_compare_rungs(project)
+    inhibited_tasks = list(getattr(project, "_rockwell_inhibited_tasks", ()))
     synthesized_structure_warnings = [
         *(
             f"{_STRUCTURE_WARNING_PREFIX}controller MajorFaultProgram {name} is not present in exported programs"
@@ -112,8 +113,9 @@ def rockwell_capability_profile(project):
     # Preserve the V9 machine-readable gap schema. New reachability defects are
     # execution-structure warnings rather than new top-level gap keys.
     static_gaps["execution_structure_warnings"] = len(all_structure_warnings)
-    # Keep the original key for compatibility; it now covers every executable
-    # entry program, including Controller.MajorFaultProgram.
+    # Keep the original key for compatibility; it now covers every active
+    # task/controller entry program, including empty exported programs and
+    # Controller.MajorFaultProgram.
     static_gaps["scheduled_programs_without_main_routine"] = len(missing_main)
     static_gaps["unscheduled_executable_programs"] = len(unscheduled)
     static_gaps["unmodeled_compare_rungs"] = len(complex_compare)
@@ -125,6 +127,7 @@ def rockwell_capability_profile(project):
         "missing_controller_entry_programs": missing_controller_entries,
         "unscheduled_executable_programs": [program.name for program in unscheduled],
         "unreachable_entry_routines": [f"{routine.program}/{routine.name}" for routine in unreachable_routines],
+        "inhibited_tasks": inhibited_tasks,
         "controller_major_fault_program": getattr(project.metadata, "major_fault_program", None),
     }
     profile["typed_compare"] = {
@@ -171,7 +174,7 @@ def rockwell_support_check(project):
         for name in missing_controller_entries
     )
     extra.extend(
-        f"{_STRUCTURE_WARNING_PREFIX}program {program.name} contains routines but has no task/controller execution entry"
+        f"{_STRUCTURE_WARNING_PREFIX}program {program.name} contains routines but has no active task/controller execution entry"
         for program in unscheduled
     )
     extra.extend(
@@ -189,7 +192,7 @@ def rockwell_support_check(project):
     summary = check.summary
     if missing_main:
         summary += (
-            f" {len(missing_main)} task/controller entry program(s) have no concrete MainRoutineName; "
+            f" {len(missing_main)} active task/controller entry program(s) have no concrete MainRoutineName; "
             "entry-point execution cannot be statically proven."
         )
     if missing_controller_entries:
@@ -198,7 +201,7 @@ def rockwell_support_check(project):
         )
     if unscheduled:
         summary += (
-            f" {len(unscheduled)} program(s) contain exported routines but have no normalized task/controller entry path; "
+            f" {len(unscheduled)} program(s) contain exported routines but have no active normalized task/controller entry path; "
             "their execution cannot be included in full-project proof."
         )
     if unreachable_routines:
