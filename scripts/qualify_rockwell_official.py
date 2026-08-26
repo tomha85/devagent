@@ -144,12 +144,10 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         raise RuntimeError(f"Production pipeline stage count regressed: {len(result.stages)}")
     if result.readiness is None:
         raise RuntimeError("Production pipeline did not evaluate release readiness")
-    if result.readiness.status.value in {
-        "READY_FOR_ENGINEERING_APPROVAL",
-        "APPROVED_FOR_RELEASE",
-    }:
+    if result.readiness.status.value != "NOT_READY":
         raise RuntimeError(
-            "A project with no supplied requirements or qualified execution evidence must not be release-ready"
+            "Official static qualification without supplied requirements/runtime evidence must remain NOT_READY; "
+            f"got {result.readiness.status.value}"
         )
 
     return {
