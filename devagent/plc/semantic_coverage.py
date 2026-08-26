@@ -6,6 +6,8 @@ from devagent.plc.models import PLCSemanticState
 from devagent.plc.rockwell_compare import compare_models
 from devagent.plc.rockwell_general_actions import action_models, action_profile
 from devagent.plc.rockwell_l5x import _instruction_semantics
+from devagent.plc.rockwell_motion_runtime_v11 import motion_runtime_profile
+from devagent.plc.rockwell_state_machine_v11 import state_machine_profile
 from devagent.plc.rockwell_stateful_runtime import stateful_profile
 
 _LEVEL_ORDER = (
@@ -122,9 +124,11 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     protected_aois = sum(1 for aoi in project.aois if aoi.source_protected)
     action = action_profile(project)
     stateful = stateful_profile(project)
+    motion = motion_runtime_profile(project)
+    state_machine = state_machine_profile(project)
 
     return {
-        "schema": "devagent-plc-semantic-coverage-v1",
+        "schema": "devagent-plc-semantic-coverage-v2",
         "project": {
             "vendor": project.metadata.vendor,
             "engineering_tool": project.metadata.engineering_tool,
@@ -194,6 +198,8 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         },
         "action_semantics": action,
         "stateful_runtime_semantics": stateful,
+        "motion_runtime_semantics": motion,
+        "state_machine_semantics": state_machine,
         "project_boundaries": {
             "protected_routines": protected_routines,
             "unsupported_routine_types": dict(sorted(unsupported_routine_types.items())),
@@ -205,7 +211,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "Deterministic coverage describes bounded reachable software semantics only. "
             "Program RLL instruction coverage and AOI-definition coverage are separate scopes. "
             "Structural coverage means reads/writes/calls are normalized but behavior is not fully proven. "
-            "Timer/counter stateful runtime scenarios remain PARTIAL until qualified execution evidence is attached. "
+            "Timer/counter, motion, and runtime-classified state-machine scenarios remain PARTIAL until qualified execution evidence is attached. "
             "Unreachable, partial, or unmodeled behavior is excluded from deterministic verification. "
             "Physical I/O, process physics, safety certification, and runtime behavior require separate evidence."
         ),
