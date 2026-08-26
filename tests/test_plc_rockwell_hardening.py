@@ -13,12 +13,20 @@ def _project(tmp_path: Path, rung_text: str, *, aoi_xml: str = "<AddOnInstructio
     {aoi_xml}
     <Tags>
       <Tag Name="Inputs" TagType="Base" DataType="DINT" />
+      <Tag Name="Index" TagType="Base" DataType="DINT" />
       <Tag Name="Output" TagType="Base" DataType="BOOL" />
       <Tag Name="Storage" TagType="Base" DataType="BOOL" />
       <Tag Name="Pulse" TagType="Base" DataType="BOOL" />
       <Tag Name="Source" TagType="Base" DataType="DINT" />
+      <Tag Name="Offset" TagType="Base" DataType="DINT" />
       <Tag Name="Dest" TagType="Base" DataType="DINT" />
       <Tag Name="ScanTime" TagType="Base" DataType="DINT" />
+      <Tag Name="Timer" TagType="Base" DataType="TIMER" />
+      <Tag Name="DelayPreset" TagType="Base" DataType="DINT" />
+      <Tag Name="Elapsed" TagType="Base" DataType="DINT" />
+      <Tag Name="Instance" TagType="Base" DataType="CustomAOI" />
+      <Tag Name="InputTag" TagType="Base" DataType="BOOL" />
+      <Tag Name="OutputTag" TagType="Base" DataType="BOOL" />
     </Tags>
     <Programs>
       <Program Name="MainProgram">
@@ -44,13 +52,27 @@ def test_array_subscript_is_not_mistaken_for_parallel_branch(tmp_path: Path) -> 
     result = analyze_rockwell_l5x(_project(tmp_path, "XIC(Inputs[0])OTE(Output);"))
 
     branch = next(check for check in result.static_checks if check.id == "BRANCH_DEPENDENCY_SEMANTICS")
+    indirect = next(check for check in result.static_checks if check.id == "INDIRECT_ADDRESSING_SEMANTICS")
     assert branch.status is StaticCheckStatus.PASS
+    assert indirect.status is StaticCheckStatus.PASS
     assert result.outcome is PLCOutcome.STATICALLY_VERIFIED
     assert any(
         edge.kind == "DEPENDS_ON" and edge.source == "Output" and edge.target == "Inputs[0]"
         for edge in result.graph.edges
     )
     assert len(result.fat_tests) == 1
+
+
+def test_variable_array_subscript_is_partial_and_withholds_fat(tmp_path: Path) -> None:
+    result = analyze_rockwell_l5x(_project(tmp_path, "XIC(Inputs[Index])OTE(Output);"))
+    rung = result.project.rungs[0]
+
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert "Index" in rung.reads
+    assert result.fat_tests == []
+    assert not any(edge.kind == "DEPENDS_ON" for edge in result.graph.edges)
+    indirect = next(check for check in result.static_checks if check.id == "INDIRECT_ADDRESSING_SEMANTICS")
+    assert indirect.status is StaticCheckStatus.WARN
 
 
 def test_instruction_free_rung_cannot_be_statically_verified(tmp_path: Path) -> None:
@@ -81,7 +103,31 @@ def test_unprotected_aoi_body_remains_not_proven(tmp_path: Path) -> None:
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
     aoi_check = next(check for check in result.static_checks if check.id == "AOI_INTERNAL_LOGIC")
     assert aoi_check.status is StaticCheckStatus.NOT_PROVEN
-    assert any("internal routines are not normalized" in item for item in result.limitations)
+    assert any("internal routines" in item for item in result.limitations)
+
+
+def test_aoi_call_operands_are_references_not_misaligned_directional_facts(tmp_path: Path) -> None:
+    aoi = '''<AddOnInstructionDefinitions>
+      <AddOnInstructionDefinition Name="CustomAOI">
+        <Parameters>
+          <Parameter Name="EnableIn" Usage="Input" DataType="BOOL" />
+          <Parameter Name="EnableOut" Usage="Output" DataType="BOOL" />
+          <Parameter Name="Input" Usage="Input" DataType="BOOL" />
+          <Parameter Name="Output" Usage="Output" DataType="BOOL" />
+        </Parameters>
+        <Routines><Routine Name="Logic" Type="RLL" /></Routines>
+      </AddOnInstructionDefinition>
+    </AddOnInstructionDefinitions>'''
+    result = analyze_rockwell_l5x(
+        _project(tmp_path, "CustomAOI(Instance,InputTag,OutputTag);", aoi_xml=aoi)
+    )
+    rung = result.project.rungs[0]
+
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert {"Instance", "InputTag", "OutputTag"}.issubset(set(rung.references))
+    assert not ({"Instance", "InputTag", "OutputTag"} & set(rung.reads))
+    assert not ({"Instance", "InputTag", "OutputTag"} & set(rung.writes))
+    assert "CustomAOI" in rung.calls
 
 
 def test_osr_and_osf_record_distinct_output_operands(tmp_path: Path) -> None:
@@ -100,6 +146,18 @@ def test_osr_and_osf_record_distinct_output_operands(tmp_path: Path) -> None:
     assert "Pulse" in rung.writes
 
 
+def test_timer_counter_value_operands_are_normalized(tmp_path: Path) -> None:
+    result = analyze_rockwell_l5x(
+        _project(tmp_path, "TON(Timer,DelayPreset,Elapsed);")
+    )
+    rung = result.project.rungs[0]
+
+    assert "Timer" in rung.reads
+    assert "Timer" in rung.writes
+    assert "DelayPreset" in rung.reads
+    assert "Elapsed" in rung.writes
+
+
 def test_gsv_ssv_and_v36_move_are_normalized_from_vendor_semantics(tmp_path: Path) -> None:
     result = analyze_rockwell_l5x(
         _project(
@@ -116,6 +174,17 @@ def test_gsv_ssv_and_v36_move_are_normalized_from_vendor_semantics(tmp_path: Pat
     assert "Dest" in rung.writes
     assert "Dest" in rung.reads
     assert not any(edge.kind == "DEPENDS_ON" for edge in result.graph.edges)
+
+
+def test_subtraction_expression_is_split_into_source_references(tmp_path: Path) -> None:
+    result = analyze_rockwell_l5x(_project(tmp_path, "CPT(Dest,Source-Offset);"))
+    rung = result.project.rungs[0]
+
+    assert "Dest" in rung.writes
+    assert "Source" in rung.reads
+    assert "Offset" in rung.reads
+    assert "Source-Offset" not in rung.reads
+    assert "Source-Offset" not in rung.references
 
 
 def test_true_parallel_branch_still_withholds_cross_branch_dependencies(tmp_path: Path) -> None:
