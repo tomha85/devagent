@@ -13,11 +13,16 @@ _install_rockwell_alias_hardening()
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
 from devagent.plc.rockwell_closeout_gate_hardening import install as _install_rockwell_closeout_gate_hardening
-from devagent.plc.rockwell_regression_evidence_hardening import install as _install_rockwell_regression_evidence_hardening
 
 _install_rockwell_requirement_hardening()
 _install_rockwell_risk_hardening()
+# Install the V9 support-contract guard before importing regression/production
+# modules. Those modules import safe_analysis by value, so the patched support
+# check must already be visible when safe_analysis is first loaded.
 _install_rockwell_closeout_gate_hardening()
+
+from devagent.plc.rockwell_regression_evidence_hardening import install as _install_rockwell_regression_evidence_hardening
+
 _install_rockwell_regression_evidence_hardening()
 
 from devagent.plc.production_v5 import run_production_verification_v5
