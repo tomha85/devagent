@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from devagent.plc import analysis as _base
-from devagent.plc.models import PLCOutcome
+from devagent.plc.models import PLCOutcome, StaticCheckStatus
+from devagent.plc.rockwell_structure import (
+    add_rockwell_structure_edges,
+    augment_rockwell_structure,
+    rockwell_structure_check,
+)
 from devagent.plc.v2_guardrails import enforce_v2_guardrails, verify_v2_source_unchanged
 
 
@@ -61,28 +66,35 @@ def _limitations(project, state) -> list[str]:
 
 
 def analyze_rockwell_l5x(path):
-    """Run the V2 analyzer with post-normalization fail-closed guardrails."""
+    """Run the guarded Rockwell analyzer with deterministic V2/V7 augmentation."""
 
     result = _BASE_ANALYZE(path)
-    # The base parser records the source hash before V2 re-reads the L5X. A
-    # post-pass hash check therefore rejects ordinary source changes between
-    # those passes without doubling the XML parse cost.
+    # The base parser records the source hash before later passes re-read the
+    # L5X. Reject ordinary source changes before any augmentation can mix
+    # provenance from different project bytes.
     verify_v2_source_unchanged(result.project)
 
     project = result.project
+    augment_rockwell_structure(project)
     enforce_v2_guardrails(project)
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
+    add_rockwell_structure_edges(project, graph)
     fat_tests = _base.generate_fat_tests(project)
     checks = _base.static_verify(project, graph, fat_tests)
+    structure_check = rockwell_structure_check(project)
+    checks.append(structure_check)
     state = _base._coverage_state(project)
-    incomplete = any(
-        state[key]
-        for key in (
-            "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
-            "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
-            "incomplete_instruction", "partial_instructions",
+    incomplete = (
+        any(
+            state[key]
+            for key in (
+                "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
+                "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
+                "incomplete_instruction", "partial_instructions",
+            )
         )
+        or structure_check.status is not StaticCheckStatus.PASS
     )
 
     result.outcome = PLCOutcome.PARTIALLY_VERIFIED if incomplete else PLCOutcome.STATICALLY_VERIFIED
