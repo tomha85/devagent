@@ -15,10 +15,6 @@ _V2_PARTIAL_WARNING_PREFIX = "Recognized but directionally partial Rockwell moti
 _CLOSEOUT_WARNING_PREFIX = "Rockwell V9 support contract: "
 _SUBSCRIPT = re.compile(r"\[([^\]]+)\]")
 
-# These instructions are intentionally *recognized but not promoted to FULL*.
-# Classification improves engineering visibility without inventing behavior.
-# Any project containing one of them remains PARTIAL until a dedicated theorem
-# or qualified dynamic execution proves the relevant behavior.
 _PARTIAL_INSTRUCTION_FAMILIES: dict[str, frozenset[str]] = {
     "MOTION": frozenset(
         {
@@ -45,7 +41,6 @@ _INSTRUCTION_TO_FAMILY = {
     for family, instructions in _PARTIAL_INSTRUCTION_FAMILIES.items()
     for instruction in instructions
 }
-
 _SUPPORTED_ROUTINE_TYPES = frozenset({"RLL", "ST"})
 
 
@@ -79,23 +74,16 @@ def _indirect_rungs(project) -> list[str]:
 
 
 def _has_supported_logic(project) -> bool:
-    if project.rungs:
-        return True
-    if project.logic_statements:
-        return True
-    if project.output_logic:
-        return True
-    return False
+    instruction_count = sum(len(rung.instructions) for rung in project.rungs)
+    return not (
+        instruction_count == 0
+        and project.st_statement_total == 0
+        and not any(aoi.internal_body_modeled for aoi in project.aois)
+    )
 
 
 def augment_closeout_semantics(project) -> None:
-    """Classify known complex Rockwell instructions without overclaiming them.
-
-    The base/V2 parser already fail-closes unknown instructions. V9 only moves
-    known vendor instruction names from UNKNOWN to PARTIAL so the report can say
-    *what family is present* while static verification remains incomplete.
-    """
-
+    """Classify known complex Rockwell instructions without overclaiming them."""
     recognized = sorted(
         {
             name
@@ -179,7 +167,7 @@ def rockwell_capability_profile(project) -> dict[str, Any]:
     protected_aois = [aoi for aoi in project.aois if aoi.source_protected]
     resolved_aliases, dangling_aliases, alias_cycles = _alias_health(project)
     indirect_rungs = _indirect_rungs(project)
-    no_supported_logic = bool(project.routines) and not _has_supported_logic(project)
+    no_supported_logic = not _has_supported_logic(project)
 
     static_gaps = {
         "unsupported_routines": len(unsupported_routines),
