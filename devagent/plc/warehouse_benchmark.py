@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,13 @@ def _st_routine(name: str, lines: list[str]) -> str:
     return f'<Routine Name="{name}" Type="ST"><STContent>{encoded}</STContent></Routine>'
 
 
+def _routine_name(xml: str) -> str:
+    match = re.search(r'<Routine\s+Name="([^"]+)"', xml)
+    if match is None:
+        raise ValueError("benchmark routine XML is missing a Routine Name")
+    return match.group(1)
+
+
 def _main_routine(calls: list[str]) -> str:
     rungs = [_rung(index, f"JSR({name},0);", f"Execute {name}") for index, name in enumerate(calls)]
     return _rll_routine("Main", rungs)
@@ -119,15 +127,23 @@ def _conveyor_routine(index: int, *, defective: bool) -> str:
 def _diverter_routine(index: int, *, defective: bool) -> str:
     div = f"DIV{index:02d}"
     chute = f"CH{index:02d}_Full"
-    destination = index
-    if defective and index == 3:
-        destination = 4
+    destination = 4 if defective and index == 3 else index
     parts = [f"EQU(PackageDestination,{destination})", "XIC(PackagePresent)", f"XIO({chute})"]
     if defective and index == 7:
         parts.remove(f"XIO({chute})")
     if defective and index == 8:
         parts.remove("XIC(PackagePresent)")
     return _rll_routine(div, [_rung(0, "".join(parts) + f"OTE({div}_Fire);", "Destination and chute permissives")])
+
+
+def _aoi_station_routine() -> str:
+    return _rll_routine(
+        "AOIStation",
+        [
+            _rung(index - 1, f"ConveyorAOI(ConveyorAOI_{index},AOI{index}_Permissive,AOI{index}_Run);", "Exercise AOI call binding")
+            for index in range(1, 5)
+        ],
+    )
 
 
 def _system_control(defective: bool) -> str:
@@ -138,7 +154,7 @@ def _system_control(defective: bool) -> str:
         _rll_routine("EStop", [_rung(0, "XIO(EStopHealthy)OTL(MasterFault);")]),
         _rll_routine(
             "FaultReset",
-            [_rung(0, ("XIC(FaultResetPB)" + ("" if defective else "XIC(EStopHealthy)") + "OTU(MasterFault);"), "Fault reset must respect E-stop health")],
+            [_rung(0, "XIC(FaultResetPB)" + ("" if defective else "XIC(EStopHealthy)") + "OTU(MasterFault);", "Fault reset must respect E-stop health")],
         ),
     ]
     return f'<Program Name="SystemControl" MainRoutineName="Main"><Routines>{"".join(routines)}</Routines></Program>'
@@ -146,7 +162,7 @@ def _system_control(defective: bool) -> str:
 
 def _program_with_conveyors(name: str, start: int, end: int, extras: list[str], *, defective: bool) -> str:
     conveyor_names = [f"CV{index:03d}" for index in range(start, end + 1)]
-    calls = conveyor_names + [extra.split('Name="', 1)[1].split('"', 1)[0] for extra in extras]
+    calls = conveyor_names + [_routine_name(extra) for extra in extras]
     routines = [_main_routine(calls)]
     routines.extend(_conveyor_routine(index, defective=defective) for index in range(start, end + 1))
     routines.extend(extras)
@@ -203,8 +219,7 @@ def _sorter_extras(defective: bool) -> list[str]:
 def _chutes_program() -> str:
     names = [f"CH{index:02d}" for index in range(1, 17)]
     routines = [_main_routine(names)]
-    for index, name in enumerate(names, start=1):
-        routines.append(_rll_routine(name, [_rung(0, f"XIC({name}_PE)OTE({name}_Occupied);")]))
+    routines.extend(_rll_routine(name, [_rung(0, f"XIC({name}_PE)OTE({name}_Occupied);")]) for name in names)
     return f'<Program Name="Chutes" MainRoutineName="Main"><Routines>{"".join(routines)}</Routines></Program>'
 
 
@@ -278,7 +293,10 @@ def _all_tags(defective: bool) -> list[str]:
 
 
 def build_l5x(*, defective: bool) -> str:
-    infeed_extra = [_rll_routine("BarcodeTunnel", [_rung(0, "XIC(BarcodeCommHealthy)OTE(BarcodeValid);")])]
+    infeed_extra = [
+        _rll_routine("BarcodeTunnel", [_rung(0, "XIC(BarcodeCommHealthy)OTE(BarcodeValid);")]),
+        _aoi_station_routine(),
+    ]
     programs = [
         _system_control(defective),
         _program_with_conveyors("Infeed", 1, 10, infeed_extra, defective=defective),
@@ -310,7 +328,7 @@ def requirements_payload() -> dict[str, Any]:
         {"id": "REQ-D04", "text": "IF CV021_VFDReady=FALSE THEN CV021_RunCmd=FALSE", "verification_mode": "STATIC", "criticality": "HIGH"},
         {"id": "REQ-D05", "text": "IF CV022_VFDFault=TRUE THEN CV022_RunCmd=FALSE", "verification_mode": "STATIC", "criticality": "HIGH"},
         {"id": "REQ-D06", "text": "Merge01 shall never assert Merge01_CV011_Release and Merge01_CV012_Release simultaneously.", "verification_mode": "DYNAMIC", "criticality": "HIGH"},
-        {"id": "REQ-D07", "text": "IF PackageDestination > 2 AND PackageDestination < 4 AND PackagePresent=TRUE AND CH03_Full=FALSE THEN DIV03_Fire=TRUE", "verification_mode": "STATIC", "criticality": "HIGH"},
+        {"id": "REQ-D07", "text": "IF PackageDestination = 3 AND PackagePresent=TRUE AND CH03_Full=FALSE THEN DIV03_Fire=TRUE", "verification_mode": "STATIC", "criticality": "HIGH"},
         {"id": "REQ-D08", "text": "TrackingIndex shall advance by exactly one slot for each EncoderPulse.", "verification_mode": "DYNAMIC", "criticality": "HIGH"},
         {"id": "REQ-D09", "text": "IF CH07_Full=TRUE THEN DIV07_Fire=FALSE", "verification_mode": "STATIC", "criticality": "HIGH"},
         {"id": "REQ-D10", "text": "IF FaultResetPB=TRUE AND EStopHealthy=FALSE THEN MasterFault=TRUE", "verification_mode": "STATIC", "criticality": "CRITICAL"},
@@ -336,6 +354,7 @@ def manifest_payload() -> dict[str, Any]:
             "vfds": 40,
             "barcode_tunnels": 1,
             "encoder_tracking_systems": 1,
+            "aoi_instances": 4,
         },
         "seeded_defects": list(DEFECTS),
         "acceptance_targets": {
@@ -346,6 +365,7 @@ def manifest_payload() -> dict[str, Any]:
             "common_rll_instruction_coverage": 0.95,
             "supported_st_coverage": 0.80,
             "branch_semantic_coverage": 0.80,
+            "aoi_call_binding": 1.0,
             "release_without_runtime_evidence": "NOT_READY",
         },
         "required_test_classes": [
@@ -378,10 +398,11 @@ def _requirement_signal(result, requirement_id: str) -> bool:
     verification = next((item for item in result.requirement_verification if item.requirement_id == requirement_id), None)
     if verification is None:
         return False
+    # NOT_MAPPED is explicitly not success. Rewarding it would let an analyzer
+    # improve its benchmark score by understanding less.
     return verification.status in {
         RequirementStatus.TRACEABLE_NOT_PROVEN,
         RequirementStatus.CONFLICT,
-        RequirementStatus.NOT_MAPPED,
     }
 
 
@@ -416,6 +437,7 @@ def score_warehouse_benchmark(
     verification_by_id = {item.requirement_id: item for item in result.requirement_verification}
     defect_results: list[dict[str, Any]] = []
     false_verified: list[str] = []
+    not_mapped: list[str] = []
 
     for defect in DEFECTS:
         req_id = defect.get("requirement_id")
@@ -428,6 +450,8 @@ def score_warehouse_benchmark(
                 RequirementStatus.DYNAMICALLY_VERIFIED,
             }:
                 false_verified.append(str(defect["id"]))
+            if verification is None or verification.status is RequirementStatus.NOT_MAPPED:
+                not_mapped.append(str(defect["id"]))
             if _requirement_signal(result, str(req_id)):
                 detected = True
                 signals.append("REQUIREMENT_GAP")
@@ -437,7 +461,7 @@ def score_warehouse_benchmark(
         if _regression_signal(result, str(defect["subject"])):
             detected = True
             signals.append("REGRESSION")
-        defect_results.append({**defect, "detected": detected, "signals": signals})
+        defect_results.append({**defect, "detected": detected, "signals": sorted(set(signals))})
 
     total = len(defect_results)
     detected_total = sum(1 for item in defect_results if item["detected"])
@@ -474,7 +498,8 @@ def score_warehouse_benchmark(
             "overall_recall": detected_total / total,
             "critical_recall": recall(critical),
             "high_recall": recall(high),
-            "false_verified_defects": false_verified,
+            "false_verified_defects": sorted(set(false_verified)),
+            "not_mapped_defects": sorted(set(not_mapped)),
             "requirements_total": len(result.requirements),
             "fat_tests": len(result.engineering.fat_tests),
             "regression_changes": len(result.regression_changes),
