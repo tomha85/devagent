@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -21,6 +22,11 @@ from devagent.plc.production_verification import (
 from devagent.plc.rockwell_echo import EchoExecutionPackage, run_echo_execution
 from devagent.plc.rockwell_l5x import L5XError
 from devagent.plc.signature_trust import load_trusted_signer_store
+from devagent.plc.trusted_snapshot import (
+    parse_backend_registry_snapshot,
+    read_json_snapshot,
+    verify_snapshot_signature,
+)
 from devagent.providers import ProviderError, create_provider
 
 _STAGE_NAMES = (
@@ -209,12 +215,13 @@ def _persist_run(
             _write_json(path, value)
         written.append(path)
     if rockwell_package is not None:
+        raw_binding = output_dir / "rockwell_runtime_binding_signed.json"
+        raw_binding.write_bytes(rockwell_package.runtime_binding_bytes)
+        written.append(raw_binding)
         raw_results = output_dir / "rockwell_echo_execution_results_signed.json"
         raw_results.write_bytes(rockwell_package.execution_results_bytes)
         written.append(raw_results)
 
-    # Keep the v4 manifest schema identifier for backwards-compatible consumers;
-    # later production profiles are explicitly advertised by production_profile.
     manifest = {
         "schema": "devagent-plc-run-v4",
         "production_profile": "ROCKWELL_V6_ECHO" if rockwell_package is not None else "PLC_V5_TRUST",
@@ -321,15 +328,24 @@ def _validate_execution_args(args) -> str | None:
 
 
 def _add_rockwell_execution_evidence(result, package: EchoExecutionPackage) -> None:
+    if not any(
+        item.get("purpose") == "RUNTIME_PROJECT_BINDING"
+        and item.get("artifact_sha256") == package.binding.source_sha256
+        for item in result.verified_signatures
+    ):
+        result.verified_signatures.append(package.binding_signature)
     result.evidence.extend(
         [
             EvidenceItem(
                 f"ROCKWELL-RUNTIME-BINDING:{package.binding.source_sha256}",
                 "ROCKWELL_RUNTIME_BINDING",
-                "Authenticated binding between analyzed L5X, runtime project, controller, adapter ID, and exact runner SHA-256.",
+                f"Authenticated runtime binding signed by trusted key {package.binding_signature.get('key_id')} between analyzed L5X, runtime project, controller, adapter ID, and exact runner SHA-256.",
                 package.binding.source_path,
                 package.binding.source_sha256,
-                package.binding.jsonable(),
+                {
+                    **package.binding.jsonable(),
+                    "signature": package.binding_signature,
+                },
             ),
             EvidenceItem(
                 f"ROCKWELL-ECHO-RUNNER:{package.descriptor.runner_sha256}",
@@ -358,9 +374,120 @@ def _add_rockwell_execution_evidence(result, package: EchoExecutionPackage) -> N
         14,
         stage.name,
         StageStatus.PASS,
-        f"Assembled {len(result.evidence)} evidence item(s), including Rockwell runtime binding, Echo runner identity, execution request, and V5 trust provenance.",
+        f"Assembled {len(result.evidence)} evidence item(s), including signed Rockwell runtime binding, Echo runner identity, execution request, and V5 trust provenance.",
         stage.evidence_ids,
     )
+
+
+def _copy_small_input(source: Path, destination: Path, *, max_bytes: int, label: str) -> Path:
+    target = source.expanduser().resolve(strict=True)
+    payload = target.read_bytes()
+    if len(payload) > max_bytes:
+        raise ValueError(f"{label} exceeds {max_bytes} byte direct-execution limit")
+    destination.write_bytes(payload)
+    return destination
+
+
+def _copy_runtime_project(source: Path, directory: Path) -> Path:
+    target = source.expanduser().resolve(strict=True)
+    if not target.is_file():
+        raise ValueError("Rockwell runtime project must be a regular file")
+    if target.stat().st_size > 2 * 1024 * 1024 * 1024:
+        raise ValueError("Rockwell runtime project exceeds 2 GiB production limit")
+    destination = directory / ("runtime-project" + target.suffix)
+    shutil.copyfile(target, destination)
+    try:
+        destination.chmod(0o444)
+    except OSError:
+        pass
+    return destination
+
+
+def _run_direct_echo(args, provider, provider_name, model_name):
+    with tempfile.TemporaryDirectory(prefix="devagent-rockwell-echo-") as directory_name:
+        directory = Path(directory_name)
+        trust_path = _copy_small_input(
+            args.trust_store,
+            directory / "trusted-signers.json",
+            max_bytes=1024 * 1024,
+            label="PLC trust store",
+        )
+        registry_path = _copy_small_input(
+            args.execution_backend_registry,
+            directory / "backend-registry.json",
+            max_bytes=1024 * 1024,
+            label="Execution backend registry",
+        )
+        policy_path = None
+        if args.release_policy is not None:
+            policy_path = _copy_small_input(
+                args.release_policy,
+                directory / "release-policy.json",
+                max_bytes=1024 * 1024,
+                label="PLC release policy",
+            )
+        runtime_path = _copy_runtime_project(args.rockwell_runtime_project, directory)
+
+        trust_store = load_trusted_signer_store(trust_path)
+        if trust_store is None:
+            raise ValueError("Direct Rockwell Echo execution requires a trusted signer store")
+        registry_snapshot = read_json_snapshot(
+            registry_path,
+            max_bytes=1024 * 1024,
+            purpose="EXECUTION_BACKEND_REGISTRY",
+        )
+        verify_snapshot_signature(
+            registry_snapshot,
+            purpose="EXECUTION_BACKEND_REGISTRY",
+            trust_store=trust_store,
+            required=True,
+        )
+        backend_registry = parse_backend_registry_snapshot(registry_snapshot)
+
+        preliminary = run_production_verification_v5(
+            args.project,
+            requirement_paths=args.requirements,
+            baseline_path=args.baseline,
+            execution_results_path=None,
+            execution_backend_registry_path=registry_path,
+            release_policy_path=policy_path,
+            trust_store_path=trust_path,
+            approval_path=None,
+            provider=provider,
+            ai_enabled=args.ai,
+            require_ai=args.require_ai,
+            ai_provider_name=provider_name,
+            ai_model_name=model_name,
+        )
+        rockwell_package = run_echo_execution(
+            preliminary,
+            runner_path=args.rockwell_echo_runner,
+            runtime_project_path=runtime_path,
+            runtime_binding_path=args.rockwell_runtime_binding,
+            backend_registry=backend_registry,
+            trust_store=trust_store,
+            time_quantum_us=args.rockwell_time_quantum_us,
+            timeout_seconds=args.rockwell_execution_timeout_sec,
+        )
+        execution_path = directory / "execution-results.json"
+        execution_path.write_bytes(rockwell_package.execution_results_bytes)
+        result = run_production_verification_v5(
+            args.project,
+            requirement_paths=args.requirements,
+            baseline_path=args.baseline,
+            execution_results_path=execution_path,
+            execution_backend_registry_path=registry_path,
+            release_policy_path=policy_path,
+            trust_store_path=trust_path,
+            approval_path=None,
+            provider=provider,
+            ai_enabled=args.ai,
+            require_ai=args.require_ai,
+            ai_provider_name=provider_name,
+            ai_model_name=model_name,
+        )
+        _add_rockwell_execution_evidence(result, rockwell_package)
+        return result, rockwell_package
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -376,55 +503,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         provider, provider_name, model_name = _provider_from_args(args)
         rockwell_package: EchoExecutionPackage | None = None
         if _rockwell_direct_requested(args):
-            preliminary = run_production_verification_v5(
-                args.project,
-                requirement_paths=args.requirements,
-                baseline_path=args.baseline,
-                execution_results_path=None,
-                execution_backend_registry_path=args.execution_backend_registry,
-                release_policy_path=args.release_policy,
-                trust_store_path=args.trust_store,
-                approval_path=None,
-                provider=provider,
-                ai_enabled=args.ai,
-                require_ai=args.require_ai,
-                ai_provider_name=provider_name,
-                ai_model_name=model_name,
+            result, rockwell_package = _run_direct_echo(
+                args,
+                provider,
+                provider_name,
+                model_name,
             )
-            if not preliminary.execution_backend_registry_sha256:
-                raise ValueError("Direct Rockwell Echo execution requires an authenticated backend registry")
-            trust_store = load_trusted_signer_store(args.trust_store)
-            if trust_store is None:
-                raise ValueError("Direct Rockwell Echo execution requires a trusted signer store")
-            rockwell_package = run_echo_execution(
-                preliminary,
-                runner_path=args.rockwell_echo_runner,
-                runtime_project_path=args.rockwell_runtime_project,
-                runtime_binding_path=args.rockwell_runtime_binding,
-                backend_registry_sha256=preliminary.execution_backend_registry_sha256,
-                trust_store=trust_store,
-                time_quantum_us=args.rockwell_time_quantum_us,
-                timeout_seconds=args.rockwell_execution_timeout_sec,
-            )
-            with tempfile.TemporaryDirectory(prefix="devagent-rockwell-echo-") as directory:
-                execution_path = Path(directory) / "execution-results.json"
-                execution_path.write_bytes(rockwell_package.execution_results_bytes)
-                result = run_production_verification_v5(
-                    args.project,
-                    requirement_paths=args.requirements,
-                    baseline_path=args.baseline,
-                    execution_results_path=execution_path,
-                    execution_backend_registry_path=args.execution_backend_registry,
-                    release_policy_path=args.release_policy,
-                    trust_store_path=args.trust_store,
-                    approval_path=None,
-                    provider=provider,
-                    ai_enabled=args.ai,
-                    require_ai=args.require_ai,
-                    ai_provider_name=provider_name,
-                    ai_model_name=model_name,
-                )
-            _add_rockwell_execution_evidence(result, rockwell_package)
         else:
             result = run_production_verification_v5(
                 args.project,
