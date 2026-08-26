@@ -9,7 +9,11 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from devagent.plc.production_models import PLCRequirement, RequirementVerificationMode
+from devagent.plc.production_models import (
+    PLCRequirement,
+    RequirementCriticality,
+    RequirementVerificationMode,
+)
 
 _REQ_PREFIX = re.compile(r"^\s*(?:[-*•]\s*)?(?:(REQ[-_ ]?[A-Za-z0-9_.-]+|[A-Z]{2,10}[-_][0-9][A-Za-z0-9_.-]*)\s*[:.)-]?\s*)?(.*)$")
 _NUMBERED = re.compile(r"^\s*(?:[-*•]|\d+(?:\.\d+)*[.)])\s+(.*)$")
@@ -49,6 +53,20 @@ def _verification_mode(value: object | None, *, source: str) -> RequirementVerif
         ) from exc
 
 
+def _criticality(value: object | None, *, source: str) -> RequirementCriticality:
+    if value is None or not str(value).strip():
+        # Fail conservatively for unstructured requirements: production policy
+        # may later force HIGH/CRITICAL items to dynamic proof or a baseline.
+        return RequirementCriticality.HIGH
+    normalized = str(value).strip().upper()
+    try:
+        return RequirementCriticality(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            f"Requirement criticality must be LOW, MEDIUM, HIGH, or CRITICAL at {source}; received {value!r}"
+        ) from exc
+
+
 def _requirements_from_lines(path: Path, text: str, source_sha: str) -> list[PLCRequirement]:
     result: list[PLCRequirement] = []
     seen: set[str] = set()
@@ -85,6 +103,7 @@ def _requirements_from_lines(path: Path, text: str, source_sha: str) -> list[PLC
                     locator,
                     source_sha,
                     RequirementVerificationMode.DYNAMIC,
+                    RequirementCriticality.HIGH,
                 )
             )
     return result
@@ -103,6 +122,10 @@ def _requirements_from_csv(path: Path, text: str, source_sha: str) -> list[PLCRe
             (lowered[key] for key in ("verification_mode", "verification", "mode") if lowered.get(key)),
             None,
         )
+        raw_criticality = next(
+            (lowered[key] for key in ("criticality", "risk", "priority") if lowered.get(key)),
+            None,
+        )
         locator = f"row {row_no}"
         result.append(
             PLCRequirement(
@@ -112,6 +135,7 @@ def _requirements_from_csv(path: Path, text: str, source_sha: str) -> list[PLCRe
                 locator,
                 source_sha,
                 _verification_mode(raw_mode, source=f"{path}:{locator}"),
+                _criticality(raw_criticality, source=f"{path}:{locator}"),
             )
         )
     return result
@@ -127,12 +151,14 @@ def _requirements_from_json(path: Path, text: str, source_sha: str) -> list[PLCR
     for index, item in enumerate(loaded, start=1):
         explicit = None
         raw_mode: object | None = None
+        raw_criticality: object | None = None
         if isinstance(item, str):
             body = item
         elif isinstance(item, dict):
             body = str(item.get("text") or item.get("requirement") or item.get("description") or "")
             explicit = str(item.get("id") or item.get("requirement_id") or "") or None
             raw_mode = item.get("verification_mode", item.get("mode"))
+            raw_criticality = item.get("criticality", item.get("priority"))
         else:
             continue
         body = _normalize_text(body)
@@ -147,6 +173,7 @@ def _requirements_from_json(path: Path, text: str, source_sha: str) -> list[PLCR
                 locator,
                 source_sha,
                 _verification_mode(raw_mode, source=f"{path}:{locator}"),
+                _criticality(raw_criticality, source=f"{path}:{locator}"),
             )
         )
     return result
@@ -224,6 +251,7 @@ def ingest_requirements(paths: list[Path] | tuple[Path, ...]) -> list[PLCRequire
                     item.source_locator,
                     item.source_sha256,
                     item.verification_mode,
+                    item.criticality,
                 )
             ids.add(item.id)
             result.append(item)

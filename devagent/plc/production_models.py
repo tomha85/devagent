@@ -27,6 +27,13 @@ class RequirementVerificationMode(str, Enum):
     STATIC = "STATIC"
 
 
+class RequirementCriticality(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
 class Severity(str, Enum):
     INFO = "INFO"
     LOW = "LOW"
@@ -67,6 +74,7 @@ class PLCRequirement:
     source_locator: str
     source_sha256: str
     verification_mode: RequirementVerificationMode = RequirementVerificationMode.DYNAMIC
+    criticality: RequirementCriticality = RequirementCriticality.HIGH
 
 
 @dataclass(frozen=True)
@@ -197,5 +205,12 @@ class PLCProductionResult:
     execution_backend_registry: dict[str, Any] | None = None
     execution_backend_registry_sha256: str | None = None
     execution_backend_id: str | None = None
+    execution_backend_kind: str | None = None
+    execution_results_sha256: str | None = None
     baseline_sha256: str | None = None
+    release_policy: dict[str, Any] | None = None
+    release_policy_sha256: str | None = None
+    trust_store: dict[str, Any] | None = None
+    trust_store_sha256: str | None = None
+    verified_signatures: list[dict[str, Any]] = field(default_factory=list)
     verification_context_sha256: str | None = None
