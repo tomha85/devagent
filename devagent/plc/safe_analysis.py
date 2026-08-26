@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from devagent.plc import analysis as _base
-from devagent.plc.models import PLCOutcome
+from devagent.plc.models import PLCOutcome, StaticCheckStatus
 from devagent.plc.rockwell_structure import (
     add_rockwell_structure_edges,
     augment_rockwell_structure,
@@ -82,15 +82,19 @@ def analyze_rockwell_l5x(path):
     add_rockwell_structure_edges(project, graph)
     fat_tests = _base.generate_fat_tests(project)
     checks = _base.static_verify(project, graph, fat_tests)
-    checks.append(rockwell_structure_check(project))
+    structure_check = rockwell_structure_check(project)
+    checks.append(structure_check)
     state = _base._coverage_state(project)
-    incomplete = any(
-        state[key]
-        for key in (
-            "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
-            "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
-            "incomplete_instruction", "partial_instructions",
+    incomplete = (
+        any(
+            state[key]
+            for key in (
+                "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
+                "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
+                "incomplete_instruction", "partial_instructions",
+            )
         )
+        or structure_check.status is not StaticCheckStatus.PASS
     )
 
     result.outcome = PLCOutcome.PARTIALLY_VERIFIED if incomplete else PLCOutcome.STATICALLY_VERIFIED
