@@ -153,6 +153,26 @@ def test_unknown_instruction_semantics_reduce_claimed_coverage(tmp_path: Path) -
     assert any("VendorSpecificInstruction" in item for item in result.limitations)
 
 
+def test_full_project_without_parsed_logic_is_not_statically_verified(tmp_path: Path) -> None:
+    empty = """<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="EmptyController" TargetType="Controller">
+  <Controller Use="Target" Name="EmptyController" ProcessorType="1756-L83E" MajorRev="36" MinorRev="11">
+    <Tags />
+    <Programs />
+    <Tasks />
+  </Controller>
+</RSLogix5000Content>
+"""
+    result = analyze_rockwell_l5x(_write_l5x(tmp_path, empty, "Empty.L5X"))
+
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    provenance = next(check for check in result.static_checks if check.id == "SOURCE_PROVENANCE")
+    coverage = next(check for check in result.static_checks if check.id == "LOGIC_SEMANTIC_COVERAGE")
+    assert provenance.status is StaticCheckStatus.NOT_PROVEN
+    assert coverage.status is StaticCheckStatus.NOT_PROVEN
+    assert any("controller logic verification remains NOT_PROVEN" in item for item in result.limitations)
+
+
 def test_plc_cli_writes_machine_readable_evidence_and_fat_report(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
