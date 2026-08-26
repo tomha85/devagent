@@ -71,14 +71,25 @@ def test_manifest_separates_proof_structural_partial_and_unmodeled_semantics(tmp
     assert summary["unmodeled_pct"] == 20.0
 
 
-def test_manifest_reports_language_and_project_boundaries_without_overclaiming(tmp_path: Path) -> None:
+def test_manifest_reports_inventory_language_and_project_boundaries_without_overclaiming(tmp_path: Path) -> None:
     engineering = analyze_rockwell_l5x(_write_project(tmp_path))
     manifest = build_semantic_coverage_manifest(engineering.project)
 
+    inventory = manifest["inventory"]
     rll = manifest["language_summary"]["rll"]
     st = manifest["language_summary"]["structured_text"]
     aoi = manifest["language_summary"]["aoi"]
     boundaries = manifest["project_boundaries"]
+
+    assert inventory["tags"] == 7
+    assert inventory["tasks"] == 1
+    assert inventory["scheduled_program_entries"] == 1
+    assert inventory["programs"] == 1
+    assert inventory["routines"] == 2
+    assert inventory["program_rll_rungs"] == 4
+    assert inventory["structured_text_statements"] == 1
+    assert inventory["aois"] == 0
+    assert inventory["output_logic_objects"] == 1
 
     assert rll["program_rungs"] == 4
     assert rll["deterministic_boolean_rungs"] == 1
@@ -94,6 +105,7 @@ def test_manifest_reports_language_and_project_boundaries_without_overclaiming(t
     assert aoi["internal_st_statements"] == 0
     assert "MAJ" in boundaries["partially_modeled_instruction_names"]
     assert "VENDORMYSTERY" in boundaries["unmodeled_instruction_names"]
+    assert boundaries["warnings"] == engineering.project.warnings
     assert "Structural coverage means reads/writes/calls are normalized" in manifest["trust_note"]
     assert "Unreachable" in manifest["trust_note"]
 
@@ -111,11 +123,16 @@ def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) 
     section = render_semantic_coverage_section(engineering.project)
 
     assert "## Semantic Coverage / Proof Boundary" in section
+    assert "### Project Inventory" in section
+    assert "Tags: **7**" in section
+    assert "Programs: **1**" in section
+    assert "Routines: **2**" in section
     assert "Program RLL deterministic instruction coverage: **40.0%** (2/5)" in section
     assert "| MOV | 1 | STRUCTURAL_RW=1 |" in section
     assert "| MAJ | 1 | PARTIAL=1 |" in section
     assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
     assert "Reachable FULL ST dataflow: **0**/1 (0.0%)" in section
+    assert "Analysis warnings:" in section
 
 
 def test_semantic_report_augmentation_is_installed_before_cli_imports() -> None:
