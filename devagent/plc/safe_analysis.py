@@ -14,6 +14,10 @@ from devagent.plc.rockwell_general_actions import (
     generate_action_fat_tests,
     rockwell_action_check,
 )
+from devagent.plc.rockwell_standard_catalog import (
+    augment_standard_catalog,
+    standard_catalog_check,
+)
 from devagent.plc.rockwell_stateful_runtime import (
     augment_stateful_semantics,
     generate_stateful_fat_tests,
@@ -142,6 +146,9 @@ def analyze_rockwell_l5x(path):
     enforce_v2_guardrails(project)
     augment_closeout_semantics(project)
     augment_stateful_semantics(project)
+    # Known-standard instruction families should be distinguishable from truly
+    # unknown/customer-defined mnemonics, but classification never grants proof.
+    augment_standard_catalog(project)
 
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
@@ -166,8 +173,16 @@ def analyze_rockwell_l5x(path):
     compare_check = _bounded_compare_check(project)
     action_check = rockwell_action_check(project)
     stateful_check = stateful_runtime_check(project)
+    catalog_check = standard_catalog_check(project)
     support_check = rockwell_support_check(project)
-    checks.extend((structure_check, compare_check, action_check, stateful_check, support_check))
+    checks.extend((
+        structure_check,
+        compare_check,
+        action_check,
+        stateful_check,
+        catalog_check,
+        support_check,
+    ))
     state = _base._coverage_state(project)
     incomplete = (
         any(
