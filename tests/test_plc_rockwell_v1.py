@@ -172,19 +172,28 @@ def test_full_project_without_parsed_logic_is_not_statically_verified(tmp_path: 
 def test_plc_cli_writes_machine_readable_evidence_and_fat_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project = _write_l5x(tmp_path)
     output = tmp_path / "plc-output"
-    assert plc_main([str(project), "--output-dir", str(output)]) == 0
-    assert (output / "canonical_ir.json").is_file()
-    assert (output / "dependency_graph.json").is_file()
-    assert (output / "fat_tests.json").is_file()
-    assert (output / "static_verification.json").is_file()
-    assert (output / "fat_report.md").is_file()
+    assert plc_main([str(project), "--output-dir", str(output)]) == 2
+    for name in (
+        "canonical_ir.json",
+        "dependency_graph.json",
+        "fat_tests.json",
+        "static_verification.json",
+        "release_readiness.json",
+        "pipeline_stages.json",
+        "run_manifest.json",
+        "fat_report.md",
+    ):
+        assert (output / name).is_file()
     canonical = json.loads((output / "canonical_ir.json").read_text(encoding="utf-8"))
     assert canonical["metadata"]["controller_name"] == "DemoController"
-    assert "STATICALLY_VERIFIED" in (output / "fat_report.md").read_text(encoding="utf-8")
+    report = (output / "fat_report.md").read_text(encoding="utf-8")
+    assert "STATICALLY_VERIFIED" in report
+    assert "NOT_READY" in report
     stdout = capsys.readouterr().out
-    assert "[1/8] ROCKWELL L5X VALIDATION" in stdout
-    assert "[8/8] ENGINEERING VERIFICATION REPORT" in stdout
-    assert "Execution status: NOT_RUN" in stdout
+    assert "[ 1/15] PROJECT VALIDATION" in stdout
+    assert "[ 9/15] TEST EXECUTION" in stdout
+    assert "[15/15] RELEASE READINESS" in stdout
+    assert "NOT_RUN" in stdout
 
 
 def test_entrypoint_delegates_existing_software_cli_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
