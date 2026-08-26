@@ -25,6 +25,7 @@ def load_approval(
     requirements_sha256: str,
     backend_registry_sha256: str | None,
     baseline_sha256: str | None,
+    execution_results_sha256: str | None,
     release_policy_sha256: str | None,
     trust_store_sha256: str | None,
     verification_context_sha256: str,
@@ -43,6 +44,7 @@ def load_approval(
         "requirements_sha256": requirements_sha256,
         "backend_registry_sha256": backend_registry_sha256,
         "baseline_sha256": baseline_sha256,
+        "execution_results_sha256": execution_results_sha256,
         "release_policy_sha256": release_policy_sha256,
         "trust_store_sha256": trust_store_sha256,
         "verification_context_sha256": verification_context_sha256,
@@ -125,9 +127,7 @@ def evaluate_release_readiness(
             + (f"; {dynamic_gaps} require qualified-backend dynamic PASS evidence." if dynamic_gaps else ".")
         )
 
-    baseline_required = [
-        item.id for item in requirements if item.criticality in policy.require_baseline_for
-    ]
+    baseline_required = [item.id for item in requirements if item.criticality in policy.require_baseline_for]
     if baseline_required and baseline_sha256 is None:
         blockers.append(
             f"Release policy requires a regression baseline for {len(baseline_required)} requirement(s) at configured criticality levels."
@@ -151,15 +151,9 @@ def evaluate_release_readiness(
         )
 
     deterministic_counts = {
-        Severity.CRITICAL: sum(
-            1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.CRITICAL
-        ),
-        Severity.HIGH: sum(
-            1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.HIGH
-        ),
-        Severity.MEDIUM: sum(
-            1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.MEDIUM
-        ),
+        Severity.CRITICAL: sum(1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.CRITICAL),
+        Severity.HIGH: sum(1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.HIGH),
+        Severity.MEDIUM: sum(1 for risk in risks if risk.origin == "DETERMINISTIC" and risk.severity is Severity.MEDIUM),
     }
     budgets = {
         Severity.CRITICAL: policy.max_deterministic_critical,
@@ -168,13 +162,9 @@ def evaluate_release_readiness(
     }
     for severity, count in deterministic_counts.items():
         if count > budgets[severity]:
-            blockers.append(
-                f"{count} unresolved deterministic {severity.value} risk(s) exceed policy limit {budgets[severity]}."
-            )
+            blockers.append(f"{count} unresolved deterministic {severity.value} risk(s) exceed policy limit {budgets[severity]}.")
         elif count:
-            conditions.append(
-                f"Disposition {count} deterministic {severity.value} risk(s) before final engineering signoff."
-            )
+            conditions.append(f"Disposition {count} deterministic {severity.value} risk(s) before final engineering signoff.")
 
     ai_high = [
         risk
@@ -241,21 +231,15 @@ def evaluate_release_readiness(
         "requirements_dynamic_policy": sum(
             1
             for item in requirements
-            if item.verification_mode is RequirementVerificationMode.DYNAMIC
-            or item.criticality in policy.require_dynamic_for
+            if item.verification_mode is RequirementVerificationMode.DYNAMIC or item.criticality in policy.require_dynamic_for
         ),
         "requirements_static_policy": sum(
             1
             for item in requirements
-            if item.verification_mode is RequirementVerificationMode.STATIC
-            and item.criticality not in policy.require_dynamic_for
+            if item.verification_mode is RequirementVerificationMode.STATIC and item.criticality not in policy.require_dynamic_for
         ),
-        "requirements_dynamic_verified": sum(
-            1 for item in verifications if item.status is RequirementStatus.DYNAMICALLY_VERIFIED
-        ),
-        "requirements_static_verified": sum(
-            1 for item in verifications if item.status is RequirementStatus.STATICALLY_VERIFIED
-        ),
+        "requirements_dynamic_verified": sum(1 for item in verifications if item.status is RequirementStatus.DYNAMICALLY_VERIFIED),
+        "requirements_static_verified": sum(1 for item in verifications if item.status is RequirementStatus.STATICALLY_VERIFIED),
         "requirements_release_gaps": len(release_gaps),
         "baseline_required_requirements": len(baseline_required),
         "tests_total": len(tests),
