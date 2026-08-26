@@ -102,9 +102,16 @@ def test_v9_regression_packages_baseline_and_current_evidence_without_id_collisi
         item for item in result.evidence
         if item.id in logic_change.evidence_ids and item.id.startswith("BASELINE:")
     ]
+    current_items = [
+        item for item in result.evidence
+        if item.id in logic_change.evidence_ids and not item.id.startswith("BASELINE:")
+    ]
     assert len(baseline_items) == 1
+    assert len(current_items) == 1
     assert baseline_items[0].source_sha256 == result.baseline_sha256
     assert baseline_items[0].payload["baseline"] is True
+    assert baseline_items[0].payload["paths"] == [[{"tag": "A", "required": True}]]
+    assert current_items[0].payload["paths"] == [[{"tag": "B", "required": True}]]
 
 
 def test_release_triggering_production_ci_contains_rockwell_v9_gate() -> None:
