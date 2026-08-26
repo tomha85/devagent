@@ -5,7 +5,12 @@ from collections import defaultdict
 from devagent.plc import production_review as _review
 from devagent.plc.production_models import RiskFinding, Severity
 from devagent.plc.production_utils import stable_id
-from devagent.plc.rockwell_alias_hardening import canonical_tag_identity, canonical_writer_sources
+from devagent.plc.rockwell_alias_hardening import (
+    canonical_tag_identity,
+    canonical_writer_sources,
+    identity_is_resolved,
+    storage_identities_overlap,
+)
 
 _ORIGINAL_DETECT_RISKS = _review.detect_risks
 
@@ -24,28 +29,59 @@ def _external_writes(project):
             yield write, program
 
 
-def _canonical_multi_writer_risks(project) -> list[RiskFinding]:
+def _writer_components(project):
     representatives: dict[tuple[str, str], tuple[str, str | None]] = {}
     for ref, program in _external_writes(project):
         identity = canonical_tag_identity(project, ref, program)
-        representatives.setdefault(identity, (ref, program))
+        if identity_is_resolved(identity):
+            representatives.setdefault(identity, (ref, program))
 
+    pending = set(representatives)
+    components = []
+    while pending:
+        root = min(pending)
+        pending.remove(root)
+        component = {root}
+        frontier = [root]
+        while frontier:
+            current = frontier.pop()
+            overlapping = {
+                other
+                for other in pending
+                if storage_identities_overlap(current, other)
+            }
+            pending.difference_update(overlapping)
+            component.update(overlapping)
+            frontier.extend(overlapping)
+        components.append((component, representatives))
+    return components
+
+
+def _canonical_multi_writer_risks(project) -> list[RiskFinding]:
     result: list[RiskFinding] = []
-    for identity, (ref, program) in sorted(representatives.items(), key=lambda item: item[0]):
-        sources = canonical_writer_sources(project, ref, program)
+    for component, representatives in _writer_components(project):
+        sources: set[str] = set()
+        for identity in component:
+            ref, program = representatives[identity]
+            sources.update(canonical_writer_sources(project, ref, program))
         if len(sources) <= 1:
             continue
-        subject = f"{identity[0]}::{identity[1]}"
+        identities = sorted(component)
+        subject = ", ".join(f"{scope}::{path}" for scope, path in identities[:4])
+        if len(identities) > 4:
+            subject += f", +{len(identities) - 4} overlapping storage identity(ies)"
+        stable_subject = "|".join(f"{scope}::{path}" for scope, path in identities)
+        evidence_ids = tuple(sorted(sources, key=str.casefold))
         result.append(
             RiskFinding(
-                stable_id("RISK", "MULTI_WRITER_CANONICAL", subject),
+                stable_id("RISK", "MULTI_WRITER_CANONICAL", stable_subject),
                 "MULTIPLE_WRITERS",
                 f"Multiple canonical writers for {subject}",
                 Severity.MEDIUM,
-                f"{subject} is written by {len(sources)} distinct executable sources after Rockwell scope/case/AliasFor normalization.",
-                "Final value can depend on task/scan order, retentive behavior, or a later cross-language/alias write.",
+                f"Overlapping Rockwell storage is written by {len(evidence_ids)} distinct executable sources after scope/case/AliasFor/member normalization.",
+                "Final value can depend on task/scan order, retentive behavior, or a later cross-language/alias/whole-tag write.",
                 "Review writer precedence and consolidate or explicitly document intentional ownership before release.",
-                sources,
+                evidence_ids,
             )
         )
     return result
@@ -67,6 +103,8 @@ def _canonical_retention_risks(project) -> list[RiskFinding]:
             if not operand:
                 continue
             identity = canonical_tag_identity(project, operand, rung.program)
+            if not identity_is_resolved(identity):
+                continue
             labels.setdefault(identity, operand)
             if name == "OTL":
                 latched[identity].append(rung.id)
@@ -75,16 +113,16 @@ def _canonical_retention_risks(project) -> list[RiskFinding]:
 
     result: list[RiskFinding] = []
     for identity, evidence_ids in sorted(latched.items(), key=lambda item: item[0]):
-        if identity in unlatched:
+        if any(storage_identities_overlap(identity, reset) for reset in unlatched):
             continue
         subject = f"{identity[0]}::{identity[1]}"
         result.append(
             RiskFinding(
                 stable_id("RISK", "LATCH_CANONICAL", subject),
                 "RETENTIVE_LOGIC",
-                f"Latched output {labels.get(identity, subject)} has no modeled canonical OTU writer",
+                f"Latched output {labels.get(identity, subject)} has no modeled overlapping canonical OTU writer",
                 Severity.MEDIUM,
-                "An OTL writer was found without a corresponding OTU after Rockwell scope/case/AliasFor normalization.",
+                "An OTL writer was found without a corresponding OTU after Rockwell scope/case/AliasFor/member normalization.",
                 "A retained command/state may remain set longer than intended if reset logic is external, protected, unsupported, or absent.",
                 "Confirm the reset/unlatch path and attach external/AOI/hardware evidence when the reset is outside normalized RLL.",
                 tuple(sorted(set(evidence_ids))),
