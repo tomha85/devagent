@@ -17,6 +17,31 @@ from devagent.plc.rockwell_l5x import parse_full_project_l5x
 
 _SIMPLE_FAT_INSTRUCTIONS = {"XIC", "XIO", "OTE", "OTL", "OTU"}
 _OUTPUT_INSTRUCTIONS = {"OTE", "OTL", "OTU"}
+_UNKNOWN_WARNING_PREFIX = "Instruction semantics not modeled for: "
+
+
+def _has_neutral_text_branch(text: str) -> bool:
+    """Detect Rockwell neutral-text branch syntax conservatively.
+
+    V1 does not derive per-output dependencies across branch legs because collapsing a
+    branched rung into one read/write set can create false Cartesian dependencies.
+    """
+
+    return "[" in text and "]" in text
+
+
+def _populate_structured_unknown_instruction_names(project: CanonicalPLCProject) -> None:
+    """Keep canonical machine output aligned with the parser's coverage warning."""
+
+    if project.unknown_instruction_names:
+        return
+    names: set[str] = set()
+    for warning in project.warnings:
+        if not warning.startswith(_UNKNOWN_WARNING_PREFIX):
+            continue
+        payload = warning[len(_UNKNOWN_WARNING_PREFIX) :]
+        names.update(name.strip() for name in payload.split(",") if name.strip())
+    project.unknown_instruction_names = sorted(names)
 
 
 def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
@@ -47,6 +72,12 @@ def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
         for reference in rung.references:
             if reference not in rung.reads and reference not in rung.writes:
                 add(rung.id, reference, "REFERENCES", rung.id)
+
+        # Rockwell neutral text represents parallel branch legs with square brackets and
+        # commas. Until V1 carries the branch AST explicitly, a rung-wide Cartesian
+        # product would create false output dependencies for outputs inside separate legs.
+        if _has_neutral_text_branch(rung.text):
+            continue
         for output in rung.writes:
             for dependency in rung.reads:
                 add(output, dependency, "DEPENDS_ON", rung.id)
@@ -68,12 +99,14 @@ def generate_fat_tests(project: CanonicalPLCProject) -> list[FATTestCase]:
     """Generate conservative test candidates only for simple boolean RLL rungs.
 
     V1 intentionally avoids claiming that every contact is an interlock or permissive.
-    The generated test establishes a traceable scenario for the rung; simulator-backed
-    execution and requirement semantics are separate future verification layers.
+    Branched neutral text is excluded until branch-path semantics are represented, so a
+    test candidate cannot silently mix conditions from independent branch legs.
     """
 
     tests: list[FATTestCase] = []
     for rung in project.rungs:
+        if _has_neutral_text_branch(rung.text):
+            continue
         names = {instruction.name.upper() for instruction in rung.instructions}
         if not names or not names.issubset(_SIMPLE_FAT_INSTRUCTIONS):
             continue
@@ -169,11 +202,15 @@ def static_verify(
         )
 
     unsupported_types = sorted({routine.routine_type for routine in project.routines if routine.routine_type != "RLL"})
-    protected_count = sum(1 for routine in project.routines if routine.source_protected)
+    protected_routine_count = sum(1 for routine in project.routines if routine.source_protected)
+    protected_aoi_count = sum(1 for aoi in project.aois if aoi.source_protected)
+    branch_rung_count = sum(1 for rung in project.rungs if _has_neutral_text_branch(rung.text))
     coverage_evidence = (
         f"semantic instructions={project.instruction_semantic_count}/{project.instruction_total}",
         f"non-RLL types={','.join(unsupported_types) if unsupported_types else 'none'}",
-        f"protected routines={protected_count}",
+        f"protected routines={protected_routine_count}",
+        f"protected AOIs={protected_aoi_count}",
+        f"branched RLL rungs={branch_rung_count}",
     )
     if not project.rungs:
         checks.append(
@@ -184,14 +221,20 @@ def static_verify(
                 evidence=coverage_evidence,
             )
         )
-    elif unsupported_types or protected_count or project.instruction_semantic_coverage < 1.0:
+    elif (
+        unsupported_types
+        or protected_routine_count
+        or protected_aoi_count
+        or branch_rung_count
+        or project.instruction_semantic_coverage < 1.0
+    ):
         checks.append(
             StaticCheck(
                 id="LOGIC_SEMANTIC_COVERAGE",
                 status=StaticCheckStatus.WARN,
                 summary=(
                     f"Deterministic instruction semantic coverage is "
-                    f"{project.instruction_semantic_coverage:.1%}; unmodeled or inaccessible logic is not treated as proven."
+                    f"{project.instruction_semantic_coverage:.1%}; unmodeled, protected, or branch-path logic is not treated as fully proven."
                 ),
                 evidence=coverage_evidence,
             )
@@ -201,17 +244,29 @@ def static_verify(
             StaticCheck(
                 id="LOGIC_SEMANTIC_COVERAGE",
                 status=StaticCheckStatus.PASS,
-                summary="All parsed RLL instructions are covered by the V1 deterministic semantic model.",
+                summary="All parsed RLL instructions and dependency paths are covered by the V1 deterministic semantic model.",
                 evidence=coverage_evidence,
             )
         )
+
+    checks.append(
+        StaticCheck(
+            id="BRANCH_DEPENDENCY_SEMANTICS",
+            status=StaticCheckStatus.WARN if branch_rung_count else StaticCheckStatus.PASS,
+            summary=(
+                f"{branch_rung_count} branched RLL rung(s) retain rung-level reads/writes, but per-output DEPENDS_ON edges and FAT candidates are withheld to avoid false cross-branch dependencies."
+                if branch_rung_count
+                else "No Rockwell neutral-text branch syntax was detected in parsed RLL rungs."
+            ),
+        )
+    )
 
     dependency_edges = [edge for edge in graph.edges if edge.kind == "DEPENDS_ON"]
     checks.append(
         StaticCheck(
             id="DEPENDENCY_GRAPH",
             status=StaticCheckStatus.PASS if project.rungs and dependency_edges else StaticCheckStatus.WARN,
-            summary=f"Dependency graph contains {len(graph.edges)} edges, including {len(dependency_edges)} tag dependencies.",
+            summary=f"Dependency graph contains {len(graph.edges)} edges, including {len(dependency_edges)} proven tag dependencies.",
         )
     )
 
@@ -231,7 +286,7 @@ def static_verify(
             summary=(
                 f"{len(fat_tests)} conservative FAT test candidate(s) are traceable to source rungs."
                 if fat_tests and traceable
-                else "No traceable simple-RLL FAT test candidates were generated."
+                else "No traceable simple, unbranched RLL FAT test candidates were generated."
             ),
         )
     )
@@ -248,17 +303,27 @@ def static_verify(
 
 def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     project = parse_full_project_l5x(path)
+    _populate_structured_unknown_instruction_names(project)
     graph = build_dependency_graph(project)
     fat_tests = generate_fat_tests(project)
     checks = static_verify(project, graph, fat_tests)
 
     unsupported_types = {routine.routine_type for routine in project.routines if routine.routine_type != "RLL"}
-    protected = any(routine.source_protected for routine in project.routines)
+    protected_routine_count = sum(1 for routine in project.routines if routine.source_protected)
+    protected_aoi_count = sum(1 for aoi in project.aois if aoi.source_protected)
+    branch_rung_count = sum(1 for rung in project.rungs if _has_neutral_text_branch(rung.text))
     incomplete_semantics = project.instruction_semantic_coverage < 1.0
     no_parsed_logic = not project.rungs
     outcome = (
         PLCOutcome.PARTIALLY_VERIFIED
-        if unsupported_types or protected or incomplete_semantics or no_parsed_logic
+        if (
+            unsupported_types
+            or protected_routine_count
+            or protected_aoi_count
+            or branch_rung_count
+            or incomplete_semantics
+            or no_parsed_logic
+        )
         else PLCOutcome.STATICALLY_VERIFIED
     )
     limitations = [
@@ -269,6 +334,14 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     ]
     if no_parsed_logic:
         limitations.append("No RLL rungs were parsed; controller logic verification remains NOT_PROVEN.")
+    if protected_aoi_count:
+        limitations.append(
+            f"{protected_aoi_count} Add-On Instruction definition(s) contain encoded/protected content; their internal behavior remains NOT_PROVEN."
+        )
+    if branch_rung_count:
+        limitations.append(
+            f"{branch_rung_count} branched RLL rung(s) are retained as source facts, but V1 withholds per-output dependencies and FAT candidates until branch-path semantics are modeled."
+        )
     return PLCEngineeringResult(
         outcome=outcome,
         project=project,
