@@ -96,6 +96,10 @@ def test_l5x_with_dtd_or_entity_is_rejected_before_xml_parse(tmp_path: Path) -> 
 
 def test_supported_st_logic_is_normalized_in_v2(tmp_path: Path) -> None:
     mixed = FULL_PROJECT_L5X.replace(
+        "</RLLContent>",
+        '<Rung Number="2" Type="N"><Text><![CDATA[JSR(SequenceST,0);]]></Text></Rung></RLLContent>',
+        1,
+    ).replace(
         "</Routines>",
         '<Routine Name="SequenceST" Type="ST"><STContent><Line Number="0">MotorRun := StartPB;</Line></STContent></Routine></Routines>',
         1,
