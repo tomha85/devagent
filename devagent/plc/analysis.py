@@ -140,7 +140,7 @@ def static_verify(
         )
     ]
 
-    if all(
+    if project.rungs and all(
         rung.source.artifact
         and rung.source.controller
         and rung.source.program
@@ -160,7 +160,11 @@ def static_verify(
             StaticCheck(
                 id="SOURCE_PROVENANCE",
                 status=StaticCheckStatus.NOT_PROVEN,
-                summary="One or more parsed logic objects are missing source provenance.",
+                summary=(
+                    "No parsed RLL logic is available for source-provenance verification."
+                    if not project.rungs
+                    else "One or more parsed logic objects are missing source provenance."
+                ),
             )
         )
 
@@ -171,7 +175,16 @@ def static_verify(
         f"non-RLL types={','.join(unsupported_types) if unsupported_types else 'none'}",
         f"protected routines={protected_count}",
     )
-    if unsupported_types or protected_count or project.instruction_semantic_coverage < 1.0:
+    if not project.rungs:
+        checks.append(
+            StaticCheck(
+                id="LOGIC_SEMANTIC_COVERAGE",
+                status=StaticCheckStatus.NOT_PROVEN,
+                summary="No RLL rungs were parsed; PLC logic semantic coverage cannot be proven.",
+                evidence=coverage_evidence,
+            )
+        )
+    elif unsupported_types or protected_count or project.instruction_semantic_coverage < 1.0:
         checks.append(
             StaticCheck(
                 id="LOGIC_SEMANTIC_COVERAGE",
@@ -242,7 +255,7 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     unsupported_types = {routine.routine_type for routine in project.routines if routine.routine_type != "RLL"}
     protected = any(routine.source_protected for routine in project.routines)
     incomplete_semantics = project.instruction_semantic_coverage < 1.0
-    no_parsed_logic = bool(project.routines) and not project.rungs
+    no_parsed_logic = not project.rungs
     outcome = (
         PLCOutcome.PARTIALLY_VERIFIED
         if unsupported_types or protected or incomplete_semantics or no_parsed_logic
@@ -254,6 +267,8 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
         "The analyzer does not infer safety integrity level, required timing, or machine requirements that are absent from the project.",
         *project.warnings,
     ]
+    if no_parsed_logic:
+        limitations.append("No RLL rungs were parsed; controller logic verification remains NOT_PROVEN.")
     return PLCEngineeringResult(
         outcome=outcome,
         project=project,
