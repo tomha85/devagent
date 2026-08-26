@@ -214,34 +214,35 @@ class PLCProjectMetadata:
     major_revision: str | None
     minor_revision: str | None
     full_project: bool
+    major_fault_program: str | None = None
 
 
 @dataclass
 class CanonicalPLCProject:
     metadata: PLCProjectMetadata
-    tags: list[PLCTag] = field(default_factory=list)
     data_types: list[PLCDataType] = field(default_factory=list)
     modules: list[PLCModule] = field(default_factory=list)
     tasks: list[PLCTask] = field(default_factory=list)
-    aois: list[PLCAddOnInstruction] = field(default_factory=list)
+    tags: list[PLCTag] = field(default_factory=list)
     programs: list[PLCProgram] = field(default_factory=list)
     routines: list[PLCRoutine] = field(default_factory=list)
+    aois: list[PLCAddOnInstruction] = field(default_factory=list)
     rungs: list[PLCRung] = field(default_factory=list)
     logic_statements: list[PLCLogicStatement] = field(default_factory=list)
     output_logic: list[PLCOutputLogic] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    unknown_instruction_names: list[str] = field(default_factory=list)
-    partially_modeled_instruction_names: list[str] = field(default_factory=list)
     instruction_total: int = 0
     instruction_semantic_count: int = 0
-    st_statement_total: int = 0
-    st_statement_semantic_count: int = 0
     branch_rung_total: int = 0
     branch_rung_semantic_count: int = 0
+    st_statement_total: int = 0
+    st_statement_semantic_count: int = 0
     aoi_internal_total: int = 0
     aoi_internal_modeled_count: int = 0
     aoi_call_total: int = 0
     aoi_call_bound_count: int = 0
+    unknown_instruction_names: list[str] = field(default_factory=list)
+    partially_modeled_instruction_names: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def instruction_semantic_coverage(self) -> float:
@@ -250,16 +251,28 @@ class CanonicalPLCProject:
         return self.instruction_semantic_count / self.instruction_total
 
     @property
+    def branch_semantic_coverage(self) -> float:
+        if self.branch_rung_total == 0:
+            return 1.0
+        return self.branch_rung_semantic_count / self.branch_rung_total
+
+    @property
     def st_semantic_coverage(self) -> float:
         if self.st_statement_total == 0:
             return 1.0
         return self.st_statement_semantic_count / self.st_statement_total
 
     @property
-    def branch_semantic_coverage(self) -> float:
-        if self.branch_rung_total == 0:
+    def aoi_internal_coverage(self) -> float:
+        if self.aoi_internal_total == 0:
             return 1.0
-        return self.branch_rung_semantic_count / self.branch_rung_total
+        return self.aoi_internal_modeled_count / self.aoi_internal_total
+
+    @property
+    def aoi_call_coverage(self) -> float:
+        if self.aoi_call_total == 0:
+            return 1.0
+        return self.aoi_call_bound_count / self.aoi_call_total
 
 
 @dataclass(frozen=True)
@@ -273,21 +286,6 @@ class PLCDependencyEdge:
 @dataclass
 class PLCDependencyGraph:
     edges: list[PLCDependencyEdge] = field(default_factory=list)
-    unknown_instruction_names: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class FATTestCase:
-    id: str
-    title: str
-    source: PLCSourceRef
-    output_tag: str
-    preconditions: dict[str, bool]
-    expected: str
-    method: str = "STATIC_CANDIDATE"
-    execution_status: str = "NOT_RUN"
-    limitations: tuple[str, ...] = ()
-    scenario: str = "POSITIVE_PATH"
 
 
 @dataclass(frozen=True)
@@ -298,25 +296,27 @@ class StaticCheck:
     evidence: tuple[str, ...] = ()
 
 
-@dataclass
-class PLCEngineeringResult:
-    outcome: PLCOutcome
-    project: CanonicalPLCProject
-    graph: PLCDependencyGraph
-    fat_tests: list[FATTestCase]
-    static_checks: list[StaticCheck]
-    limitations: list[str]
+@dataclass(frozen=True)
+class FATTestCase:
+    id: str
+    title: str
+    source: PLCSourceRef
+    output_tag: str
+    preconditions: dict[str, bool | int | float]
+    expected: str
+    execution_status: str = "NOT_RUN"
+    scenario: str = "STATIC_PATH"
 
 
 def plc_jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
-    if hasattr(value, "__dataclass_fields__"):
-        return plc_jsonable(asdict(value))
-    if isinstance(value, dict):
-        return {str(key): plc_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [plc_jsonable(item) for item in value]
     if isinstance(value, Path):
         return str(value)
+    if hasattr(value, "__dataclass_fields__"):
+        return {key: plc_jsonable(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): plc_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [plc_jsonable(item) for item in value]
     return value
