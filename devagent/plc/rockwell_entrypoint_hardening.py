@@ -48,15 +48,23 @@ def _programs_without_executable_entry(project) -> set[str]:
     major_fault = getattr(project.metadata, "major_fault_program", None)
     controller_entries = {major_fault.casefold()} if major_fault else set()
     executable_entries = scheduled | controller_entries
-    return {
-        program.name.casefold()
-        for program in project.programs
-        if program.routine_ids
-        and (
-            program.name.casefold() not in executable_entries
-            or not program.main_routine_name
+    routines_by_program: dict[str, set[str]] = {}
+    for routine in project.routines:
+        routines_by_program.setdefault(routine.program.casefold(), set()).add(routine.name.casefold())
+
+    blocked: set[str] = set()
+    for program in project.programs:
+        if not program.routine_ids:
+            continue
+        key = program.name.casefold()
+        known = routines_by_program.get(key, set())
+        has_concrete_main = bool(
+            program.main_routine_name
+            and program.main_routine_name.casefold() in known
         )
-    }
+        if key not in executable_entries or not has_concrete_main:
+            blocked.add(key)
+    return blocked
 
 
 def _withhold_unentered_program_semantics(project) -> None:
