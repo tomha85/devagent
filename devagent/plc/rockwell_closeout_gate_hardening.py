@@ -96,19 +96,31 @@ def rockwell_capability_profile(project):
     unscheduled = _unscheduled_executable_programs(project)
     unreachable_routines = _unreachable_entry_routines(project)
     complex_compare = _complex_compare_rungs(project)
+    synthesized_structure_warnings = [
+        *(
+            f"{_STRUCTURE_WARNING_PREFIX}controller MajorFaultProgram {name} is not present in exported programs"
+            for name in missing_controller_entries
+        ),
+        *(
+            f"{_STRUCTURE_WARNING_PREFIX}routine {routine.program}/{routine.name} is outside the Main/Fault/JSR execution closure"
+            for routine in unreachable_routines
+        ),
+    ]
+    all_structure_warnings = list(dict.fromkeys([*structure_warnings, *synthesized_structure_warnings]))
+
     static_gaps = dict(profile.get("static_gaps") or {})
-    static_gaps["execution_structure_warnings"] = len(structure_warnings)
-    # Keep the original machine-readable key for V9 compatibility; it now
-    # covers every executable entry program, including Controller.MajorFaultProgram.
+    # Preserve the V9 machine-readable gap schema. New reachability defects are
+    # execution-structure warnings rather than new top-level gap keys.
+    static_gaps["execution_structure_warnings"] = len(all_structure_warnings)
+    # Keep the original key for compatibility; it now covers every executable
+    # entry program, including Controller.MajorFaultProgram.
     static_gaps["scheduled_programs_without_main_routine"] = len(missing_main)
-    static_gaps["missing_controller_entry_programs"] = len(missing_controller_entries)
     static_gaps["unscheduled_executable_programs"] = len(unscheduled)
-    static_gaps["unreachable_entry_routines"] = len(unreachable_routines)
     static_gaps["unmodeled_compare_rungs"] = len(complex_compare)
     profile["static_gaps"] = static_gaps
     profile["execution_structure"] = {
-        "warnings": len(structure_warnings),
-        "details": structure_warnings,
+        "warnings": len(all_structure_warnings),
+        "details": all_structure_warnings,
         "scheduled_programs_without_main_routine": [program.name for program in missing_main],
         "missing_controller_entry_programs": missing_controller_entries,
         "unscheduled_executable_programs": [program.name for program in unscheduled],
