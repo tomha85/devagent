@@ -147,12 +147,13 @@ def install() -> None:
 
 
 def install_domain_evidence() -> None:
-    """Attach namespaced baseline evidence during the normal stage-14 assembly."""
+    """Attach namespaced baseline evidence in both V4 and V5 stage-14 assembly."""
 
     global _DOMAIN_EVIDENCE_INSTALLED
     if _DOMAIN_EVIDENCE_INSTALLED:
         return
     from devagent.plc import production as _production
+    from devagent.plc import production_v5 as _production_v5
 
     original_append = _production._append_domain_evidence
 
@@ -164,7 +165,11 @@ def install_domain_evidence() -> None:
                 result.evidence.append(item)
                 existing.add(item.id)
 
+    # V4 resolves this module global at runtime. V5 imported the original helper
+    # by value, so patch both bindings to prevent its evidence rebuild from
+    # discarding the baseline provenance added by V4.
     _production._append_domain_evidence = append_domain_evidence
+    _production_v5._append_domain_evidence = append_domain_evidence
     _DOMAIN_EVIDENCE_INSTALLED = True
 
 
