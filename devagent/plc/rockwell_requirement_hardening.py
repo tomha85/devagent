@@ -10,6 +10,7 @@ from devagent.plc.rockwell_alias_hardening import (
     canonical_tag_identity,
     canonical_writer_sources,
     distinct_named_tag_identities,
+    identity_is_resolved,
 )
 
 _ORIGINAL_VERIFY_REQUIREMENT = _verification.verify_requirement
@@ -67,9 +68,6 @@ def verify_requirement(requirement, engineering, evidence, tests):
 
     output, logic = _proof_output(requirement, engineering, result)
     if output is None or logic is None:
-        # The original verifier should already fail closed here. If a future
-        # implementation returns a proof without one unique FULL logic object,
-        # refuse to inherit that proof silently.
         return _unsafe(
             result,
             "Rockwell proof could not be bound to exactly one FULL output-logic object after canonical writer validation; static proof is withheld.",
@@ -85,7 +83,7 @@ def verify_requirement(requirement, engineering, evidence, tests):
 
     program = qualified_program or logic.source.program
     identity = canonical_tag_identity(engineering.project, output, program)
-    if identity[0] in {"unresolved", "alias-cycle"}:
+    if not identity_is_resolved(identity):
         return _unsafe(
             result,
             f"Requirement output {output} does not resolve to one stable Rockwell tag identity; alias/scope proof is withheld.",
@@ -95,7 +93,7 @@ def verify_requirement(requirement, engineering, evidence, tests):
     if len(writers) != 1:
         return _unsafe(
             result,
-            f"Requirement output {output} has {len(writers)} canonical executable writer source(s), including aliases/cross-language writes; static verification/conflict is withheld without deterministic writer-order semantics.",
+            f"Requirement output {output} has {len(writers)} canonical executable writer source(s), including aliases, overlapping storage, or cross-language writes; static verification/conflict is withheld without deterministic writer-order semantics.",
             writers,
         )
     return result
