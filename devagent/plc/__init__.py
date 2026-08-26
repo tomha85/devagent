@@ -21,10 +21,15 @@ from devagent.plc.rockwell_compare_reachability_hardening import (
 _install_rockwell_compare_reachability_hardening()
 
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
+from devagent.plc.rockwell_v10_semantics import install as _install_rockwell_v10_semantics
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
 from devagent.plc.rockwell_closeout_gate_hardening import install as _install_rockwell_closeout_gate_hardening
 
 _install_rockwell_requirement_hardening()
+# V10 extends the already-hardened V9 theorem. It may prove a bounded local
+# OTL/OTU action effect, but never promotes that local effect to final-state
+# static verification without stronger ordering/dynamic evidence.
+_install_rockwell_v10_semantics()
 _install_rockwell_risk_hardening()
 # Install the V9 support-contract guard before importing regression/production
 # modules. Those modules import safe_analysis by value, so the patched support
