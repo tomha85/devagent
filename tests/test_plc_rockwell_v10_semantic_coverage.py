@@ -55,20 +55,22 @@ def test_manifest_separates_proof_structural_partial_and_unmodeled_semantics(tmp
     assert manifest["project"]["controller"] == "Coverage"
     assert _row(manifest, "XIC")["levels"] == {"DETERMINISTIC_PATH": 1}
     assert _row(manifest, "OTE")["levels"] == {"DETERMINISTIC_PATH": 1}
-    assert _row(manifest, "MOV")["levels"] == {"STRUCTURAL_RW": 1}
+    assert _row(manifest, "MOV")["levels"] == {"BOUNDED_DETERMINISTIC": 1}
     assert _row(manifest, "MAJ")["levels"] == {"PARTIAL": 1}
     assert _row(manifest, "VENDORMYSTERY")["levels"] == {"UNMODELED": 1}
 
     summary = manifest["instruction_summary"]
     assert summary["scope"] == "PROGRAM_RLL"
     assert summary["total_occurrences"] == 5
-    assert summary["deterministic_occurrences"] == 2
-    assert summary["structural_only_occurrences"] == 1
+    assert summary["deterministic_occurrences"] == 3
+    assert summary["structural_only_occurrences"] == 0
     assert summary["partial_occurrences"] == 1
     assert summary["unmodeled_occurrences"] == 1
-    assert summary["deterministic_pct"] == 40.0
+    assert summary["deterministic_pct"] == 60.0
     assert summary["structural_or_better_pct"] == 60.0
     assert summary["unmodeled_pct"] == 20.0
+    assert manifest["action_semantics"]["modeled_actions"] == 1
+    assert manifest["stateful_runtime_semantics"]["modeled_occurrences"] == 0
 
 
 def test_manifest_reports_inventory_language_and_project_boundaries_without_overclaiming(tmp_path: Path) -> None:
@@ -93,6 +95,7 @@ def test_manifest_reports_inventory_language_and_project_boundaries_without_over
 
     assert rll["program_rungs"] == 4
     assert rll["deterministic_boolean_rungs"] == 1
+    assert rll["bounded_action_rungs"] == 1
     assert st["statements"] == 1
     # Sequence is discovered in the project inventory but is not the Main routine
     # and is never reached by a JSR. The final semantic state therefore stays
@@ -127,8 +130,8 @@ def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) 
     assert "Tags: **7**" in section
     assert "Programs: **1**" in section
     assert "Routines: **2**" in section
-    assert "Program RLL deterministic instruction coverage: **40.0%** (2/5)" in section
-    assert "| MOV | 1 | STRUCTURAL_RW=1 |" in section
+    assert "Program RLL deterministic instruction coverage: **60.0%** (3/5)" in section
+    assert "| MOV | 1 | BOUNDED_DETERMINISTIC=1 |" in section
     assert "| MAJ | 1 | PARTIAL=1 |" in section
     assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
     assert "ST statements discovered: **1**" in section
