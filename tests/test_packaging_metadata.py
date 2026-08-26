@@ -15,7 +15,7 @@ def test_pypi_distribution_and_cli_metadata_are_release_consistent() -> None:
 
     assert project["name"] == "devagent-ai"
     assert project["version"] == __version__
-    assert project["scripts"]["devagent"] == "devagent.cli:main"
+    assert project["scripts"]["devagent"] == "devagent.entrypoint:main"
 
 
 def test_source_checkout_remains_editable_install_compatible() -> None:
