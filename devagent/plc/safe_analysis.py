@@ -124,7 +124,7 @@ def _limitations(project, state, compare_check, support_check) -> list[str]:
         )
     if project.partially_modeled_instruction_names:
         result.append(
-            "Recognized Rockwell instructions remain PARTIAL and do not contribute to fully proven behavioral coverage: "
+            "Recognized Rockwell instructions remain directionally PARTIAL and do not contribute to fully proven behavioral coverage: "
             + ", ".join(project.partially_modeled_instruction_names)
         )
     return list(dict.fromkeys(result))
@@ -140,10 +140,7 @@ def analyze_rockwell_l5x(path):
     augment_rockwell_structure(project)
     augment_compare_instruction_semantics(project)
     enforce_v2_guardrails(project)
-    # Complex Rockwell families are classified as PARTIAL instead of UNKNOWN.
     augment_closeout_semantics(project)
-    # Timers/counters are structurally parsed but require time/edge execution
-    # evidence; classify them PARTIAL before coverage/support gating.
     augment_stateful_semantics(project)
 
     graph = _base.build_dependency_graph(project)
