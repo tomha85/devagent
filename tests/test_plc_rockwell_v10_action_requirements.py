@@ -56,7 +56,7 @@ def test_explicit_move_requirement_gets_local_action_proof_and_fat_link(tmp_path
     )
     result = run_production_verification_v5(project, requirement_paths=[requirements])
 
-    verification = result.requirement_verifications[0]
+    verification = result.requirement_verification[0]
     assert verification.status is RequirementStatus.ACTION_EFFECT_PROVEN
     assert verification.ai_assisted is False
     assert verification.confidence == 1.0
@@ -73,6 +73,6 @@ def test_vague_move_tag_cooccurrence_is_not_promoted(tmp_path: Path) -> None:
     )
     result = run_production_verification_v5(project, requirement_paths=[requirements])
 
-    verification = result.requirement_verifications[0]
+    verification = result.requirement_verification[0]
     assert verification.status is not RequirementStatus.ACTION_EFFECT_PROVEN
     assert verification.linked_test_ids == ()
