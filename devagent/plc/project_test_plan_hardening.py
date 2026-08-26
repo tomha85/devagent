@@ -5,7 +5,12 @@ import json
 
 from devagent.plc.models import plc_jsonable
 from devagent.plc.production_models import EvidenceItem, StageRecord, StageStatus
-from devagent.plc.project_test_planner import TestIntentMethod, TestIntentTrust, plan_project_tests
+from devagent.plc.project_test_planner import (
+    BehaviorKind,
+    TestIntentMethod,
+    TestIntentTrust,
+    plan_project_tests,
+)
 
 _INSTALLED = False
 
@@ -20,6 +25,20 @@ def _plan_sha256(plan) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _install_planner_classification_guards() -> None:
+    from devagent.plc import project_test_planner as _planner
+
+    def fat_behavior_kind(test):
+        if test.scenario.startswith("THRESHOLD_"):
+            return BehaviorKind.THRESHOLD_OUTPUT
+        expected = test.expected.casefold()
+        if "=true (latched)" in expected or "=false (unlatched)" in expected:
+            return BehaviorKind.LATCHED_OUTPUT
+        return BehaviorKind.BOOLEAN_OUTPUT
+
+    _planner._fat_behavior_kind = fat_behavior_kind
+
+
 def install() -> None:
     """Wrap V5 once so every production run receives a project-specific test plan."""
 
@@ -29,6 +48,7 @@ def install() -> None:
 
     from devagent.plc import production_v5 as _production_v5
 
+    _install_planner_classification_guards()
     original = _production_v5.run_production_verification_v5
 
     def run_production_verification_v5(*args, **kwargs):
