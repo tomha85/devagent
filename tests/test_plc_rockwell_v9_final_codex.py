@@ -148,3 +148,90 @@ def test_limit_compare_rung_is_explicit_support_contract_gap(tmp_path: Path) -> 
     assert profile["static_gaps"]["unmodeled_compare_rungs"] == 1
     assert profile["typed_compare"]["complex_instruction_names"] == ["LIMIT"]
     assert support.status.value == "WARN"
+
+
+def test_unreachable_routine_inside_scheduled_program_cannot_create_proof_or_fat(tmp_path: Path) -> None:
+    payload = '''<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="RoutineClosure" TargetType="Controller">
+  <Controller Use="Target" Name="RoutineClosure" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+    <DataTypes /><Modules /><AddOnInstructionDefinitions />
+    <Tags>
+      <Tag Name="Start" TagType="Base" DataType="BOOL" />
+      <Tag Name="Fan" TagType="Base" DataType="BOOL" />
+      <Tag Name="DeadStart" TagType="Base" DataType="BOOL" />
+      <Tag Name="DeadOut" TagType="Base" DataType="BOOL" />
+    </Tags>
+    <Programs><Program Name="MainProgram" MainRoutineName="Main"><Routines>
+      <Routine Name="Main" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[JSR(Worker,0);]]></Text></Rung>
+      </RLLContent></Routine>
+      <Routine Name="Worker" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[XIC(Start)OTE(Fan);]]></Text></Rung>
+      </RLLContent></Routine>
+      <Routine Name="Dead" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[XIC(DeadStart)OTE(DeadOut);]]></Text></Rung>
+      </RLLContent></Routine>
+    </Routines></Program></Programs>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms></Task></Tasks>
+  </Controller>
+</RSLogix5000Content>'''
+    path = tmp_path / "RoutineClosure.L5X"
+    path.write_text(payload, encoding="utf-8")
+
+    engineering = analyze_rockwell_l5x(path)
+    profile = rockwell_capability_profile(engineering.project)
+    by_output = {item.output_tag: item for item in engineering.project.output_logic}
+
+    assert by_output["Fan"].semantic_state.value == "FULL"
+    assert by_output["DeadOut"].semantic_state.value == "PARTIAL"
+    assert any(test.output_tag == "Fan" for test in engineering.fat_tests)
+    assert not any(test.output_tag == "DeadOut" for test in engineering.fat_tests)
+    assert profile["static_contract"] == "PARTIAL_FAIL_CLOSED"
+    assert profile["static_gaps"]["execution_structure_warnings"] == 1
+    assert profile["execution_structure"]["unreachable_entry_routines"] == ["MainProgram/Dead"]
+
+    verification = verify_requirement(
+        _static_requirement("IF DeadStart=TRUE THEN DeadOut=TRUE"),
+        engineering,
+        evidence_index(engineering),
+        engineering.fat_tests,
+    )
+    assert verification.status is not RequirementStatus.STATICALLY_VERIFIED
+
+
+def test_major_fault_entry_without_concrete_main_is_explicit_support_gap(tmp_path: Path) -> None:
+    engineering = analyze_rockwell_l5x(
+        _write_project(
+            tmp_path,
+            name="FaultNoMain",
+            scheduled=False,
+            main_routine_name=None,
+            controller_major_fault_program="FaultProgram",
+            program_name="FaultProgram",
+        )
+    )
+    profile = rockwell_capability_profile(engineering.project)
+
+    assert engineering.outcome.value == "PARTIALLY_VERIFIED"
+    assert profile["static_contract"] == "PARTIAL_FAIL_CLOSED"
+    assert profile["static_gaps"]["scheduled_programs_without_main_routine"] == 1
+    assert profile["execution_structure"]["scheduled_programs_without_main_routine"] == ["FaultProgram"]
+    assert profile["static_gaps"]["unscheduled_executable_programs"] == 0
+    assert all(item.semantic_state.value == "PARTIAL" for item in engineering.project.output_logic)
+    assert not any(test.output_tag == "Fan" for test in engineering.fat_tests)
+
+
+def test_missing_controller_major_fault_program_reference_is_fail_closed(tmp_path: Path) -> None:
+    engineering = analyze_rockwell_l5x(
+        _write_project(
+            tmp_path,
+            name="MissingFaultProgram",
+            scheduled=True,
+            controller_major_fault_program="NotExportedFaultProgram",
+        )
+    )
+    profile = rockwell_capability_profile(engineering.project)
+
+    assert profile["static_contract"] == "PARTIAL_FAIL_CLOSED"
+    assert profile["static_gaps"]["execution_structure_warnings"] >= 1
+    assert profile["execution_structure"]["missing_controller_entry_programs"] == ["NotExportedFaultProgram"]
