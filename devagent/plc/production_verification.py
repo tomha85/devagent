@@ -24,14 +24,7 @@ _EXECUTION_SCHEMA = "devagent-plc-execution-results-v1"
 
 
 def _ote_truth(logic, assignment: dict[str, bool], expected: bool) -> str:
-    """Return PROVEN, CONFLICT, or UNKNOWN for a partial Boolean assignment.
-
-    A path is possible when none of the supplied inputs contradict it. A path is
-    definite when every term in that path was explicitly supplied and matched.
-    This prevents an under-specified requirement from being mislabeled as a
-    conflict simply because another PLC permissive was omitted from the prose.
-    """
-
+    """Return PROVEN, CONFLICT, or UNKNOWN for a partial Boolean assignment."""
     possible = 0
     definite = 0
     for path in logic.paths:
@@ -49,7 +42,6 @@ def _ote_truth(logic, assignment: dict[str, bool], expected: bool) -> str:
         possible += 1
         if complete:
             definite += 1
-
     if expected:
         if definite:
             return "PROVEN"
@@ -63,21 +55,13 @@ def _ote_truth(logic, assignment: dict[str, bool], expected: bool) -> str:
     return "UNKNOWN"
 
 
-def requirement_candidates(
-    requirement: PLCRequirement,
-    engineering,
-    evidence: list[EvidenceItem],
-) -> tuple[list[str], list[str]]:
+def requirement_candidates(requirement: PLCRequirement, engineering, evidence: list[EvidenceItem]) -> tuple[list[str], list[str]]:
     project = engineering.project
     explicit_tags = sorted(
         {tag.name for tag in project.tags if tag_occurs(requirement.text, tag.name)},
         key=str.casefold,
     )
-    evidence_ids = [
-        f"TAG:{tag.scope}:{tag.name}"
-        for tag in project.tags
-        if tag.name in explicit_tags
-    ]
+    evidence_ids = [f"TAG:{tag.scope}:{tag.name}" for tag in project.tags if tag.name in explicit_tags]
     req_tokens = tokens(requirement.text)
     if not explicit_tags and req_tokens:
         scored: list[tuple[int, str]] = []
@@ -89,18 +73,12 @@ def requirement_candidates(
     return explicit_tags, list(dict.fromkeys(evidence_ids))
 
 
-def verify_requirement(
-    requirement: PLCRequirement,
-    engineering,
-    evidence: list[EvidenceItem],
-    tests: list[FATTestCase],
-) -> RequirementVerification:
+def verify_requirement(requirement: PLCRequirement, engineering, evidence: list[EvidenceItem], tests: list[FATTestCase]) -> RequirementVerification:
     matched_tags, evidence_ids = requirement_candidates(requirement, engineering, evidence)
     modeled_outputs = {
         logic.output_tag
         for logic in engineering.project.output_logic
-        if logic.semantic_state is PLCSemanticState.FULL
-        and not logic.origin.startswith("AOI_INTERNAL:")
+        if logic.semantic_state is PLCSemanticState.FULL and not logic.origin.startswith("AOI_INTERNAL:")
     }
     explicit_outputs = [
         tag for tag in matched_tags
@@ -114,7 +92,6 @@ def verify_requirement(
             tuple(evidence_ids),
             tuple(matched_tags),
         )
-
     if len(explicit_outputs) == 1:
         output = explicit_outputs[0]
         expected = explicit_bool(requirement.text, output)
@@ -134,7 +111,6 @@ def verify_requirement(
         ]
         logic_evidence = tuple(logic.id for logic in matching_logic)
         combined_evidence = tuple(dict.fromkeys([*evidence_ids, *logic_evidence]))
-
         if len(matching_logic) != 1:
             return RequirementVerification(
                 requirement.id,
@@ -160,13 +136,11 @@ def verify_requirement(
                 combined_evidence,
                 tuple(matched_tags),
             )
-
         truth = _ote_truth(logic, assignment, expected)
         if truth == "PROVEN":
             linked = [
                 test.id for test in tests
-                if test.output_tag == output
-                and all(test.preconditions.get(key) == value for key, value in assignment.items())
+                if test.output_tag == output and all(test.preconditions.get(key) == value for key, value in assignment.items())
             ]
             return RequirementVerification(
                 requirement.id,
@@ -191,7 +165,6 @@ def verify_requirement(
             combined_evidence,
             tuple(matched_tags),
         )
-
     if matched_tags:
         return RequirementVerification(
             requirement.id,
@@ -208,18 +181,10 @@ def verify_requirement(
             tuple(evidence_ids),
             confidence=0.5,
         )
-    return RequirementVerification(
-        requirement.id,
-        RequirementStatus.NOT_MAPPED,
-        "No deterministic PLC implementation mapping was found.",
-    )
+    return RequirementVerification(requirement.id, RequirementStatus.NOT_MAPPED, "No deterministic PLC implementation mapping was found.")
 
 
-def generate_requirement_tests(
-    requirements: list[PLCRequirement],
-    verifications: list[RequirementVerification],
-    engineering,
-) -> list[FATTestCase]:
+def generate_requirement_tests(requirements: list[PLCRequirement], verifications: list[RequirementVerification], engineering) -> list[FATTestCase]:
     tests = list(engineering.fat_tests)
     signatures = {(item.output_tag, tuple(sorted(item.preconditions.items()))) for item in tests}
     req_by_id = {item.id: item for item in requirements}
@@ -228,13 +193,7 @@ def generate_requirement_tests(
         if verification.status is not RequirementStatus.STATICALLY_VERIFIED:
             continue
         requirement = req_by_id[verification.requirement_id]
-        output = next(
-            (
-                tag for tag in verification.matched_tags
-                if any(logic.output_tag == tag for logic in engineering.project.output_logic)
-            ),
-            None,
-        )
+        output = next((tag for tag in verification.matched_tags if any(logic.output_tag == tag for logic in engineering.project.output_logic)), None)
         if not output:
             continue
         assignment = {
@@ -260,9 +219,7 @@ def generate_requirement_tests(
                 output_tag=output,
                 preconditions=dict(sorted(assignment.items())),
                 expected=f"Requirement {requirement.id} expects {output}={'TRUE' if expected else 'FALSE'}",
-                limitations=(
-                    "Requirement-derived candidate; requires approved execution backend before PASS can be claimed.",
-                ),
+                limitations=("Requirement-derived candidate; requires approved execution backend before PASS can be claimed.",),
                 scenario="REQUIREMENT",
             )
         )
@@ -271,11 +228,7 @@ def generate_requirement_tests(
     return tests
 
 
-def link_tests_to_verifications(
-    verifications: list[RequirementVerification],
-    requirements: list[PLCRequirement],
-    tests: list[FATTestCase],
-) -> list[RequirementVerification]:
+def link_tests_to_verifications(verifications: list[RequirementVerification], requirements: list[PLCRequirement], tests: list[FATTestCase]) -> list[RequirementVerification]:
     req_by_id = {item.id: item for item in requirements}
     result: list[RequirementVerification] = []
     for verification in verifications:
@@ -314,12 +267,7 @@ def compute_requirements_sha256(requirements: list[PLCRequirement]) -> str:
         }
         for item in requirements
     ]
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -335,9 +283,7 @@ def compute_test_plan_sha256(tests: list[FATTestCase]) -> str:
         }
         for test in sorted(tests, key=lambda item: item.id)
     ]
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def compute_verification_context_sha256(
@@ -347,6 +293,7 @@ def compute_verification_context_sha256(
     requirements_sha256: str,
     backend_registry_sha256: str | None,
     baseline_sha256: str | None,
+    execution_results_sha256: str | None = None,
     release_policy_sha256: str | None = None,
     trust_store_sha256: str | None = None,
 ) -> str:
@@ -357,12 +304,11 @@ def compute_verification_context_sha256(
         "requirements_sha256": requirements_sha256,
         "backend_registry_sha256": backend_registry_sha256,
         "baseline_sha256": baseline_sha256,
+        "execution_results_sha256": execution_results_sha256,
         "release_policy_sha256": release_policy_sha256,
         "trust_store_sha256": trust_store_sha256,
     }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def load_execution_results(
@@ -432,26 +378,15 @@ def load_execution_results(
     return result
 
 
-def promote_requirement_execution(
-    verifications: list[RequirementVerification],
-    executions: list[TestExecutionEvidence],
-) -> list[RequirementVerification]:
+def promote_requirement_execution(verifications: list[RequirementVerification], executions: list[TestExecutionEvidence]) -> list[RequirementVerification]:
     statuses = {item.test_id: item.status for item in executions}
     result: list[RequirementVerification] = []
     for item in verifications:
         if item.status is RequirementStatus.STATICALLY_VERIFIED and item.linked_test_ids:
             known = [statuses.get(test_id, ExecutionStatus.NOT_RUN) for test_id in item.linked_test_ids]
             if known and all(status is ExecutionStatus.PASS for status in known):
-                item = replace(
-                    item,
-                    status=RequirementStatus.DYNAMICALLY_VERIFIED,
-                    summary=item.summary + " Linked qualified-backend execution evidence passed.",
-                )
+                item = replace(item, status=RequirementStatus.DYNAMICALLY_VERIFIED, summary=item.summary + " Linked qualified-backend execution evidence passed.")
             elif any(status is ExecutionStatus.FAIL for status in known):
-                item = replace(
-                    item,
-                    status=RequirementStatus.CONFLICT,
-                    summary=item.summary + " Linked qualified-backend execution evidence contains a FAIL result.",
-                )
+                item = replace(item, status=RequirementStatus.CONFLICT, summary=item.summary + " Linked qualified-backend execution evidence contains a FAIL result.")
         result.append(item)
     return result
