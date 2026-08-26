@@ -1,6 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 from devagent.plc import analyze_rockwell_l5x
+from devagent.plc.models import PLCDependencyGraph, PLCInstruction, PLCOutcome
+from devagent.plc.rockwell_structure import add_rockwell_structure_edges
 
 
 PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
@@ -45,9 +48,9 @@ PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _project(tmp_path: Path) -> Path:
+def _project(tmp_path: Path, content: str = PROJECT) -> Path:
     path = tmp_path / "SemanticV7.L5X"
-    path.write_text(PROJECT, encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -96,3 +99,42 @@ def test_v7_structure_static_check_is_auditable(tmp_path: Path) -> None:
     assert "1 main routine assignment" in check.summary
     assert "1 fault routine assignment" in check.summary
     assert "2 UDT member definition" in check.summary
+
+
+def test_v7_missing_scheduled_program_downgrades_outcome(tmp_path: Path) -> None:
+    broken = PROJECT.replace(
+        '<ScheduledProgram Name="MainProgram" />',
+        '<ScheduledProgram Name="MissingProgram" />',
+    )
+    result = analyze_rockwell_l5x(_project(tmp_path, broken))
+    check = next(item for item in result.static_checks if item.id == "ROCKWELL_EXECUTION_STRUCTURE")
+    assert check.status.value == "WARN"
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert any("schedules missing program" in item for item in check.evidence)
+
+
+def test_v7_unresolved_jsr_downgrades_outcome_and_withholds_edge(tmp_path: Path) -> None:
+    broken = PROJECT.replace("JSR(Helper);", "JSR(MissingRoutine);")
+    result = analyze_rockwell_l5x(_project(tmp_path, broken))
+    check = next(item for item in result.static_checks if item.id == "ROCKWELL_EXECUTION_STRUCTURE")
+    assert check.status.value == "WARN"
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert any("calls missing routine MissingRoutine" in item for item in check.evidence)
+    assert not any(edge.kind == "CALLS_ROUTINE" for edge in result.graph.edges if "rung/1" in edge.source)
+
+
+def test_v7_aoi_named_like_routine_does_not_create_false_routine_edge(tmp_path: Path) -> None:
+    result = analyze_rockwell_l5x(_project(tmp_path))
+    original = next(item for item in result.project.rungs if item.program == "MainProgram" and item.number == "1")
+    fake_aoi_call = replace(
+        original,
+        instructions=(PLCInstruction(name="Helper", arguments=("Backing",)),),
+        calls=("Helper",),
+    )
+    result.project.rungs = [fake_aoi_call if item.id == original.id else item for item in result.project.rungs]
+    graph = PLCDependencyGraph()
+    add_rockwell_structure_edges(result.project, graph)
+    helper = next(item for item in result.project.routines if item.program == "MainProgram" and item.name == "Helper")
+    assert (fake_aoi_call.id, helper.id, "CALLS_ROUTINE") not in {
+        (edge.source, edge.target, edge.kind) for edge in graph.edges
+    }
