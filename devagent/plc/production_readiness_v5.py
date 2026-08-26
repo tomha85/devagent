@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,16 @@ from devagent.plc.production_models import (
     Severity,
 )
 from devagent.plc.release_policy import PLCReleasePolicy
+
+
+def _approval_timestamp(value: str) -> None:
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("Approval approved_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("Approval approved_at must include a timezone")
 
 
 def load_approval_v5(
@@ -54,12 +65,15 @@ def load_approval_v5(
             raise ValueError(f"Approval {field} does not match the current PLC verification context")
     if str(loaded.get("decision", "")).upper() != "APPROVE":
         raise ValueError("Approval artifact decision must be APPROVE")
-    if not str(loaded.get("approved_by", "")).strip() or not str(loaded.get("approved_at", "")).strip():
+    approved_by = str(loaded.get("approved_by", "")).strip()
+    approved_at = str(loaded.get("approved_at", "")).strip()
+    if not approved_by or not approved_at:
         raise ValueError("Approval artifact requires approved_by and approved_at")
+    _approval_timestamp(approved_at)
     return {
         "decision": "APPROVE",
-        "approved_by": str(loaded["approved_by"]),
-        "approved_at": str(loaded["approved_at"]),
+        "approved_by": approved_by,
+        "approved_at": approved_at,
         **expected,
         "source_path": str(target),
     }
