@@ -6,15 +6,13 @@ import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from devagent.plc.execution_trust import ExecutionBackendRegistry, require_qualified_backend
 from devagent.plc.production_verification import compute_test_plan_sha256
-from devagent.plc.trusted_snapshot import (
-    JSONArtifactSnapshot,
-    read_json_snapshot,
-    verify_snapshot_signature,
-)
+from devagent.plc.trusted_snapshot import read_json_snapshot, verify_snapshot_signature
 
 RUNNER_SCHEMA = "devagent-rockwell-echo-runner-v1"
 RUNTIME_BINDING_SCHEMA = "devagent-rockwell-runtime-binding-v1"
@@ -22,7 +20,6 @@ EXECUTION_REQUEST_SCHEMA = "devagent-rockwell-echo-execution-request-v1"
 _EXECUTION_RESULTS_SCHEMA = "devagent-plc-execution-results-v1"
 _REQUIRED_CAPABILITIES = {"DOWNLOAD", "SNAPSHOT", "DATA_EXCHANGE", "COSIMULATION"}
 _ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-_HASH = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RUNNER_BYTES = 64 * 1024 * 1024
 _MAX_RUNTIME_PROJECT_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_DESCRIPTOR_BYTES = 1024 * 1024
@@ -68,6 +65,8 @@ class RockwellRuntimeBinding:
 class EchoExecutionPackage:
     descriptor: EchoRunnerDescriptor
     binding: RockwellRuntimeBinding
+    binding_signature: dict[str, Any]
+    runtime_binding_bytes: bytes
     request: dict[str, Any]
     request_sha256: str
     execution_results_bytes: bytes
@@ -75,11 +74,12 @@ class EchoExecutionPackage:
 
 
 def _sha256_file(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
-    target = path.expanduser().resolve(strict=True)
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise ValueError(f"{label} cannot be a symlink")
+    target = expanded.resolve(strict=True)
     if not target.is_file():
         raise ValueError(f"{label} must be a regular file: {target}")
-    if target.is_symlink():
-        raise ValueError(f"{label} cannot be a symlink")
     size = target.stat().st_size
     if size > max_bytes:
         raise ValueError(f"{label} exceeds {max_bytes} byte production limit")
@@ -94,11 +94,25 @@ def _sha256_file(path: Path, *, max_bytes: int, label: str) -> tuple[str, int]:
 
 
 def _runner_path(path: Path) -> tuple[Path, str]:
-    target = path.expanduser().resolve(strict=True)
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise ValueError("Rockwell Echo runner cannot be a symlink")
+    target = expanded.resolve(strict=True)
     digest, _ = _sha256_file(target, max_bytes=_MAX_RUNNER_BYTES, label="Rockwell Echo runner")
     if os.name != "nt" and not os.access(target, os.X_OK):
         raise ValueError("Rockwell Echo runner is not executable")
     return target, digest
+
+
+def _parse_timestamp(value: str, *, label: str) -> datetime:
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{label} must include a timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 def _json_stdout(completed: subprocess.CompletedProcess[bytes], *, label: str, max_bytes: int) -> dict[str, Any]:
@@ -155,7 +169,9 @@ def describe_echo_runner(path: Path, *, timeout_seconds: int = 15) -> EchoRunner
     raw_capabilities = loaded.get("capabilities")
     if not isinstance(raw_capabilities, list):
         raise ValueError("Rockwell Echo runner capabilities must be a list")
-    capabilities = tuple(dict.fromkeys(str(item).strip().upper() for item in raw_capabilities if str(item).strip()))
+    capabilities = tuple(
+        dict.fromkeys(str(item).strip().upper() for item in raw_capabilities if str(item).strip())
+    )
     missing = sorted(_REQUIRED_CAPABILITIES - set(capabilities))
     if missing:
         raise ValueError("Rockwell Echo runner lacks required capabilities: " + ", ".join(missing))
@@ -164,7 +180,9 @@ def describe_echo_runner(path: Path, *, timeout_seconds: int = 15) -> EchoRunner
         raise ValueError("Rockwell Echo runner supported_controller_families must be a list")
     families = tuple(str(item).strip() for item in raw_families if str(item).strip())
     quantum = loaded.get("default_time_quantum_us")
-    if quantum is not None and (isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0):
+    if quantum is not None and (
+        isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0
+    ):
         raise ValueError("Rockwell Echo runner default_time_quantum_us must be a positive integer")
     return EchoRunnerDescriptor(
         adapter_id=adapter_id,
@@ -188,8 +206,12 @@ def load_runtime_binding(
     runtime_project_path: Path,
     controller_name: str,
     descriptor: EchoRunnerDescriptor,
-) -> tuple[RockwellRuntimeBinding, dict[str, Any]]:
-    snapshot = read_json_snapshot(path, max_bytes=1024 * 1024, purpose="RUNTIME_PROJECT_BINDING")
+) -> tuple[RockwellRuntimeBinding, dict[str, Any], bytes]:
+    snapshot = read_json_snapshot(
+        path,
+        max_bytes=1024 * 1024,
+        purpose="RUNTIME_PROJECT_BINDING",
+    )
     signature = verify_snapshot_signature(
         snapshot,
         purpose="RUNTIME_PROJECT_BINDING",
@@ -219,6 +241,7 @@ def load_runtime_binding(
     approved_at = str(loaded.get("approved_at") or "").strip()
     if not approved_by or not approved_at:
         raise ValueError("Rockwell runtime binding requires approved_by and approved_at")
+    _parse_timestamp(approved_at, label="Rockwell runtime binding approved_at")
     binding = RockwellRuntimeBinding(
         analysis_project_sha256=analysis_project_sha256,
         runtime_project_sha256=runtime_sha,
@@ -230,11 +253,14 @@ def load_runtime_binding(
         source_path=snapshot.source_path,
         source_sha256=snapshot.sha256,
     )
-    return binding, signature
+    return binding, signature, snapshot.payload
 
 
 def _expected_boolean(test) -> bool:
-    pattern = re.compile(rf"\b{re.escape(test.output_tag)}\s*=\s*(TRUE|FALSE)\b", re.IGNORECASE)
+    pattern = re.compile(
+        rf"\b{re.escape(test.output_tag)}\s*=\s*(TRUE|FALSE)\b",
+        re.IGNORECASE,
+    )
     match = pattern.search(test.expected)
     if match is None:
         raise ValueError(
@@ -262,8 +288,15 @@ def build_echo_execution_request(
         raise ValueError(
             "Rockwell Echo execution requires --rockwell-time-quantum-us or a runner-declared default_time_quantum_us"
         )
-    if isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0 or quantum > 60_000_000:
-        raise ValueError("Rockwell Echo time quantum must be an integer from 1 to 60000000 microseconds")
+    if (
+        isinstance(quantum, bool)
+        or not isinstance(quantum, int)
+        or quantum <= 0
+        or quantum > 60_000_000
+    ):
+        raise ValueError(
+            "Rockwell Echo time quantum must be an integer from 1 to 60000000 microseconds"
+        )
     runtime_target = runtime_project_path.expanduser().resolve(strict=True)
     request = {
         "schema": EXECUTION_REQUEST_SCHEMA,
@@ -285,6 +318,7 @@ def build_echo_execution_request(
             "advance_mode": "COSIMULATION_TIME_QUANTUM",
             "time_quantum_us": quantum,
             "physical_controller_writes_allowed": False,
+            "runtime_project_hash_must_be_verified_before_download": True,
         },
         "tests": [
             {
@@ -302,7 +336,12 @@ def build_echo_execution_request(
             for test in tests
         ],
     }
-    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(
+        request,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
     return request, hashlib.sha256(encoded).hexdigest()
 
 
@@ -312,11 +351,23 @@ def execute_echo_runner(
     *,
     timeout_seconds: int = 900,
 ) -> tuple[bytes, dict[str, Any]]:
-    target, _ = _runner_path(runner_path)
+    target, current_runner_sha = _runner_path(runner_path)
+    expected_runner_sha = str((request.get("adapter") or {}).get("runner_sha256") or "")
+    if current_runner_sha != expected_runner_sha:
+        raise ValueError(
+            "Rockwell Echo runner changed after capability/binding validation; execution is refused"
+        )
     timeout = int(timeout_seconds)
     if timeout <= 0 or timeout > _MAX_TIMEOUT_SECONDS:
-        raise ValueError(f"Rockwell Echo execution timeout must be 1..{_MAX_TIMEOUT_SECONDS} seconds")
-    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        raise ValueError(
+            f"Rockwell Echo execution timeout must be 1..{_MAX_TIMEOUT_SECONDS} seconds"
+        )
+    encoded = json.dumps(
+        request,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
     try:
         completed = subprocess.run(
             [str(target), "--execute"],
@@ -337,7 +388,9 @@ def execute_echo_runner(
         max_bytes=_MAX_EXECUTION_RESPONSE_BYTES,
     )
     if loaded.get("schema") != _EXECUTION_RESULTS_SCHEMA:
-        raise ValueError(f"Rockwell Echo runner execution response schema must be {_EXECUTION_RESULTS_SCHEMA}")
+        raise ValueError(
+            f"Rockwell Echo runner execution response schema must be {_EXECUTION_RESULTS_SCHEMA}"
+        )
     return stdout, loaded
 
 
@@ -362,9 +415,13 @@ def validate_echo_execution_response(
     }
     for field, value in expected.items():
         if str(loaded.get(field) or "") != value:
-            raise ValueError(f"Rockwell Echo execution response {field} does not match the execution request")
+            raise ValueError(
+                f"Rockwell Echo execution response {field} does not match the execution request"
+            )
     if not isinstance(loaded.get("signature"), dict):
-        raise ValueError("Rockwell Echo execution response must include a trusted Ed25519 signature")
+        raise ValueError(
+            "Rockwell Echo execution response must include a trusted Ed25519 signature"
+        )
 
 
 def run_echo_execution(
@@ -373,13 +430,22 @@ def run_echo_execution(
     runner_path: Path,
     runtime_project_path: Path,
     runtime_binding_path: Path,
-    backend_registry_sha256: str,
+    backend_registry: ExecutionBackendRegistry,
     trust_store,
     time_quantum_us: int | None = None,
     timeout_seconds: int = 900,
 ) -> EchoExecutionPackage:
     descriptor = describe_echo_runner(runner_path)
-    binding, _ = load_runtime_binding(
+    qualification = require_qualified_backend(
+        backend_registry,
+        descriptor.adapter_id,
+        preliminary_result.engineering.project.metadata.source_sha256,
+    )
+    if qualification.kind != "SIMULATOR":
+        raise ValueError(
+            f"Rockwell Echo adapter {descriptor.adapter_id!r} must be qualified as SIMULATOR"
+        )
+    binding, binding_signature, binding_bytes = load_runtime_binding(
         runtime_binding_path,
         trust_store=trust_store,
         analysis_project_sha256=preliminary_result.engineering.project.metadata.source_sha256,
@@ -392,7 +458,7 @@ def run_echo_execution(
         runtime_project_path=runtime_project_path,
         descriptor=descriptor,
         binding=binding,
-        backend_registry_sha256=backend_registry_sha256,
+        backend_registry_sha256=backend_registry.source_sha256,
         time_quantum_us=time_quantum_us,
     )
     response_bytes, response = execute_echo_runner(
@@ -406,11 +472,13 @@ def run_echo_execution(
         descriptor=descriptor,
         binding=binding,
         request_sha256=request_sha,
-        backend_registry_sha256=backend_registry_sha256,
+        backend_registry_sha256=backend_registry.source_sha256,
     )
     return EchoExecutionPackage(
         descriptor=descriptor,
         binding=binding,
+        binding_signature=binding_signature,
+        runtime_binding_bytes=binding_bytes,
         request=request,
         request_sha256=request_sha,
         execution_results_bytes=response_bytes,
