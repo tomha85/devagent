@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from typing import Callable
 
 from devagent.plc import production_verification as _verification
 from devagent.plc.models import PLCSemanticState
@@ -18,8 +19,8 @@ from devagent.plc.rockwell_alias_hardening import (
 )
 from devagent.plc.rockwell_semantic_capabilities import retentive_action_value
 
-_PREVIOUS_VERIFY_REQUIREMENT = _verification.verify_requirement
-_PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION = _verification.promote_requirement_execution
+_PREVIOUS_VERIFY_REQUIREMENT: Callable | None = None
+_PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION: Callable | None = None
 _PROGRAM_QUALIFIED = re.compile(
     r"Program:([^\.\s]+)\.([A-Za-z_][A-Za-z0-9_]*)",
     re.IGNORECASE,
@@ -179,8 +180,10 @@ def _retentive_action_proof(requirement, engineering, tests, previous: Requireme
 
 
 def verify_requirement(requirement, engineering, evidence, tests):
-    """Extend the V9 fail-closed theorem with bounded OTL/OTU action-effect proof."""
+    """Extend the installed V9 theorem with bounded OTL/OTU action-effect proof."""
 
+    if _PREVIOUS_VERIFY_REQUIREMENT is None:  # pragma: no cover - install contract
+        raise RuntimeError("Rockwell V10 semantics were not installed")
     previous = _PREVIOUS_VERIFY_REQUIREMENT(requirement, engineering, evidence, tests)
     return _retentive_action_proof(requirement, engineering, tests, previous)
 
@@ -188,6 +191,8 @@ def verify_requirement(requirement, engineering, evidence, tests):
 def promote_requirement_execution(verifications, executions):
     """Allow qualified execution to promote action-effect evidence to dynamic proof."""
 
+    if _PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION is None:  # pragma: no cover - install contract
+        raise RuntimeError("Rockwell V10 semantics were not installed")
     result = _PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION(verifications, executions)
     statuses = {item.test_id: item.status for item in executions}
     promoted = []
@@ -213,9 +218,18 @@ def promote_requirement_execution(verifications, executions):
 
 
 def install() -> None:
-    global _INSTALLED
+    """Install only after the V9 requirement/writer theorem has been hardened.
+
+    Capturing the delegates here (rather than at module-import time) is a safety
+    invariant: importing this module must never bypass a hardening layer that is
+    installed immediately before V10 in ``devagent.plc.__init__``.
+    """
+
+    global _INSTALLED, _PREVIOUS_VERIFY_REQUIREMENT, _PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION
     if _INSTALLED:
         return
+    _PREVIOUS_VERIFY_REQUIREMENT = _verification.verify_requirement
+    _PREVIOUS_PROMOTE_REQUIREMENT_EXECUTION = _verification.promote_requirement_execution
     _verification.verify_requirement = verify_requirement
     _verification.promote_requirement_execution = promote_requirement_execution
     _INSTALLED = True
