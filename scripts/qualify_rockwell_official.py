@@ -135,12 +135,16 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
             f"{project.branch_rung_semantic_count}/{project.branch_rung_total}"
         )
 
+    # V10 intentionally reclassifies the two stateful timer/counter instruction
+    # occurrences in this pinned project as PARTIAL. Their operand structure is
+    # understood, but timing/edge/retentive behavior requires qualified runtime
+    # evidence and must not be counted as fully static behavior proof.
     expected_static_gaps = {
         "unsupported_routines": 0,
         "protected_routines": 0,
         "protected_aois": 0,
         "unknown_instructions": 0,
-        "partial_instructions": 0,
+        "partial_instructions": 2,
         "unmodeled_branches": 7,
         "unmodeled_st_statements": 0,
         "unmodeled_aoi_bodies": 0,
