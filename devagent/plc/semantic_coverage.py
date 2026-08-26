@@ -128,7 +128,9 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     state_machine = state_machine_profile(project)
 
     return {
-        "schema": "devagent-plc-semantic-coverage-v2",
+        # V11 adds optional fields only. Keep the established v1 schema ID so
+        # existing inspect/report consumers remain compatible.
+        "schema": "devagent-plc-semantic-coverage-v1",
         "project": {
             "vendor": project.metadata.vendor,
             "engineering_tool": project.metadata.engineering_tool,
