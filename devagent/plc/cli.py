@@ -169,8 +169,12 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         else:
             _write_json(path, value)
         written.append(path)
+    # Keep the v4 manifest schema identifier for backwards-compatible consumers;
+    # V5 trust semantics are explicitly advertised by production_profile and the
+    # added policy/trust/context fields below.
     manifest = {
-        "schema": "devagent-plc-run-v5",
+        "schema": "devagent-plc-run-v4",
+        "production_profile": "PLC_V5_TRUST",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_source": result.engineering.project.metadata.source_path,
         "project_sha256": project_sha,
