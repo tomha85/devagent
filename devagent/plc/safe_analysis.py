@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from devagent.plc import analysis as _base
 from devagent.plc.models import PLCDependencyEdge, PLCOutcome, StaticCheck, StaticCheckStatus
+from devagent.plc.rockwell_closeout import augment_closeout_semantics, rockwell_support_check
 from devagent.plc.rockwell_compare import (
     augment_compare_instruction_semantics,
     compare_models,
@@ -74,7 +75,7 @@ def _bounded_compare_check(project):
     )
 
 
-def _limitations(project, state, compare_check) -> list[str]:
+def _limitations(project, state, compare_check, support_check) -> list[str]:
     result = [
         "PLC static analysis does not by itself execute Studio 5000, Logix Echo, or a real controller.",
         "FAT cases are engineering test candidates, not PASS results, until an execution backend observes expected behavior.",
@@ -107,16 +108,20 @@ def _limitations(project, state, compare_check) -> list[str]:
         result.append(
             "One or more compare-bearing RLL rungs are outside the bounded single-compare linear OTE model; typed threshold proof/FAT is withheld for those rungs."
         )
+    if support_check.status is not StaticCheckStatus.PASS:
+        result.append(
+            "Rockwell V9 production support contract is PARTIAL for this export. Unsupported routine types, protected logic, unresolved aliases, or complex instruction families remain outside static VERIFIED claims."
+        )
     if project.partially_modeled_instruction_names:
         result.append(
             "Recognized Rockwell instructions remain directionally PARTIAL and do not contribute to fully proven instruction coverage: "
             + ", ".join(project.partially_modeled_instruction_names)
         )
-    return result
+    return list(dict.fromkeys(result))
 
 
 def analyze_rockwell_l5x(path):
-    """Run the guarded Rockwell analyzer with deterministic V2/V7/V8 augmentation."""
+    """Run guarded Rockwell V9 production analysis with fail-closed semantics."""
 
     result = _BASE_ANALYZE(path)
     # The base parser records the source hash before later passes re-read the
@@ -130,6 +135,10 @@ def analyze_rockwell_l5x(path):
     # aliases after the base pass without inventing semantics for complex rungs.
     augment_compare_instruction_semantics(project)
     enforce_v2_guardrails(project)
+    # V9 classifies additional Rockwell instruction families as PARTIAL rather
+    # than UNKNOWN. This improves support accounting but never promotes their
+    # semantic coverage or creates proof/FAT by classification alone.
+    augment_closeout_semantics(project)
 
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
@@ -146,7 +155,8 @@ def analyze_rockwell_l5x(path):
     checks = _base.static_verify(project, graph, fat_tests)
     structure_check = rockwell_structure_check(project)
     compare_check = _bounded_compare_check(project)
-    checks.extend((structure_check, compare_check))
+    support_check = rockwell_support_check(project)
+    checks.extend((structure_check, compare_check, support_check))
     state = _base._coverage_state(project)
     incomplete = (
         any(
@@ -159,11 +169,12 @@ def analyze_rockwell_l5x(path):
         )
         or structure_check.status is not StaticCheckStatus.PASS
         or compare_check.status is not StaticCheckStatus.PASS
+        or support_check.status is not StaticCheckStatus.PASS
     )
 
     result.outcome = PLCOutcome.PARTIALLY_VERIFIED if incomplete else PLCOutcome.STATICALLY_VERIFIED
     result.graph = graph
     result.fat_tests = fat_tests
     result.static_checks = checks
-    result.limitations = _limitations(project, state, compare_check)
+    result.limitations = _limitations(project, state, compare_check, support_check)
     return result
