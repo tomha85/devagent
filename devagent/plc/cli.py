@@ -27,7 +27,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-write",
         action="store_true",
-        help="Print the FAT report without writing run artifacts",
+        help="Print the engineering verification report without writing run artifacts",
     )
     return parser
 
@@ -61,14 +61,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     try:
         print("DevAgent PLC is working...")
-        print("[1/6] ROCKWELL L5X VALIDATION")
+        print("[1/8] ROCKWELL L5X VALIDATION")
         result = analyze_rockwell_l5x(args.project)
-        print("[2/6] CANONICAL PLC IR")
-        print("[3/6] DEPENDENCY GRAPH")
-        print("[4/6] FAT TEST MODEL")
-        print("[5/6] STATIC VERIFICATION")
+        print("[2/8] CANONICAL PLC IR")
+        print("[3/8] RLL BRANCH + AOI + ST SEMANTICS")
+        print("[4/8] DEPENDENCY GRAPH")
+        print("[5/8] FAT TEST GENERATION")
+        print("[6/8] STATIC VERIFICATION")
+        print("[7/8] EVIDENCE ASSEMBLY")
         report = render_fat_report(result)
-        print("[6/6] FAT REPORT")
+        print("[8/8] ENGINEERING VERIFICATION REPORT")
         print(report, end="")
 
         if not args.no_write:
