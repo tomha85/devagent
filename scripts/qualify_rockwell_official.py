@@ -7,6 +7,7 @@ import json
 import tempfile
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.rockwell_closeout import rockwell_capability_profile
@@ -22,13 +23,16 @@ _FULL_PROJECT = {
     "name": "ExampleForCICD_L85E.L5X",
     "url": _BASE + "ExampleForCICD_L85E.L5X",
     "git_blob_sha1": "ea3814f7d3657de569539228042903dc9ea8a908",
+    "size": 20397,
 }
 _COMPONENT_EXPORT = {
     "name": "DelayedSum_AOI.L5X",
     "url": _BASE + "DelayedSum_AOI.L5X",
     "git_blob_sha1": "be230f7e191894efe42d22db37e648572752bf99",
+    "size": 4549,
 }
 _MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+_ALLOWED_DOWNLOAD_HOST = "raw.githubusercontent.com"
 
 
 def _git_blob_sha1(payload: bytes) -> str:
@@ -36,22 +40,38 @@ def _git_blob_sha1(payload: bytes) -> str:
     return hashlib.sha1(header + payload).hexdigest()  # nosec B324 - Git object identity, not security auth
 
 
-def _download(spec: dict[str, str], directory: Path) -> tuple[Path, str]:
+def _validate_download_url(value: str) -> None:
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or parsed.hostname != _ALLOWED_DOWNLOAD_HOST:
+        raise RuntimeError("Rockwell qualification artifact URL must use pinned raw.githubusercontent.com HTTPS")
+
+
+def _download(spec: dict[str, object], directory: Path) -> tuple[Path, str]:
+    url = str(spec["url"])
+    _validate_download_url(url)
     request = urllib.request.Request(
-        spec["url"],
+        url,
         headers={"User-Agent": "devagent-rockwell-v9-qualification"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310 - pinned HTTPS GitHub source
+    with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310 - host and scheme validated above
+        final_url = response.geturl()
+        _validate_download_url(final_url)
         payload = response.read(_MAX_DOWNLOAD_BYTES + 1)
     if len(payload) > _MAX_DOWNLOAD_BYTES:
         raise RuntimeError(f"{spec['name']} exceeds qualification download limit")
+    expected_size = int(spec["size"])
+    if len(payload) != expected_size:
+        raise RuntimeError(
+            f"Pinned Rockwell artifact size mismatch for {spec['name']}: "
+            f"expected {expected_size}, got {len(payload)}"
+        )
     actual_blob = _git_blob_sha1(payload)
     if actual_blob != spec["git_blob_sha1"]:
         raise RuntimeError(
             f"Pinned Rockwell artifact identity mismatch for {spec['name']}: "
             f"expected {spec['git_blob_sha1']}, got {actual_blob}"
         )
-    target = directory / spec["name"]
+    target = directory / str(spec["name"])
     target.write_bytes(payload)
     return target, hashlib.sha256(payload).hexdigest()
 
@@ -172,13 +192,15 @@ def main() -> int:
             "upstream_repository": "RockwellAutomation/ra-logix-cicd",
             "upstream_commit": _UPSTREAM_COMMIT,
             "artifacts": {
-                _FULL_PROJECT["name"]: {
+                str(_FULL_PROJECT["name"]): {
                     "git_blob_sha1": _FULL_PROJECT["git_blob_sha1"],
                     "sha256": full_sha256,
+                    "size": _FULL_PROJECT["size"],
                 },
-                _COMPONENT_EXPORT["name"]: {
+                str(_COMPONENT_EXPORT["name"]): {
                     "git_blob_sha1": _COMPONENT_EXPORT["git_blob_sha1"],
                     "sha256": component_sha256,
+                    "size": _COMPONENT_EXPORT["size"],
                 },
             },
             "full_project": _qualify_full_project(full_path, full_sha256),
