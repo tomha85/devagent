@@ -10,13 +10,13 @@ from typing import Sequence
 
 from devagent.config import ProviderConfig, load_config, provider_defaults
 from devagent.plc.models import plc_jsonable
-from devagent.plc.production import (
-    compute_requirements_sha256,
-    compute_test_plan_sha256,
-    run_production_verification,
-)
+from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.production_models import ReadinessStatus
 from devagent.plc.production_report import render_production_report
+from devagent.plc.production_verification import (
+    compute_requirements_sha256,
+    compute_test_plan_sha256,
+)
 from devagent.plc.rockwell_l5x import L5XError
 from devagent.providers import ProviderError, create_provider
 
@@ -42,7 +42,7 @@ _STAGE_NAMES = (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent plc",
-        description="Evidence-driven PLC engineering review, requirements verification, qualified FAT execution, regression, and release-readiness analysis",
+        description="Evidence-driven PLC engineering review, requirements verification, qualified FAT execution, cryptographic trust, regression, and policy-based release readiness",
     )
     parser.add_argument("project", type=Path, help="Rockwell Studio 5000 full-project .L5X export")
     parser.add_argument(
@@ -65,9 +65,19 @@ def _parser() -> argparse.ArgumentParser:
         help="Approved backend qualification registry. Required when --execution-results is supplied.",
     )
     parser.add_argument(
+        "--release-policy",
+        type=Path,
+        help="Signed production release policy. External policies always require trusted Ed25519 verification.",
+    )
+    parser.add_argument(
+        "--trust-store",
+        type=Path,
+        help="Operator-supplied trusted signer store for release policy/evidence/approval verification.",
+    )
+    parser.add_argument(
         "--approval",
         type=Path,
-        help="JSON human engineering approval bound to the exact verification context",
+        help="JSON human engineering approval bound to the exact V5 verification context",
     )
     parser.add_argument("--ai", action="store_true", help="Enable evidence-constrained AI engineering review and requirement trace candidates")
     parser.add_argument("--require-ai", action="store_true", help="Fail the run if requested AI review cannot complete")
@@ -110,12 +120,15 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "requirement_verification.json": result.requirement_verification,
         "fat_tests.json": result.engineering.fat_tests,
         "execution_plan.json": {
-            "schema": "devagent-plc-execution-plan-v2",
+            "schema": "devagent-plc-execution-plan-v3",
             "project_sha256": project_sha,
             "test_plan_sha256": plan_sha,
             "requirements_sha256": requirements_sha,
             "backend_registry_sha256": result.execution_backend_registry_sha256,
+            "execution_results_sha256": result.execution_results_sha256,
             "baseline_sha256": result.baseline_sha256,
+            "release_policy_sha256": result.release_policy_sha256,
+            "trust_store_sha256": result.trust_store_sha256,
             "verification_context_sha256": result.verification_context_sha256,
             "tests": result.engineering.fat_tests,
         },
@@ -127,7 +140,11 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "evidence_manifest.json": {
             "project_sha256": project_sha,
             "backend_registry_sha256": result.execution_backend_registry_sha256,
+            "execution_results_sha256": result.execution_results_sha256,
+            "release_policy_sha256": result.release_policy_sha256,
+            "trust_store_sha256": result.trust_store_sha256,
             "verification_context_sha256": result.verification_context_sha256,
+            "verified_signatures": result.verified_signatures,
             "items": result.evidence,
             "warnings": result.warnings,
         },
@@ -136,7 +153,14 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "fat_report.md": report,
     }
     if result.execution_backend_registry is not None:
-        files["execution_backend_registry.json"] = result.execution_backend_registry
+        files["execution_backend_registry_normalized.json"] = result.execution_backend_registry
+    if result.release_policy is not None:
+        files["release_policy_normalized.json"] = result.release_policy
+    if result.trust_store is not None:
+        files["trusted_signers_normalized.json"] = result.trust_store
+    if result.verified_signatures:
+        files["verified_signatures.json"] = result.verified_signatures
+
     written: list[Path] = []
     for name, value in files.items():
         path = output_dir / name
@@ -146,7 +170,7 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
             _write_json(path, value)
         written.append(path)
     manifest = {
-        "schema": "devagent-plc-run-v4",
+        "schema": "devagent-plc-run-v5",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_source": result.engineering.project.metadata.source_path,
         "project_sha256": project_sha,
@@ -157,7 +181,13 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "requirements_sha256": requirements_sha,
         "backend_registry_sha256": result.execution_backend_registry_sha256,
         "execution_backend_id": result.execution_backend_id,
+        "execution_backend_kind": result.execution_backend_kind,
+        "execution_results_sha256": result.execution_results_sha256,
         "baseline_sha256": result.baseline_sha256,
+        "release_policy_sha256": result.release_policy_sha256,
+        "release_policy_id": (result.release_policy or {}).get("policy_id"),
+        "trust_store_sha256": result.trust_store_sha256,
+        "verified_signature_count": len(result.verified_signatures),
         "verification_context_sha256": result.verification_context_sha256,
         "artifacts": {path.name: _sha256(path) for path in written},
     }
@@ -199,14 +229,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    if args.release_policy is not None and args.trust_store is None:
+        print(
+            "DevAgent PLC failed: --release-policy requires --trust-store because external production policies must be signed",
+            file=sys.stderr,
+        )
+        return 1
     try:
         provider, provider_name, model_name = _provider_from_args(args)
-        result = run_production_verification(
+        result = run_production_verification_v5(
             args.project,
             requirement_paths=args.requirements,
             baseline_path=args.baseline,
             execution_results_path=args.execution_results,
             execution_backend_registry_path=args.execution_backend_registry,
+            release_policy_path=args.release_policy,
+            trust_store_path=args.trust_store,
             approval_path=args.approval,
             provider=provider,
             ai_enabled=args.ai,
