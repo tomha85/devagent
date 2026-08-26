@@ -146,28 +146,25 @@ def test_otl_requirement_proves_local_action_without_false_final_state_claim(tmp
     assert any(test.id in result.linked_test_ids for test in engineering.fat_tests)
 
 
-def test_otu_requirement_proves_local_action_and_links_existing_fat(tmp_path: Path) -> None:
-    engineering, result = _verify(
+def test_later_proven_otu_can_determine_final_state_despite_earlier_unknown_otl(tmp_path: Path) -> None:
+    _, result = _verify(
         _write_project(tmp_path),
         _requirement("REQ-UNLATCH", "IF ResetRequest=TRUE THEN Latched=FALSE"),
     )
 
-    assert result.status is RequirementStatus.ACTION_EFFECT_PROVEN
-    assert "OTU" in result.summary
-    assert result.linked_test_ids
-    linked = [test for test in engineering.fat_tests if test.id in result.linked_test_ids]
-    assert linked
-    assert all(test.output_tag == "Latched" for test in linked)
-    assert any(test.preconditions.get("ResetRequest") is True for test in linked)
+    assert result.status is RequirementStatus.STATICALLY_VERIFIED
+    assert "final Latched=FALSE" in result.summary
+    assert result.linked_test_ids == ()
 
 
-def test_action_effect_does_not_claim_opposite_retained_state(tmp_path: Path) -> None:
+def test_later_proven_otu_can_establish_static_conflict(tmp_path: Path) -> None:
     _, result = _verify(
         _write_project(tmp_path),
         _requirement("REQ-OPPOSITE", "IF ResetRequest=TRUE THEN Latched=TRUE"),
     )
 
-    assert result.status is RequirementStatus.TRACEABLE_NOT_PROVEN
+    assert result.status is RequirementStatus.CONFLICT
+    assert "final Latched=FALSE" in result.summary
 
 
 def test_same_main_routine_order_can_prove_final_retained_state(tmp_path: Path) -> None:
@@ -227,7 +224,7 @@ def test_scan_order_withholds_across_subroutine_boundary(tmp_path: Path) -> None
 def test_qualified_execution_can_promote_action_effect_to_dynamic_verification(tmp_path: Path) -> None:
     _, result = _verify(
         _write_project(tmp_path),
-        _requirement("REQ-DYNAMIC", "IF ResetRequest=TRUE THEN Latched=FALSE"),
+        _requirement("REQ-DYNAMIC", "IF SetRequest=TRUE THEN Latched=TRUE"),
     )
     assert result.status is RequirementStatus.ACTION_EFFECT_PROVEN
     assert result.linked_test_ids
@@ -249,8 +246,9 @@ def test_qualified_execution_can_promote_action_effect_to_dynamic_verification(t
 def test_failed_qualified_execution_turns_action_effect_into_conflict(tmp_path: Path) -> None:
     _, result = _verify(
         _write_project(tmp_path),
-        _requirement("REQ-DYNAMIC-FAIL", "IF ResetRequest=TRUE THEN Latched=FALSE"),
+        _requirement("REQ-DYNAMIC-FAIL", "IF SetRequest=TRUE THEN Latched=TRUE"),
     )
+    assert result.status is RequirementStatus.ACTION_EFFECT_PROVEN
     assert result.linked_test_ids
 
     executions = [
