@@ -76,10 +76,17 @@ def test_manifest_reports_language_and_project_boundaries_without_overclaiming(t
     assert rll["rungs"] == 4
     assert rll["deterministic_boolean_rungs"] == 1
     assert st["statements"] == 1
-    assert st["full_dataflow_statements"] == 1
+    # Sequence is not the program Main routine and is never reached by a JSR.
+    # Parser-level ST recognition is retained, but proof-grade reachable coverage
+    # must fail closed rather than count dead/uninvoked code as understood.
+    assert st["parser_semantic_count"] == 1
+    assert st["reachable_full_dataflow_statements"] == 0
+    assert st["partial_or_unreachable_statements"] == 1
+    assert st["reachable_full_dataflow_pct"] == 0.0
     assert "MAJ" in boundaries["partially_modeled_instruction_names"]
     assert "VENDORMYSTERY" in boundaries["unmodeled_instruction_names"]
     assert "Structural coverage means reads/writes/calls are normalized" in manifest["trust_note"]
+    assert "Unreachable" in manifest["trust_note"]
 
 
 def test_manifest_is_bound_to_exact_project_hash(tmp_path: Path) -> None:
