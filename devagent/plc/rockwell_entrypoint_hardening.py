@@ -18,9 +18,22 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _major_fault_program(project) -> str | None:
-    """Read the controller MajorFaultProgram from the exact authenticated L5X bytes."""
+def _child(element: ET.Element, name: str) -> ET.Element | None:
+    for child in list(element):
+        if _local_name(child.tag) == name:
+            return child
+    return None
 
+
+def _children(element: ET.Element, name: str) -> list[ET.Element]:
+    return [child for child in list(element) if _local_name(child.tag) == name]
+
+
+def _bool_attr(value: str | None) -> bool:
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}
+
+
+def _verified_controller(project) -> ET.Element:
     target = Path(project.metadata.source_path).expanduser().resolve(strict=True)
     payload = target.read_bytes()
     if len(payload) > _MAX_L5X_BYTES:
@@ -37,16 +50,41 @@ def _major_fault_program(project) -> str | None:
     controller = next((item for item in root.iter() if _local_name(item.tag) == "Controller"), None)
     if controller is None:
         raise ValueError("Rockwell entrypoint pass could not locate Controller")
-    value = controller.attrib.get("MajorFaultProgram", "").strip()
-    return value or None
+    return controller
+
+
+def _controller_execution_state(project) -> tuple[str | None, set[str], tuple[str, ...]]:
+    """Read controller-level entries and active task schedules from authenticated bytes."""
+
+    controller = _verified_controller(project)
+    major_fault = controller.attrib.get("MajorFaultProgram", "").strip() or None
+    active_programs: set[str] = set()
+    inhibited_tasks: list[str] = []
+    tasks = _child(controller, "Tasks")
+    if tasks is not None:
+        for task in _children(tasks, "Task"):
+            task_name = task.attrib.get("Name", "").strip()
+            if _bool_attr(task.attrib.get("InhibitTask")):
+                if task_name and task_name not in inhibited_tasks:
+                    inhibited_tasks.append(task_name)
+                continue
+            scheduled = _child(task, "ScheduledPrograms")
+            if scheduled is None:
+                continue
+            for item in _children(scheduled, "ScheduledProgram"):
+                name = item.attrib.get("Name", "").strip()
+                if name:
+                    active_programs.add(name.casefold())
+    return major_fault, active_programs, tuple(inhibited_tasks)
 
 
 def _entry_program_names(project) -> set[str]:
-    result = {
-        name.casefold()
-        for task in project.tasks
-        for name in task.scheduled_programs
-    }
+    cached = getattr(project, "_rockwell_active_task_programs", None)
+    if cached is None:
+        _, active_programs, _ = _controller_execution_state(project)
+        result = set(active_programs)
+    else:
+        result = {str(name).casefold() for name in cached}
     major_fault = getattr(project.metadata, "major_fault_program", None)
     if major_fault:
         result.add(major_fault.casefold())
@@ -120,7 +158,7 @@ def _reachable_routines(project) -> set[tuple[str, str]]:
 
 
 def rung_has_execution_entry(project, rung) -> bool:
-    """Return True only when a rung is reachable from a concrete controller/task entry."""
+    """Return True only when a rung is reachable from a concrete active controller/task entry."""
 
     if not rung.program or not rung.routine:
         return False
@@ -161,10 +199,13 @@ def _withhold_unreachable_semantics(project) -> None:
 
 def augment_rockwell_structure(project) -> None:
     _ORIGINAL_AUGMENT(project)
+    major_fault, active_programs, inhibited_tasks = _controller_execution_state(project)
     project.metadata = replace(
         project.metadata,
-        major_fault_program=_major_fault_program(project),
+        major_fault_program=major_fault,
     )
+    setattr(project, "_rockwell_active_task_programs", tuple(sorted(active_programs)))
+    setattr(project, "_rockwell_inhibited_tasks", inhibited_tasks)
     _withhold_unreachable_semantics(project)
 
 
