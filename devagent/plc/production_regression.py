@@ -72,14 +72,25 @@ def _logic_fingerprint(project, logic) -> tuple:
 
 
 def _logic_index(project):
-    result: dict[tuple, tuple[tuple, object]] = {}
+    """Index a source to a deterministic multiset of FULL output semantics.
+
+    A Rockwell rung can legally contain more than one output. Never overwrite a
+    second output that canonicalizes to the same source; regression comparison
+    must preserve the complete output set.
+    """
+    buckets: dict[tuple, list[tuple[tuple, object]]] = defaultdict(list)
     for logic in project.output_logic:
         if logic.semantic_state is not PLCSemanticState.FULL:
             continue
-        identity = _logic_ref_identity(project, logic, logic.output_tag)
-        key = (*_logic_source_key(logic), identity)
-        result[key] = (_logic_fingerprint(project, logic), logic)
-    return result
+        buckets[_logic_source_key(logic)].append((_logic_fingerprint(project, logic), logic))
+    return {
+        key: tuple(sorted(items, key=lambda item: (repr(item[0]), item[1].id)))
+        for key, items in buckets.items()
+    }
+
+
+def _bucket_fingerprints(bucket) -> tuple:
+    return tuple(item[0] for item in bucket or ())
 
 
 def _identity_names(project, identity: tuple[str, str]) -> set[str]:
@@ -107,6 +118,33 @@ def _affected_names(*values: str) -> tuple[str, ...]:
         if root:
             result.setdefault(root.casefold(), root)
     return tuple(sorted(result.values(), key=str.casefold))
+
+
+def _bucket_affected_names(current, previous, before_bucket, after_bucket) -> tuple[str, ...]:
+    names: set[str] = set()
+    for project, bucket in ((previous, before_bucket), (current, after_bucket)):
+        for _, logic in bucket or ():
+            identity = _logic_ref_identity(project, logic, logic.output_tag)
+            if identity_is_resolved(identity):
+                names.update(_identity_names(current, identity))
+                names.update(_identity_names(previous, identity))
+            names.update(_affected_names(logic.output_tag))
+    return tuple(sorted(names, key=str.casefold))
+
+
+def _source_locator(logic) -> str:
+    source = logic.source
+    return " / ".join(
+        value
+        for value in (
+            source.aoi and f"AOI {source.aoi}",
+            source.program,
+            source.routine,
+            source.rung is not None and f"Rung {source.rung}",
+            source.line is not None and f"Line {source.line}",
+        )
+        if value
+    )
 
 
 def analyze_regression(
@@ -178,56 +216,47 @@ def analyze_regression(
     current_logic = _logic_index(current)
     previous_logic = _logic_index(previous)
     for key in sorted(set(current_logic) | set(previous_logic), key=repr):
-        before_entry = previous_logic.get(key)
-        after_entry = current_logic.get(key)
-        if before_entry is not None and after_entry is not None and before_entry[0] == after_entry[0]:
+        before_bucket = previous_logic.get(key, ())
+        after_bucket = current_logic.get(key, ())
+        if _bucket_fingerprints(before_bucket) == _bucket_fingerprints(after_bucket):
             continue
 
-        before_logic = before_entry[1] if before_entry else None
-        after_logic = after_entry[1] if after_entry else None
-        representative = after_logic or before_logic
-        assert representative is not None
-        identity = _logic_ref_identity(
-            current if after_logic is not None else previous,
-            representative,
-            representative.output_tag,
-        )
-        names = set()
-        if identity_is_resolved(identity):
-            names.update(_identity_names(current, identity))
-            names.update(_identity_names(previous, identity))
-        names.update(_affected_names(representative.output_tag))
-        affected_tags = tuple(sorted(names, key=str.casefold))
-
-        if before_entry is None:
+        if not before_bucket:
             change_type = "LOGIC_ADDED"
-        elif after_entry is None:
+        elif not after_bucket:
             change_type = "LOGIC_REMOVED"
         else:
             change_type = "LOGIC_CHANGED"
 
-        source = representative.source
-        locator = " / ".join(
-            value
-            for value in (
-                source.aoi and f"AOI {source.aoi}",
-                source.program,
-                source.routine,
-                source.rung is not None and f"Rung {source.rung}",
-                source.line is not None and f"Line {source.line}",
-            )
-            if value
+        representative = (after_bucket or before_bucket)[0][1]
+        locator = _source_locator(representative)
+        affected_tags = _bucket_affected_names(
+            current,
+            previous,
+            before_bucket,
+            after_bucket,
         )
+        outputs = sorted(
+            {
+                logic.output_tag
+                for _, logic in (*before_bucket, *after_bucket)
+            },
+            key=str.casefold,
+        )
+        output_label = ", ".join(outputs[:4])
+        if len(outputs) > 4:
+            output_label += f", +{len(outputs) - 4} output(s)"
         evidence_ids = tuple(
-            item.id
-            for item in (before_logic, after_logic)
-            if item is not None
+            dict.fromkeys(
+                logic.id
+                for _, logic in (*before_bucket, *after_bucket)
+            )
         )
         changes.append(RegressionChange(
             stable_id("REG-LOGIC", repr(key)),
             change_type,
-            f"{locator}::{representative.output_tag}",
-            f"Modeled output logic changed for {representative.output_tag} at {locator}.",
+            f"{locator}::{output_label}",
+            f"Modeled output logic changed at {locator} for {output_label}.",
             affected_tags,
             severity=Severity.MEDIUM,
             evidence_ids=evidence_ids,
