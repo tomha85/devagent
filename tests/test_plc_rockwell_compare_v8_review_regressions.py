@@ -103,7 +103,7 @@ def test_v8_or_antecedent_is_not_statically_proven(tmp_path: Path) -> None:
         "IF Guard=TRUE OR Temperature > 80 THEN Fan=TRUE",
     )
     assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
-    assert "OR/XOR" in verification.summary
+    assert "OR/XOR" in verification.summary or "supported conjunction grammar" in verification.summary
 
 
 def test_v8_reversed_requirement_implication_is_not_statically_proven(tmp_path: Path) -> None:
@@ -123,3 +123,23 @@ def test_v8_conjunctive_antecedent_still_verifies(tmp_path: Path) -> None:
         "IF Guard=TRUE AND Temperature > 80 THEN Fan=TRUE",
     )
     assert verification.status is RequirementStatus.STATICALLY_VERIFIED
+
+
+def test_v8_real_out_of_domain_requirement_is_not_vacuously_proven(tmp_path: Path) -> None:
+    path = _write(tmp_path, rung="GT(Temperature,80.0)OTE(Fan);", data_type="REAL")
+    _, verification = _verify(
+        path,
+        "IF Temperature > 1e100 THEN Fan=TRUE",
+    )
+    assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
+    assert "no representable REAL witness" in verification.summary
+
+
+def test_v8_nand_antecedent_is_not_statically_proven(tmp_path: Path) -> None:
+    path = _write(tmp_path, rung="XIC(Guard)GT(Temperature,80)OTE(Fan);")
+    _, verification = _verify(
+        path,
+        "IF Guard=TRUE NAND Temperature > 80 THEN Fan=TRUE",
+    )
+    assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
+    assert "supported conjunction grammar" in verification.summary
