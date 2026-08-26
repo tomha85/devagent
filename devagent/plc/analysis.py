@@ -22,9 +22,11 @@ _SIMPLE_FAT_INSTRUCTIONS = {"XIC", "XIO", "OTE", "OTL", "OTU"}
 _OUTPUT_INSTRUCTIONS = {"OTE", "OTL", "OTU"}
 _UNKNOWN_WARNING_PREFIX = "Instruction semantics not modeled for: "
 _NORMALIZED_VENDOR_INSTRUCTIONS = {"GSV", "SSV", "MOVE"}
+_TIMER_COUNTER_INSTRUCTIONS = {"TON", "TOF", "RTO", "CTU", "CTD"}
 _IDENTIFIER = re.compile(
     r"[A-Za-z_][A-Za-z0-9_:.]*(?:\[[^\]]+\])?(?:\.[A-Za-z_][A-Za-z0-9_:.]*(?:\[[^\]]+\])?)*"
 )
+_SUBSCRIPT = re.compile(r"\[([^\]]+)\]")
 
 
 def _has_neutral_text_branch(text: str) -> bool:
@@ -81,6 +83,46 @@ def _first_operand_ref(arguments: tuple[str, ...], index: int = 0) -> str | None
     return refs[0] if refs else None
 
 
+def _variable_subscript_refs(value: str) -> tuple[str, ...]:
+    refs: list[str] = []
+    for match in _SUBSCRIPT.finditer(value):
+        expression = match.group(1).strip()
+        if re.fullmatch(r"[-+]?\d+", expression):
+            continue
+        for ref in _operand_refs(expression):
+            if ref not in refs:
+                refs.append(ref)
+    return tuple(refs)
+
+
+def _rung_has_variable_array_subscript(rung: PLCRung) -> bool:
+    return any(
+        _variable_subscript_refs(argument)
+        for instruction in rung.instructions
+        for argument in instruction.arguments
+    )
+
+
+def _expand_expression_refs(values: set[str]) -> set[str]:
+    """Repair parser tokens that joined subtraction expressions with a hyphen.
+
+    Logix tag identifiers do not use ``-`` as an identifier character; in compact
+    expressions such as ``Source-Offset`` it is an arithmetic operator. The initial
+    parser kept the original token for provenance, and this analysis pass expands it
+    into the individual source references before graph construction.
+    """
+
+    expanded: set[str] = set()
+    for value in values:
+        if "-" in value:
+            refs = _operand_refs(value)
+            if refs:
+                expanded.update(refs)
+                continue
+        expanded.add(value)
+    return expanded
+
+
 def _populate_structured_unknown_instruction_names(project: CanonicalPLCProject) -> None:
     """Keep canonical machine output aligned with the parser's coverage warning."""
 
@@ -96,27 +138,36 @@ def _populate_structured_unknown_instruction_names(project: CanonicalPLCProject)
 
 
 def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
-    """Normalize vendor-documented semantics missing from the initial parser table.
+    """Normalize bounded vendor semantics before graph/test generation.
 
     Rockwell v36 renamed MOV to MOVE. GSV writes its destination operand and SSV
     reads its source operand. OSR/OSF have a storage bit plus a distinct output bit.
-    These corrections are applied before graph/test generation so machine output is
-    conservative and version-aware.
+    Timer/counter neutral text can carry tag-based preset/accumulator operands, which
+    are also represented explicitly here. AOI bodies are not normalized in V1, so
+    AOI call operands are retained as references while directional reads/writes are
+    withheld rather than inferred from an incomplete interface model.
     """
 
     unknown_upper = {name.upper() for name in project.unknown_instruction_names}
     newly_supported_occurrences = 0
     normalized_rungs: list[PLCRung] = []
+    aoi_names = {aoi.name for aoi in project.aois}
 
     for rung in project.rungs:
-        reads = set(rung.reads)
-        writes = set(rung.writes)
+        reads = _expand_expression_refs(set(rung.reads))
+        writes = _expand_expression_refs(set(rung.writes))
         calls = set(rung.calls)
-        references = set(rung.references)
+        references = _expand_expression_refs(set(rung.references))
+        aoi_operand_refs: set[str] = set()
 
         for instruction in rung.instructions:
             name = instruction.name.upper()
             args = instruction.arguments
+
+            for argument in args:
+                for index_ref in _variable_subscript_refs(argument):
+                    reads.add(index_ref)
+                    references.add(index_ref)
 
             if name in {"OSR", "OSF"}:
                 storage = _first_operand_ref(args, 0)
@@ -126,6 +177,16 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
                     writes.add(storage)
                 if output:
                     writes.add(output)
+            elif name in _TIMER_COUNTER_INSTRUCTIONS:
+                structure = _first_operand_ref(args, 0)
+                if structure:
+                    reads.add(structure)
+                    writes.add(structure)
+                if len(args) > 1:
+                    reads.update(_operand_refs(args[1]))
+                accumulator = _first_operand_ref(args, 2)
+                if accumulator:
+                    writes.add(accumulator)
             elif name == "MOVE":
                 for ref in _operand_refs(args[0]) if args else ():
                     reads.add(ref)
@@ -142,10 +203,27 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
                     newly_supported_occurrences += 1
             elif name == "SSV":
                 if len(args) > 3:
-                    for ref in _operand_refs(args[3]):
-                        reads.add(ref)
+                    reads.update(_operand_refs(args[3]))
                 if name in unknown_upper:
                     newly_supported_occurrences += 1
+            elif name == "CPT":
+                destination = _first_operand_ref(args, 0)
+                if destination:
+                    writes.add(destination)
+                for value in args[1:]:
+                    reads.update(_operand_refs(value))
+            elif instruction.name in aoi_names:
+                calls.add(instruction.name)
+                for value in args:
+                    aoi_operand_refs.update(_operand_refs(value))
+
+        if aoi_operand_refs:
+            # The parser's original AOI parameter zip cannot safely distinguish the
+            # backing instance operand and implicit/system parameters. Until AOI
+            # interfaces/bodies are normalized, preserve operands only as references.
+            reads.difference_update(aoi_operand_refs)
+            writes.difference_update(aoi_operand_refs)
+            references.update(aoi_operand_refs)
 
         references.update(reads)
         references.update(writes)
@@ -190,11 +268,15 @@ def _simple_boolean_output(rung: PLCRung) -> tuple[str, str] | None:
 
     DEPENDS_ON is intentionally stronger than READS/WRITES. V1 only derives it for
     a straight-line boolean rung made of XIC/XIO contacts followed by exactly one
-    terminal OTE/OTL/OTU. Complex instruction sequencing and branches keep their
-    source facts but do not receive speculative output dependencies.
+    terminal OTE/OTL/OTU. Complex instruction sequencing, branches, and indirect
+    addressing keep their source facts but do not receive speculative dependencies.
     """
 
-    if _has_neutral_text_branch(rung.text) or not rung.instructions:
+    if (
+        _has_neutral_text_branch(rung.text)
+        or _rung_has_variable_array_subscript(rung)
+        or not rung.instructions
+    ):
         return None
     names = [instruction.name.upper() for instruction in rung.instructions]
     if not set(names).issubset(_SIMPLE_FAT_INSTRUCTIONS):
@@ -373,6 +455,9 @@ def static_verify(
     branch_rung_count = sum(
         1 for rung in project.rungs if _has_neutral_text_branch(rung.text)
     )
+    indirect_rung_count = sum(
+        1 for rung in project.rungs if _rung_has_variable_array_subscript(rung)
+    )
     instruction_count = sum(len(rung.instructions) for rung in project.rungs)
     no_parsed_logic = not project.rungs or instruction_count == 0
 
@@ -383,6 +468,7 @@ def static_verify(
         f"protected AOIs={protected_aoi_count}",
         f"AOI internal bodies modeled=0/{unparsed_aoi_count}",
         f"branched RLL rungs={branch_rung_count}",
+        f"indirect-addressed RLL rungs={indirect_rung_count}",
     )
     if no_parsed_logic:
         checks.append(
@@ -401,6 +487,7 @@ def static_verify(
         or protected_routine_count
         or unparsed_aoi_count
         or branch_rung_count
+        or indirect_rung_count
         or project.instruction_semantic_coverage < 1.0
     ):
         checks.append(
@@ -410,7 +497,8 @@ def static_verify(
                 summary=(
                     f"Deterministic instruction semantic coverage is "
                     f"{project.instruction_semantic_coverage:.1%}; unmodeled, "
-                    "protected, AOI-body, or branch-path logic is not treated as fully proven."
+                    "protected, AOI-body, branch-path, or indirect-addressing logic "
+                    "is not treated as fully proven."
                 ),
                 evidence=coverage_evidence,
             )
@@ -442,6 +530,24 @@ def static_verify(
                 "are withheld to avoid false cross-branch dependencies."
                 if branch_rung_count
                 else "No Rockwell neutral-text branch syntax was detected in parsed RLL rungs."
+            ),
+        )
+    )
+
+    checks.append(
+        StaticCheck(
+            id="INDIRECT_ADDRESSING_SEMANTICS",
+            status=(
+                StaticCheckStatus.WARN
+                if indirect_rung_count
+                else StaticCheckStatus.PASS
+            ),
+            summary=(
+                f"{indirect_rung_count} RLL rung(s) use variable array subscripts; "
+                "index references are retained, but per-output DEPENDS_ON edges and "
+                "FAT candidates are withheld until an index value is fixed."
+                if indirect_rung_count
+                else "No variable array subscripts were detected in parsed RLL rungs."
             ),
         )
     )
@@ -538,6 +644,9 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     branch_rung_count = sum(
         1 for rung in project.rungs if _has_neutral_text_branch(rung.text)
     )
+    indirect_rung_count = sum(
+        1 for rung in project.rungs if _rung_has_variable_array_subscript(rung)
+    )
     incomplete_semantics = project.instruction_semantic_coverage < 1.0
     instruction_count = sum(len(rung.instructions) for rung in project.rungs)
     no_parsed_logic = not project.rungs or instruction_count == 0
@@ -549,6 +658,7 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
             or protected_routine_count
             or unparsed_aoi_count
             or branch_rung_count
+            or indirect_rung_count
             or incomplete_semantics
             or no_parsed_logic
         )
@@ -566,7 +676,7 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
         )
     if unparsed_aoi_count:
         limitations.append(
-            f"{unparsed_aoi_count} Add-On Instruction definition(s) are inventoried, but their internal routines are not normalized in PLC V1; AOI behavior remains NOT_PROVEN."
+            f"{unparsed_aoi_count} Add-On Instruction definition(s) are inventoried, but their internal routines and directional call-interface semantics are not normalized in PLC V1; AOI behavior remains NOT_PROVEN."
         )
     if protected_aoi_count:
         limitations.append(
@@ -575,6 +685,10 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     if branch_rung_count:
         limitations.append(
             f"{branch_rung_count} branched RLL rung(s) are retained as source facts, but V1 withholds per-output dependencies and FAT candidates until branch-path semantics are modeled."
+        )
+    if indirect_rung_count:
+        limitations.append(
+            f"{indirect_rung_count} RLL rung(s) use variable array subscripts; index references are retained, but V1 withholds per-output dependencies and FAT candidates until an index value is fixed."
         )
     return PLCEngineeringResult(
         outcome=outcome,
