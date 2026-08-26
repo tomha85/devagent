@@ -76,8 +76,8 @@ def state_transitions(project) -> list[RockwellStateTransition]:
     storage identity on one reachable rung. The local MOV action is considered
     deterministic only when every rung instruction belongs to the bounded
     XIC/XIO/EQU/MOV/NOP grammar; otherwise the transition remains a traceable
-    runtime candidate because motion/AOI/program-control semantics may affect
-    execution.
+    FAT-required candidate because motion/AOI/program-control semantics may
+    affect execution.
     """
     result: list[RockwellStateTransition] = []
     counts: Counter[tuple[tuple[str, str], int, int]] = Counter()
@@ -138,7 +138,7 @@ def add_state_machine_edges(project, graph) -> None:
 def generate_state_machine_fat_tests(project) -> list[FATTestCase]:
     tests: list[FATTestCase] = []
     for transition in state_transitions(project):
-        digest = hashlib.sha1(f"{transition.id}:runtime".encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha1(f"{transition.id}:fat".encode("utf-8")).hexdigest()[:10]
         proof = "bounded deterministic local action" if transition.deterministic_action else "traceable source transition"
         tests.append(
             FATTestCase(
@@ -155,9 +155,9 @@ def generate_state_machine_fat_tests(project) -> list[FATTestCase]:
                     f"and verify {transition.state_tag} transitions to {transition.to_state}; source classification: {proof}"
                 ),
                 limitations=(
-                    "The generic FAT schema does not fabricate numeric/controller setup values; the qualified runtime adapter must establish the exact state and source-linked enabling conditions.",
-                    "Later writers, task ordering, motion/AOI behavior, process physics, and controller faults require separate runtime evidence.",
-                    "PASS requires authenticated qualified Logix Echo/HIL/controller evidence bound to the exact project and test-plan hashes.",
+                    "DevAgent does not fabricate numeric/controller setup values; the PLC engineer must establish the exact state and source-linked enabling conditions from the evidence-linked project.",
+                    "Later writers, task ordering, motion/AOI behavior, process physics, and controller faults require engineer review and FAT observation.",
+                    "DevAgent does not execute this FAT case; the PLC engineer records the observed result in the chosen test environment.",
                 ),
                 scenario="STATE_TRANSITION_RUNTIME",
             )
@@ -174,15 +174,15 @@ def state_machine_check(project) -> StaticCheck:
             summary="No conventional reachable EQU(state, constant) + MOV(constant, state) transition pattern was discovered.",
         )
     deterministic = sum(1 for item in transitions if item.deterministic_action)
-    runtime = len(transitions) - deterministic
+    fat_required = len(transitions) - deterministic
     tags = sorted({item.state_tag for item in transitions}, key=str.casefold)
     return StaticCheck(
         id="ROCKWELL_STATE_MACHINE_DISCOVERY",
-        status=StaticCheckStatus.WARN if runtime else StaticCheckStatus.PASS,
+        status=StaticCheckStatus.WARN if fat_required else StaticCheckStatus.PASS,
         summary=(
             f"Discovered {len(transitions)} transition(s) across {len(tags)} state tag(s): "
-            f"{deterministic} bounded deterministic local action(s), {runtime} traceable runtime transition(s). "
-            "Runtime-classified transitions are never promoted to PASS from source structure alone."
+            f"{deterministic} bounded deterministic local action(s), {fat_required} FAT-required transition(s). "
+            "FAT-required transitions are never promoted to PASS from source structure alone."
         ),
         evidence=tuple(item.rung_id for item in transitions),
     )
