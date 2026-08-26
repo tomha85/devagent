@@ -149,8 +149,54 @@ def test_unknown_instruction_semantics_reduce_claimed_coverage(tmp_path: Path) -
     result = analyze_rockwell_l5x(_write_l5x(tmp_path, unknown))
 
     assert result.project.instruction_semantic_coverage < 1.0
+    assert result.project.unknown_instruction_names == ["VendorSpecificInstruction"]
+    assert result.graph.unknown_instruction_names == ["VendorSpecificInstruction"]
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
     assert any("VendorSpecificInstruction" in item for item in result.limitations)
+
+
+def test_branched_rung_does_not_create_false_cross_branch_dependencies(tmp_path: Path) -> None:
+    branched = FULL_PROJECT_L5X.replace(
+        "XIC(StartPB)XIC(GuardClosed)XIO(MotorFault)OTE(MotorRun);",
+        "[XIC(StartPB)OTE(MotorRun),XIC(GuardClosed)OTE(MotorLatched)];",
+    )
+    result = analyze_rockwell_l5x(_write_l5x(tmp_path, branched))
+    rung0 = result.project.rungs[0]
+
+    derived_from_branch = [
+        edge for edge in result.graph.edges
+        if edge.kind == "DEPENDS_ON" and edge.evidence_id == rung0.id
+    ]
+    assert derived_from_branch == []
+    assert not any(test.source == rung0.source for test in result.fat_tests)
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    branch_check = next(check for check in result.static_checks if check.id == "BRANCH_DEPENDENCY_SEMANTICS")
+    assert branch_check.status is StaticCheckStatus.WARN
+    assert any("branched RLL rung" in item for item in result.limitations)
+
+
+def test_protected_aoi_forces_partial_verification(tmp_path: Path) -> None:
+    protected = FULL_PROJECT_L5X.replace(
+        "<AddOnInstructionDefinitions />",
+        """<AddOnInstructionDefinitions>
+      <AddOnInstructionDefinition Name="ProtectedAOI">
+        <Parameters>
+          <Parameter Name="Enable" Usage="Input" DataType="BOOL" />
+          <Parameter Name="Command" Usage="Output" DataType="BOOL" />
+        </Parameters>
+        <EncodedSource>opaque</EncodedSource>
+      </AddOnInstructionDefinition>
+    </AddOnInstructionDefinitions>""",
+    ).replace(
+        "XIC(MotorRun)OTL(MotorLatched);",
+        "ProtectedAOI(MotorRun,MotorLatched);",
+    )
+    result = analyze_rockwell_l5x(_write_l5x(tmp_path, protected))
+
+    assert result.project.aois[0].source_protected is True
+    assert result.project.instruction_semantic_coverage == 1.0
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert any("Add-On Instruction" in item and "NOT_PROVEN" in item for item in result.limitations)
 
 
 def test_full_project_without_parsed_logic_is_not_statically_verified(tmp_path: Path) -> None:
