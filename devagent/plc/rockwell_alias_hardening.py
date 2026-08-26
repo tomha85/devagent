@@ -85,23 +85,13 @@ def canonical_tag_identity(
     return scope.casefold(), tag.name.casefold() + suffix.casefold()
 
 
-def _source_key(source, *, fallback: str) -> tuple[str, str, str, str, str]:
-    return (
-        str(source.aoi or ""),
-        str(source.program or ""),
-        str(source.routine or ""),
-        str(source.rung if source.rung is not None else source.line or ""),
-        fallback,
-    )
-
-
 def canonical_writer_sources(project, ref: str, default_program: str | None) -> tuple[str, ...]:
-    """Return unique executable source IDs writing the same underlying tag.
+    """Return unique external executable sources writing one underlying tag.
 
     RLL statement mirrors of a parsed rung are deduplicated by source location.
-    ST/AOI statements remain distinct executable sources. This is intentionally
-    broader than output_logic so unsupported/partial writes can still block a
-    false single-writer proof.
+    AOI-internal parameter writes are not global writers; proven AOI call
+    bindings already surface external writes on the caller rung. Unsupported or
+    partial program ST writes still count so they can block false proof.
     """
     target = canonical_tag_identity(project, ref, default_program)
     sources: dict[tuple[str, str, str, str], str] = {}
@@ -118,6 +108,8 @@ def canonical_writer_sources(project, ref: str, default_program: str | None) -> 
         sources.setdefault(key, rung.id)
 
     for statement in project.logic_statements:
+        if statement.owner_type == "aoi":
+            continue
         statement_program = statement.source.program or (
             statement.owner_name if statement.owner_type == "program" else None
         )
@@ -177,6 +169,8 @@ def _has_other_writer(project, model) -> bool:
             return True
 
     for statement in project.logic_statements:
+        if statement.owner_type == "aoi":
+            continue
         statement_program = statement.source.program or (
             statement.owner_name if statement.owner_type == "program" else None
         )
