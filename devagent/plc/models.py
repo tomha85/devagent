@@ -64,10 +64,21 @@ class PLCTag:
 
 
 @dataclass(frozen=True)
+class PLCDataTypeMember:
+    name: str
+    data_type: str
+    dimension: str | None = None
+    radix: str | None = None
+    hidden: bool = False
+    description: str | None = None
+
+
+@dataclass(frozen=True)
 class PLCDataType:
     id: str
     name: str
     family: str | None = None
+    members: tuple[PLCDataTypeMember, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,7 @@ class PLCTask:
     task_type: str | None = None
     priority: str | None = None
     rate: str | None = None
+    scheduled_programs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -184,6 +196,8 @@ class PLCProgram:
     name: str
     tag_ids: tuple[str, ...]
     routine_ids: tuple[str, ...]
+    main_routine_name: str | None = None
+    fault_routine_name: str | None = None
 
 
 @dataclass(frozen=True)
