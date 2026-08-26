@@ -31,6 +31,7 @@ def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
 def render_production_report(result: PLCProductionResult) -> str:
     project = result.engineering.project
     readiness = result.readiness
+    policy = result.release_policy or {}
     lines: list[str] = [
         "# DevAgent PLC Engineering Verification / FAT Report",
         "",
@@ -42,13 +43,19 @@ def render_production_report(result: PLCProductionResult) -> str:
         f"- Source SHA-256: `{project.metadata.source_sha256}`",
         f"- Baseline SHA-256: `{result.baseline_sha256 or 'not supplied'}`",
         f"- Static semantic outcome: **{result.engineering.outcome.value}**",
+        f"- Release policy: `{policy.get('policy_id', 'not evaluated')}`",
+        f"- Release policy SHA-256: `{result.release_policy_sha256 or 'not evaluated'}`",
+        f"- Trust store SHA-256: `{result.trust_store_sha256 or 'not supplied'}`",
+        f"- Verified signatures: **{len(result.verified_signatures)}**",
         f"- Qualified execution backend: `{result.execution_backend_id or 'not supplied'}`",
+        f"- Execution backend kind: `{result.execution_backend_kind or 'not supplied'}`",
         f"- Backend registry SHA-256: `{result.execution_backend_registry_sha256 or 'not supplied'}`",
+        f"- Execution results SHA-256: `{result.execution_results_sha256 or 'not supplied'}`",
         f"- Verification context SHA-256: `{result.verification_context_sha256 or 'not evaluated'}`",
         f"- Release readiness: **{readiness.status.value if readiness else 'NOT_EVALUATED'}**",
         f"- Readiness score: **{readiness.score if readiness else 0}/100** (deterministic rubric; not a probability)",
         "",
-        "> Release readiness is evidence-based. Static analysis does not equal machine behavior verification. Dynamic FAT PASS evidence is accepted only from a backend present as QUALIFIED in the exact registry hash bound to this run.",
+        "> Release readiness is evidence- and policy-based. Static analysis does not equal machine behavior verification. Dynamic FAT PASS evidence is accepted only from a qualified backend and all configured trust/context gates must match this run.",
         "",
         "## 15-Stage Pipeline",
         "",
@@ -76,18 +83,54 @@ def render_production_report(result: PLCProductionResult) -> str:
         "",
     ]
 
+    lines += ["## Production Release Policy", ""]
+    if not policy:
+        lines += ["_No release policy evaluated._", ""]
+    else:
+        limits = policy.get("max_deterministic_risks", {})
+        lines += [
+            f"- Policy ID: `{policy.get('policy_id')}`",
+            f"- Policy SHA-256: `{result.release_policy_sha256}`",
+            f"- Policy source: `{policy.get('source_path')}`",
+            f"- Built-in policy: `{'yes' if policy.get('builtin') else 'no'}`",
+            f"- Approved by: `{policy.get('approved_by')}`",
+            f"- Require dynamic proof for: `{', '.join(policy.get('require_dynamic_for', [])) or 'none'}`",
+            f"- Require regression baseline for: `{', '.join(policy.get('require_baseline_for', [])) or 'none'}`",
+            f"- Allowed execution backend kinds: `{', '.join(policy.get('allowed_backend_kinds', []))}`",
+            f"- Deterministic risk budgets: `CRITICAL={limits.get('CRITICAL')}, HIGH={limits.get('HIGH')}, MEDIUM={limits.get('MEDIUM')}`",
+            f"- Require all generated tests PASS: `{'yes' if policy.get('require_all_generated_tests_pass') else 'no'}`",
+            f"- Required signature purposes: `{', '.join(policy.get('require_signatures_for', [])) or 'none'}`",
+            "",
+        ]
+
+    lines += ["## Cryptographic Trust", ""]
+    if result.trust_store is None:
+        lines += ["_No operator trust store supplied._", ""]
+    else:
+        lines += [
+            f"- Trust store source: `{result.trust_store.get('source_path')}`",
+            f"- Trust store SHA-256: `{result.trust_store_sha256}`",
+            f"- Trust store approved by: `{result.trust_store.get('approved_by')}`",
+            "",
+        ]
+    lines += _table(
+        ["Purpose", "Algorithm", "Trusted key", "Artifact SHA-256"],
+        [
+            [
+                str(item.get("purpose")),
+                str(item.get("algorithm")),
+                str(item.get("key_id")),
+                str(item.get("artifact_sha256")),
+            ]
+            for item in result.verified_signatures
+        ],
+    )
+
     lines += ["## AI / Engineering Review", ""]
     lines += _table(
         ["ID", "Origin", "Severity", "Category", "Finding", "Evidence"],
         [
-            [
-                item.id,
-                item.origin,
-                item.severity.value,
-                item.category,
-                item.title,
-                ", ".join(item.evidence_ids),
-            ]
+            [item.id, item.origin, item.severity.value, item.category, item.title, ", ".join(item.evidence_ids)]
             for item in result.engineering_findings
         ],
     )
@@ -107,10 +150,11 @@ def render_production_report(result: PLCProductionResult) -> str:
         "",
     ]
     lines += _table(
-        ["Requirement", "Release policy", "Status", "Matched tags", "Tests", "Evidence", "Summary"],
+        ["Requirement", "Criticality", "Declared verification", "Status", "Matched tags", "Tests", "Evidence", "Summary"],
         [
             [
                 item.requirement_id,
+                req_by_id[item.requirement_id].criticality.value if item.requirement_id in req_by_id else "UNKNOWN",
                 req_by_id[item.requirement_id].verification_mode.value if item.requirement_id in req_by_id else "UNKNOWN",
                 item.status.value,
                 ", ".join(item.matched_tags),
@@ -133,6 +177,8 @@ def render_production_report(result: PLCProductionResult) -> str:
             f"- Approved by: `{registry.get('approved_by')}`",
             f"- Approved at: `{registry.get('approved_at')}`",
             f"- Execution backend used: `{result.execution_backend_id or 'none'}`",
+            f"- Execution backend kind: `{result.execution_backend_kind or 'none'}`",
+            f"- Execution results SHA-256: `{result.execution_results_sha256 or 'not supplied'}`",
             "",
         ]
         lines += _table(
@@ -160,9 +206,7 @@ def render_production_report(result: PLCProductionResult) -> str:
                 test.output_tag,
                 ", ".join(f"{key}={value}" for key, value in test.preconditions.items()),
                 test.expected,
-                execution_by_test[test.id].status.value
-                if test.id in execution_by_test
-                else ExecutionStatus.NOT_RUN.value,
+                execution_by_test[test.id].status.value if test.id in execution_by_test else ExecutionStatus.NOT_RUN.value,
             ]
             for test in result.engineering.fat_tests
         ],
@@ -252,10 +296,7 @@ def render_production_report(result: PLCProductionResult) -> str:
         lines += ["", "### Conditions", ""]
         lines += [f"- {item}" for item in readiness.conditions] or ["- None"]
         lines += ["", "### Readiness Metrics", ""]
-        lines += _table(
-            ["Metric", "Value"],
-            [[key, str(value)] for key, value in readiness.metrics.items()],
-        )
+        lines += _table(["Metric", "Value"], [[key, str(value)] for key, value in readiness.metrics.items()])
         lines += [
             f"- Human approval required: {'yes' if readiness.human_approval_required else 'no'}",
             f"- Human approval supplied: {'yes' if readiness.human_approval else 'no'}",
@@ -271,11 +312,12 @@ def render_production_report(result: PLCProductionResult) -> str:
         "## Verification Boundaries",
         "",
         "- DevAgent does not infer SIL/PL/safety certification from ordinary control logic.",
-        "- Dynamic PASS evidence is accepted only when project hash, FAT plan hash, backend-registry hash, and backend qualification all match the current verification context.",
-        "- A DYNAMIC requirement is not release-verified by static proof alone; a STATIC requirement may use deterministic static proof when explicitly declared by requirement policy.",
-        "- AI findings are evidence-constrained review candidates. They cannot by themselves promote a requirement, test, or release gate to VERIFIED/PASS.",
-        "- The backend registry and approval artifacts are auditable policy artifacts; V4 does not claim cryptographic signer identity unless an external signing system supplies that assurance.",
-        "- Human engineering approval remains a separate gate from automated analysis.",
+        "- Dynamic PASS evidence is accepted only when project hash, FAT plan hash, backend-registry hash, execution artifact hash, backend qualification, release-policy hash, and trust-store hash match the current verification context.",
+        "- Requirement criticality and declared verification mode are separate inputs to the release policy; policy may require dynamic proof or a regression baseline even when static logic proof exists.",
+        "- External release policies are accepted only after Ed25519 verification against the operator-supplied trust store. Other artifact signatures are enforced by configured policy purposes.",
+        "- AI findings are evidence-constrained review candidates. They cannot by themselves promote a requirement, test, signature, or release gate to VERIFIED/PASS.",
+        "- Human engineering approval remains a separate gate and is bound to the exact V5 verification context, including execution-results hash.",
+        "- No PLC/controller write or download path is authorized by this report.",
         "",
         f"Evidence items assembled: {len(result.evidence)}",
         "",
