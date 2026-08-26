@@ -12,9 +12,13 @@ _install_rockwell_alias_hardening()
 
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
+from devagent.plc.rockwell_closeout_gate_hardening import install as _install_rockwell_closeout_gate_hardening
+from devagent.plc.rockwell_regression_evidence_hardening import install as _install_rockwell_regression_evidence_hardening
 
 _install_rockwell_requirement_hardening()
 _install_rockwell_risk_hardening()
+_install_rockwell_closeout_gate_hardening()
+_install_rockwell_regression_evidence_hardening()
 
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
