@@ -8,7 +8,9 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
     metadata = project.metadata
     graph = result.graph
     dependency_edges = [edge for edge in graph.edges if edge.kind == "DEPENDS_ON"]
-    protected = sum(1 for routine in project.routines if routine.source_protected)
+    protected_routines = sum(1 for routine in project.routines if routine.source_protected)
+    protected_aois = sum(1 for aoi in project.aois if aoi.source_protected)
+    branched_rungs = sum(1 for rung in project.rungs if "[" in rung.text and "]" in rung.text)
     routine_types = sorted({routine.routine_type for routine in project.routines})
 
     lines = [
@@ -40,19 +42,23 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
         f"Programs: {len(project.programs)}",
         f"Routines: {len(project.routines)}",
         f"Routine types: {', '.join(routine_types) if routine_types else 'none'}",
-        f"Protected/encoded routines: {protected}",
+        f"Protected/encoded routines: {protected_routines}",
         f"Parsed RLL rungs: {len(project.rungs)}",
+        f"Branched RLL rungs: {branched_rungs}",
         f"Add-On Instructions: {len(project.aois)}",
+        f"Protected/encoded AOIs: {protected_aois}",
         "",
         "CANONICAL PLC IR",
         "Canonical objects retain Rockwell controller/program/routine/rung provenance.",
         f"Deterministic instruction semantic coverage: {project.instruction_semantic_coverage:.1%} "
         f"({project.instruction_semantic_count}/{project.instruction_total})",
+        f"Unmodeled instruction names: {', '.join(project.unknown_instruction_names) if project.unknown_instruction_names else 'none'}",
         "",
         "DEPENDENCY GRAPH",
         f"Total graph edges: {len(graph.edges)}",
         f"Tag DEPENDS_ON edges: {len(dependency_edges)}",
         "Dependency edges are evidence-linked to the source rung that established the relation.",
+        "Branched rungs do not receive per-output DEPENDS_ON edges in V1; this prevents false cross-branch dependencies until branch paths are modeled explicitly.",
         "",
         "FAT TEST MODEL",
         f"Generated conservative static FAT candidates: {len(result.fat_tests)}",
@@ -90,8 +96,8 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
         [
             "",
             "VERIFICATION BOUNDARY",
-            "STATICALLY_VERIFIED means the supported L5X structure, provenance, modeled RLL semantics, dependency edges, and test traceability passed deterministic checks.",
-            "It does NOT mean machine behavior, safety performance, or FAT execution passed. Dynamic PASS/FAIL requires a simulator or approved controller execution backend.",
+            "STATICALLY_VERIFIED means the supported L5X structure, provenance, modeled RLL semantics, unbranched dependency edges, and test traceability passed deterministic checks.",
+            "It does NOT mean machine behavior, safety performance, protected logic, branch-path behavior, or FAT execution passed. Dynamic PASS/FAIL requires a simulator or approved controller execution backend.",
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
