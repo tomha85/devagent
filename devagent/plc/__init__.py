@@ -3,12 +3,14 @@
 from devagent.plc import analysis as _analysis
 from devagent.plc.rockwell_compare_hardening import install as _install_rockwell_compare_hardening
 from devagent.plc.rockwell_alias_hardening import install as _install_rockwell_alias_hardening
+from devagent.plc.rockwell_entrypoint_hardening import install as _install_rockwell_entrypoint_hardening
 
-# Install fail-closed compare and alias guards before production verification is
-# imported. Every downstream Rockwell proof must share the same canonical tag
-# and writer identity.
+# Install fail-closed compare, alias, and controller-entrypoint guards before
+# production verification is imported. Every downstream Rockwell proof must
+# share the same canonical writer identity and executable-entrypoint model.
 _install_rockwell_compare_hardening()
 _install_rockwell_alias_hardening()
+_install_rockwell_entrypoint_hardening()
 
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
