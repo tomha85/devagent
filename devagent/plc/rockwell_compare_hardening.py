@@ -112,21 +112,37 @@ def generate_compare_fat_tests(project):
 def rockwell_compare_check(project):
     # Same shared-global behavior makes excluded unsafe rungs show as WARN.
     check = _ORIGINAL_COMPARE_CHECK(project)
+    models = compare_models(project)
     boundary_models = []
-    for model in compare_models(project):
+    multi_writer_models = [model for model in models if not model.single_writer]
+    for model in models:
         true_value, false_value = _base._sample_pair(model)
         if true_value is None or false_value is None:
             boundary_models.append(model)
-    if not boundary_models:
+    if not boundary_models and not multi_writer_models:
         return check
-    evidence = tuple(dict.fromkeys([*check.evidence, *(item.rung_id for item in boundary_models)]))
+    evidence = tuple(
+        dict.fromkeys(
+            [
+                *check.evidence,
+                *(item.rung_id for item in boundary_models),
+                *(item.rung_id for item in multi_writer_models),
+            ]
+        )
+    )
+    details = []
+    if boundary_models:
+        details.append(
+            f"{len(boundary_models)} modeled rung(s) cannot produce both TRUE and FALSE representable FAT witnesses at the data-type boundary."
+        )
+    if multi_writer_models:
+        details.append(
+            f"{len(multi_writer_models)} compare output(s) have additional executable writers; single-writer threshold proof/FAT is withheld."
+        )
     return StaticCheck(
         id=check.id,
         status=StaticCheckStatus.WARN,
-        summary=(
-            check.summary
-            + f" {len(boundary_models)} modeled rung(s) cannot produce both TRUE and FALSE representable FAT witnesses at the data-type boundary."
-        ),
+        summary=check.summary + " " + " ".join(details),
         evidence=evidence,
     )
 
