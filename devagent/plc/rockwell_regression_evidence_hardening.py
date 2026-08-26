@@ -10,6 +10,16 @@ _ORIGINAL_ANALYZE_REGRESSION = _regression.analyze_regression
 _DOMAIN_EVIDENCE_INSTALLED = False
 
 
+def _logic_paths_payload(logic) -> list[list[dict[str, object]]]:
+    return [
+        [
+            {"tag": term.tag, "required": term.required}
+            for term in path.terms
+        ]
+        for path in logic.paths
+    ]
+
+
 def _current_evidence_map(project) -> dict[str, str]:
     mapping: dict[str, str] = {
         tag.id: f"TAG:{tag.scope}:{tag.name}"
@@ -104,6 +114,17 @@ def baseline_evidence_items(baseline, changes) -> list[EvidenceItem]:
         evidence_id = mapping[item.id]
         if evidence_id not in wanted:
             continue
+        payload = {"baseline": True, "original_id": item.id}
+        if kind == "BASELINE_OUTPUT_LOGIC":
+            payload.update(
+                {
+                    "output_tag": item.output_tag,
+                    "instruction": item.instruction,
+                    "origin": item.origin,
+                    "semantic_state": item.semantic_state.value,
+                    "paths": _logic_paths_payload(item),
+                }
+            )
         result.append(
             EvidenceItem(
                 evidence_id,
@@ -111,7 +132,7 @@ def baseline_evidence_items(baseline, changes) -> list[EvidenceItem]:
                 summary,
                 source_locator(item.source),
                 project.metadata.source_sha256,
-                {"baseline": True, "original_id": item.id},
+                payload,
             )
         )
     return result
