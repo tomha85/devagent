@@ -13,7 +13,7 @@ _CASE = re.compile(r"^\s*CASE\s+(?P<expr>.+?)\s+OF\s*;?\s*$", re.IGNORECASE)
 _END_CASE = re.compile(r"^\s*END_CASE\s*;?\s*$", re.IGNORECASE)
 _ELSE = re.compile(r"^\s*ELSE\s*;?\s*$", re.IGNORECASE)
 _LABEL = re.compile(
-    r"^\s*(?P<labels>(?:[-+]?\d+|[A-Za-z_][A-Za-z0-9_:.]*)(?:\s*,\s*(?:[-+]?\d+|[A-Za-z_][A-Za-z0-9_:.]*))*)\s*:\s*(?P<body>.*)$",
+    r"^\s*(?P<labels>(?:[-+]?\d+|[A-Za-z_][A-Za-z0-9_:.]*)(?:\s*,\s*(?:[-+]?\d+|[A-Za-z_][A-Za-z0-9_:.]*))*)\s*:(?!=)\s*(?P<body>.*)$",
     re.IGNORECASE,
 )
 _WARNING_PREFIX = "Rockwell V11 ST CASE semantics: "
