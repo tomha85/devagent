@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
@@ -14,6 +15,7 @@ from devagent.plc.models import (
 
 _MAX_L5X_BYTES = 128 * 1024 * 1024
 _WARNING_PREFIX = "Rockwell execution structure: "
+_ROUTINE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _local_name(tag: str) -> str:
@@ -57,6 +59,21 @@ def _verified_root(project) -> ET.Element:
         return ET.fromstring(payload)
     except ET.ParseError as exc:
         raise ValueError(f"Rockwell L5X became invalid before structure normalization: {exc}") from exc
+
+
+def _jsr_target(rung) -> str | None:
+    targets: list[str] = []
+    for instruction in rung.instructions:
+        if instruction.name.upper() != "JSR" or not instruction.arguments:
+            continue
+        target = instruction.arguments[0].strip()
+        if _ROUTINE_NAME.fullmatch(target):
+            targets.append(target)
+        else:
+            targets.append("")
+    if len(targets) != 1:
+        return None
+    return targets[0] or None
 
 
 def augment_rockwell_structure(project) -> None:
@@ -122,11 +139,13 @@ def augment_rockwell_structure(project) -> None:
     normalized_programs = []
     for program in project.programs:
         element = program_elements.get(program.name)
+        main = element.attrib.get("MainRoutineName", "").strip() if element is not None else ""
+        fault = element.attrib.get("FaultRoutineName", "").strip() if element is not None else ""
         normalized_programs.append(
             replace(
                 program,
-                main_routine_name=(element.attrib.get("MainRoutineName") if element is not None else None),
-                fault_routine_name=(element.attrib.get("FaultRoutineName") if element is not None else None),
+                main_routine_name=main or None,
+                fault_routine_name=fault or None,
             )
         )
     project.programs = normalized_programs
@@ -160,7 +179,22 @@ def augment_rockwell_structure(project) -> None:
                 _WARNING_PREFIX
                 + f"program {program.name} FaultRoutineName={program.fault_routine_name} is not present in normalized routines"
             )
-    project.warnings = retained
+    for rung in project.rungs:
+        jsrs = [instruction for instruction in rung.instructions if instruction.name.upper() == "JSR"]
+        for instruction in jsrs:
+            raw_target = instruction.arguments[0].strip() if instruction.arguments else ""
+            if _ROUTINE_NAME.fullmatch(raw_target) is None:
+                retained.append(
+                    _WARNING_PREFIX
+                    + f"{rung.source.locator} has a JSR target that is not a fixed routine name"
+                )
+                continue
+            if raw_target not in routine_names_by_program.get(rung.program, set()):
+                retained.append(
+                    _WARNING_PREFIX
+                    + f"{rung.source.locator} calls missing routine {raw_target}"
+                )
+    project.warnings = list(dict.fromkeys(retained))
 
 
 def add_rockwell_structure_edges(project, graph) -> None:
@@ -190,8 +224,13 @@ def add_rockwell_structure_edges(project, graph) -> None:
             if routine is not None:
                 add(program.id, routine.id, "FAULT_ROUTINE", program.id)
     for rung in project.rungs:
-        for call in rung.calls:
-            routine = routine_by_key.get((rung.program, call))
+        for instruction in rung.instructions:
+            if instruction.name.upper() != "JSR" or not instruction.arguments:
+                continue
+            target = instruction.arguments[0].strip()
+            if _ROUTINE_NAME.fullmatch(target) is None:
+                continue
+            routine = routine_by_key.get((rung.program, target))
             if routine is not None:
                 add(rung.id, routine.id, "CALLS_ROUTINE", rung.id)
 
