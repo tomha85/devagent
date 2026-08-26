@@ -38,6 +38,13 @@ def test_plc_inspect_prints_human_semantic_summary(tmp_path: Path, capsys) -> No
 
     assert "DEVAGENT PLC PROJECT INSPECTION" in output
     assert "Controller: Inspect" in output
+    assert "PROJECT INVENTORY" in output
+    assert "Tags: 4" in output
+    assert "Tasks: 1" in output
+    assert "Programs: 1" in output
+    assert "Routines: 1" in output
+    assert "Program RLL rungs: 2" in output
+    assert "Analysis warnings:" in output
     assert "Program RLL deterministic instruction coverage:" in output
     assert "XIC: 1 (DETERMINISTIC_PATH=1)" in output
     assert "MOV: 1 (STRUCTURAL_RW=1)" in output
@@ -52,7 +59,11 @@ def test_plc_inspect_json_is_machine_readable(tmp_path: Path, capsys) -> None:
 
     assert manifest["schema"] == "devagent-plc-semantic-coverage-v1"
     assert manifest["project"]["controller"] == "Inspect"
+    assert manifest["inventory"]["tags"] == 4
+    assert manifest["inventory"]["programs"] == 1
+    assert manifest["inventory"]["program_rll_rungs"] == 2
     assert manifest["instruction_summary"]["scope"] == "PROGRAM_RLL"
+    assert isinstance(manifest["project_boundaries"]["warnings"], list)
 
 
 def test_plc_inspect_writes_new_manifest_without_modifying_project(tmp_path: Path) -> None:
@@ -64,6 +75,7 @@ def test_plc_inspect_writes_new_manifest_without_modifying_project(tmp_path: Pat
     assert project.read_bytes() == original
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["project"]["source_sha256"]
+    assert manifest["inventory"]["tasks"] == 1
 
 
 def test_plc_inspect_refuses_to_overwrite_existing_artifact(tmp_path: Path, capsys) -> None:
