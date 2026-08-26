@@ -74,20 +74,20 @@ def test_v9_regression_never_emits_unpacked_baseline_evidence_ids(tmp_path: Path
     current = analyze_rockwell_l5x(current_path)
     changes, _ = analyze_regression(baseline_path, current, [])
 
-    current_ids = {tag.id for tag in current.project.tags}
-    current_ids.update(rung.id for rung in current.project.rungs)
-    current_ids.update(statement.id for statement in current.project.logic_statements)
-    current_ids.update(logic.id for logic in current.project.output_logic)
-    current_ids.update(program.id for program in current.project.programs)
-    current_ids.update(routine.id for routine in current.project.routines)
-    current_ids.update(task.id for task in current.project.tasks)
-    current_ids.update(aoi.id for aoi in current.project.aois)
-    current_ids.update(data_type.id for data_type in current.project.data_types)
+    packaged_ids = {
+        f"TAG:{tag.scope}:{tag.name}"
+        for tag in current.project.tags
+    }
+    packaged_ids.update(rung.id for rung in current.project.rungs)
+    packaged_ids.update(statement.id for statement in current.project.logic_statements)
+    packaged_ids.update(logic.id for logic in current.project.output_logic)
 
     assert changes
-    assert all(set(change.evidence_ids) <= current_ids for change in changes)
+    assert all(set(change.evidence_ids) <= packaged_ids for change in changes)
     removed = next(change for change in changes if change.change_type == "TAG_REMOVED")
     assert removed.evidence_ids == ()
+    added = next(change for change in changes if change.change_type == "TAG_ADDED")
+    assert added.evidence_ids == ("TAG:controller:NewOutput",)
 
 
 def test_release_triggering_production_ci_contains_rockwell_v9_gate() -> None:
