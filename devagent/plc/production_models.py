@@ -214,3 +214,4 @@ class PLCProductionResult:
     trust_store_sha256: str | None = None
     verified_signatures: list[dict[str, Any]] = field(default_factory=list)
     verification_context_sha256: str | None = None
+    project_test_plan: Any | None = None
