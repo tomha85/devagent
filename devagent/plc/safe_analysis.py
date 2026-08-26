@@ -9,6 +9,20 @@ from devagent.plc.rockwell_compare import (
     generate_compare_fat_tests,
     rockwell_compare_check,
 )
+from devagent.plc.rockwell_general_actions import (
+    add_action_dependencies,
+    generate_action_fat_tests,
+    rockwell_action_check,
+)
+from devagent.plc.rockwell_standard_catalog import (
+    augment_standard_catalog,
+    standard_catalog_check,
+)
+from devagent.plc.rockwell_stateful_runtime import (
+    augment_stateful_semantics,
+    generate_stateful_fat_tests,
+    stateful_runtime_check,
+)
 from devagent.plc.rockwell_structure import (
     add_rockwell_structure_edges,
     augment_rockwell_structure,
@@ -110,53 +124,65 @@ def _limitations(project, state, compare_check, support_check) -> list[str]:
         )
     if support_check.status is not StaticCheckStatus.PASS:
         result.append(
-            "Rockwell V9 production support contract is PARTIAL for this export. Unsupported routine types, protected logic, unresolved aliases, or complex instruction families remain outside static VERIFIED claims."
+            "Rockwell production support contract is PARTIAL for this export. Unsupported routine types, protected logic, unresolved aliases, stateful runtime instructions, or complex instruction families remain outside static VERIFIED claims."
         )
     if project.partially_modeled_instruction_names:
         result.append(
-            "Recognized Rockwell instructions remain directionally PARTIAL and do not contribute to fully proven instruction coverage: "
+            "Recognized Rockwell instructions remain directionally PARTIAL and do not contribute to fully proven behavioral coverage: "
             + ", ".join(project.partially_modeled_instruction_names)
         )
     return list(dict.fromkeys(result))
 
 
 def analyze_rockwell_l5x(path):
-    """Run guarded Rockwell V9 production analysis with fail-closed semantics."""
+    """Run guarded Rockwell production analysis with fail-closed semantics."""
 
     result = _BASE_ANALYZE(path)
-    # The base parser records the source hash before later passes re-read the
-    # L5X. Reject ordinary source changes before any augmentation can mix
-    # provenance from different project bytes.
     verify_v2_source_unchanged(result.project)
 
     project = result.project
     augment_rockwell_structure(project)
-    # Studio 5000 v36+ renamed several compare mnemonics. Normalize those
-    # aliases after the base pass without inventing semantics for complex rungs.
     augment_compare_instruction_semantics(project)
     enforce_v2_guardrails(project)
-    # V9 classifies additional Rockwell instruction families as PARTIAL rather
-    # than UNKNOWN. This improves support accounting but never promotes their
-    # semantic coverage or creates proof/FAT by classification alone.
     augment_closeout_semantics(project)
+    augment_stateful_semantics(project)
+    # Known-standard instruction families should be distinguishable from truly
+    # unknown/customer-defined mnemonics, but classification never grants proof.
+    augment_standard_catalog(project)
 
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
     add_rockwell_structure_edges(project, graph)
     _add_compare_dependencies(project, graph)
+    add_action_dependencies(project, graph)
 
     fat_tests = _base.generate_fat_tests(project)
     known_ids = {item.id for item in fat_tests}
-    for item in generate_compare_fat_tests(project):
-        if item.id not in known_ids:
-            fat_tests.append(item)
-            known_ids.add(item.id)
+    for generator in (
+        generate_compare_fat_tests,
+        generate_action_fat_tests,
+        generate_stateful_fat_tests,
+    ):
+        for item in generator(project):
+            if item.id not in known_ids:
+                fat_tests.append(item)
+                known_ids.add(item.id)
 
     checks = _base.static_verify(project, graph, fat_tests)
     structure_check = rockwell_structure_check(project)
     compare_check = _bounded_compare_check(project)
+    action_check = rockwell_action_check(project)
+    stateful_check = stateful_runtime_check(project)
+    catalog_check = standard_catalog_check(project)
     support_check = rockwell_support_check(project)
-    checks.extend((structure_check, compare_check, support_check))
+    checks.extend((
+        structure_check,
+        compare_check,
+        action_check,
+        stateful_check,
+        catalog_check,
+        support_check,
+    ))
     state = _base._coverage_state(project)
     incomplete = (
         any(
@@ -169,6 +195,7 @@ def analyze_rockwell_l5x(path):
         )
         or structure_check.status is not StaticCheckStatus.PASS
         or compare_check.status is not StaticCheckStatus.PASS
+        or action_check.status is not StaticCheckStatus.PASS
         or support_check.status is not StaticCheckStatus.PASS
     )
 
@@ -176,5 +203,14 @@ def analyze_rockwell_l5x(path):
     result.graph = graph
     result.fat_tests = fat_tests
     result.static_checks = checks
-    result.limitations = _limitations(project, state, compare_check, support_check)
+    limitations = _limitations(project, state, compare_check, support_check)
+    if action_check.status is not StaticCheckStatus.PASS:
+        limitations.append(
+            "One or more reachable MOV/MOVE/COP/CPS/CLR/math/CPT/RES rungs contain control semantics or destination addressing outside the bounded action-path theorem; behavioral FAT is withheld for those rungs."
+        )
+    if stateful_check.status is StaticCheckStatus.WARN:
+        limitations.append(
+            "Timer/counter FAT candidates require qualified runtime evidence for controller time, edge transitions, prescan, and retentive state; static analysis alone cannot mark them PASS."
+        )
+    result.limitations = list(dict.fromkeys(limitations))
     return result

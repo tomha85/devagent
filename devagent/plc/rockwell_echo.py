@@ -146,11 +146,7 @@ def describe_echo_runner(path: Path, *, timeout_seconds: int = 15) -> EchoRunner
         )
     except subprocess.TimeoutExpired as exc:
         raise ValueError("Rockwell Echo runner --describe timed out") from exc
-    loaded = _json_stdout(
-        completed,
-        label="Rockwell Echo runner --describe",
-        max_bytes=_MAX_DESCRIPTOR_BYTES,
-    )
+    loaded = _json_stdout(completed, label="Rockwell Echo runner --describe", max_bytes=_MAX_DESCRIPTOR_BYTES)
     if loaded.get("schema") != RUNNER_SCHEMA:
         raise ValueError(f"Rockwell Echo runner schema must be {RUNNER_SCHEMA}")
     adapter_id = str(loaded.get("adapter_id") or "").strip()
@@ -169,9 +165,7 @@ def describe_echo_runner(path: Path, *, timeout_seconds: int = 15) -> EchoRunner
     raw_capabilities = loaded.get("capabilities")
     if not isinstance(raw_capabilities, list):
         raise ValueError("Rockwell Echo runner capabilities must be a list")
-    capabilities = tuple(
-        dict.fromkeys(str(item).strip().upper() for item in raw_capabilities if str(item).strip())
-    )
+    capabilities = tuple(dict.fromkeys(str(item).strip().upper() for item in raw_capabilities if str(item).strip()))
     missing = sorted(_REQUIRED_CAPABILITIES - set(capabilities))
     if missing:
         raise ValueError("Rockwell Echo runner lacks required capabilities: " + ", ".join(missing))
@@ -180,9 +174,7 @@ def describe_echo_runner(path: Path, *, timeout_seconds: int = 15) -> EchoRunner
         raise ValueError("Rockwell Echo runner supported_controller_families must be a list")
     families = tuple(str(item).strip() for item in raw_families if str(item).strip())
     quantum = loaded.get("default_time_quantum_us")
-    if quantum is not None and (
-        isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0
-    ):
+    if quantum is not None and (isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0):
         raise ValueError("Rockwell Echo runner default_time_quantum_us must be a positive integer")
     return EchoRunnerDescriptor(
         adapter_id=adapter_id,
@@ -207,26 +199,13 @@ def load_runtime_binding(
     controller_name: str,
     descriptor: EchoRunnerDescriptor,
 ) -> tuple[RockwellRuntimeBinding, dict[str, Any], bytes]:
-    snapshot = read_json_snapshot(
-        path,
-        max_bytes=1024 * 1024,
-        purpose="RUNTIME_PROJECT_BINDING",
-    )
-    signature = verify_snapshot_signature(
-        snapshot,
-        purpose="RUNTIME_PROJECT_BINDING",
-        trust_store=trust_store,
-        required=True,
-    )
+    snapshot = read_json_snapshot(path, max_bytes=1024 * 1024, purpose="RUNTIME_PROJECT_BINDING")
+    signature = verify_snapshot_signature(snapshot, purpose="RUNTIME_PROJECT_BINDING", trust_store=trust_store, required=True)
     assert signature is not None
     loaded = snapshot.data
     if loaded.get("schema") != RUNTIME_BINDING_SCHEMA:
         raise ValueError(f"Rockwell runtime binding schema must be {RUNTIME_BINDING_SCHEMA}")
-    runtime_sha, _ = _sha256_file(
-        runtime_project_path,
-        max_bytes=_MAX_RUNTIME_PROJECT_BYTES,
-        label="Rockwell runtime project",
-    )
+    runtime_sha, _ = _sha256_file(runtime_project_path, max_bytes=_MAX_RUNTIME_PROJECT_BYTES, label="Rockwell runtime project")
     expected = {
         "analysis_project_sha256": analysis_project_sha256,
         "runtime_project_sha256": runtime_sha,
@@ -256,17 +235,49 @@ def load_runtime_binding(
     return binding, signature, snapshot.payload
 
 
-def _expected_boolean(test) -> bool:
-    pattern = re.compile(
-        rf"\b{re.escape(test.output_tag)}\s*=\s*(TRUE|FALSE)\b",
-        re.IGNORECASE,
-    )
+def _boolean_expectation(test) -> bool | None:
+    pattern = re.compile(rf"\b{re.escape(test.output_tag)}\s*=\s*(TRUE|FALSE)\b", re.IGNORECASE)
     match = pattern.search(test.expected)
-    if match is None:
+    return None if match is None else match.group(1).upper() == "TRUE"
+
+
+def _expected_boolean(test) -> bool:
+    expected = _boolean_expectation(test)
+    if expected is None:
         raise ValueError(
             f"FAT test {test.id} does not have a typed Boolean expectation and cannot be executed by the V6 Echo adapter"
         )
-    return match.group(1).upper() == "TRUE"
+    return expected
+
+
+def _compatible_boolean_tests(tests):
+    selected: list[tuple[Any, bool]] = []
+    excluded: list[dict[str, str]] = []
+    for test in tests:
+        expected = _boolean_expectation(test)
+        if expected is None:
+            excluded.append(
+                {
+                    "test_id": test.id,
+                    "scenario": test.scenario,
+                    "reason": "ECHO_V6_REQUIRES_TYPED_BOOLEAN_ASSERTION",
+                }
+            )
+        else:
+            selected.append((test, expected))
+    return selected, excluded
+
+
+def echo_v6_test_compatibility(tests) -> dict[str, Any]:
+    selected, excluded = _compatible_boolean_tests(tests)
+    return {
+        "schema": "devagent-rockwell-echo-v6-test-compatibility-v1",
+        "full_plan_count": len(tests),
+        "selected_count": len(selected),
+        "excluded_count": len(excluded),
+        "selected_test_ids": [test.id for test, _ in selected],
+        "excluded": excluded,
+    }
 
 
 def build_echo_execution_request(
@@ -283,20 +294,18 @@ def build_echo_execution_request(
         raise ValueError("Rockwell Echo execution requires at least one generated FAT test")
     if len(tests) > _MAX_TESTS:
         raise ValueError(f"Rockwell Echo execution plan exceeds {_MAX_TESTS} tests")
+
+    compatible, _excluded = _compatible_boolean_tests(tests)
+    if not compatible:
+        raise ValueError(
+            "Rockwell Echo V6 has no compatible typed-Boolean FAT tests in this plan; non-Boolean/action/stateful tests remain NOT_RUN until a compatible qualified runner is supplied"
+        )
+
     quantum = time_quantum_us if time_quantum_us is not None else descriptor.default_time_quantum_us
     if quantum is None:
-        raise ValueError(
-            "Rockwell Echo execution requires --rockwell-time-quantum-us or a runner-declared default_time_quantum_us"
-        )
-    if (
-        isinstance(quantum, bool)
-        or not isinstance(quantum, int)
-        or quantum <= 0
-        or quantum > 60_000_000
-    ):
-        raise ValueError(
-            "Rockwell Echo time quantum must be an integer from 1 to 60000000 microseconds"
-        )
+        raise ValueError("Rockwell Echo execution requires --rockwell-time-quantum-us or a runner-declared default_time_quantum_us")
+    if isinstance(quantum, bool) or not isinstance(quantum, int) or quantum <= 0 or quantum > 60_000_000:
+        raise ValueError("Rockwell Echo time quantum must be an integer from 1 to 60000000 microseconds")
     runtime_target = runtime_project_path.expanduser().resolve(strict=True)
     request = {
         "schema": EXECUTION_REQUEST_SCHEMA,
@@ -305,6 +314,8 @@ def build_echo_execution_request(
         "runtime_project_sha256": binding.runtime_project_sha256,
         "runtime_binding_sha256": binding.source_sha256,
         "controller_name": result.engineering.project.metadata.controller_name,
+        # The signed/hash-bound plan remains the complete engineering plan. Echo
+        # V6 executes only the typed-Boolean subset it is qualified to assert.
         "test_plan_sha256": compute_test_plan_sha256(tests),
         "backend_registry_sha256": backend_registry_sha256,
         "adapter": {
@@ -329,19 +340,14 @@ def build_echo_execution_request(
                     "tag": test.output_tag,
                     "operator": "EQUALS",
                     "type": "BOOL",
-                    "expected": _expected_boolean(test),
+                    "expected": expected,
                 },
                 "source": test.source.locator,
             }
-            for test in tests
+            for test, expected in compatible
         ],
     }
-    encoded = json.dumps(
-        request,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return request, hashlib.sha256(encoded).hexdigest()
 
 
@@ -354,20 +360,11 @@ def execute_echo_runner(
     target, current_runner_sha = _runner_path(runner_path)
     expected_runner_sha = str((request.get("adapter") or {}).get("runner_sha256") or "")
     if current_runner_sha != expected_runner_sha:
-        raise ValueError(
-            "Rockwell Echo runner changed after capability/binding validation; execution is refused"
-        )
+        raise ValueError("Rockwell Echo runner changed after capability/binding validation; execution is refused")
     timeout = int(timeout_seconds)
     if timeout <= 0 or timeout > _MAX_TIMEOUT_SECONDS:
-        raise ValueError(
-            f"Rockwell Echo execution timeout must be 1..{_MAX_TIMEOUT_SECONDS} seconds"
-        )
-    encoded = json.dumps(
-        request,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+        raise ValueError(f"Rockwell Echo execution timeout must be 1..{_MAX_TIMEOUT_SECONDS} seconds")
+    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     try:
         completed = subprocess.run(
             [str(target), "--execute"],
@@ -382,15 +379,9 @@ def execute_echo_runner(
     except subprocess.TimeoutExpired as exc:
         raise ValueError("Rockwell Echo execution runner timed out") from exc
     stdout = completed.stdout or b""
-    loaded = _json_stdout(
-        completed,
-        label="Rockwell Echo execution runner",
-        max_bytes=_MAX_EXECUTION_RESPONSE_BYTES,
-    )
+    loaded = _json_stdout(completed, label="Rockwell Echo execution runner", max_bytes=_MAX_EXECUTION_RESPONSE_BYTES)
     if loaded.get("schema") != _EXECUTION_RESULTS_SCHEMA:
-        raise ValueError(
-            f"Rockwell Echo runner execution response schema must be {_EXECUTION_RESULTS_SCHEMA}"
-        )
+        raise ValueError(f"Rockwell Echo runner execution response schema must be {_EXECUTION_RESULTS_SCHEMA}")
     return stdout, loaded
 
 
@@ -415,13 +406,9 @@ def validate_echo_execution_response(
     }
     for field, value in expected.items():
         if str(loaded.get(field) or "") != value:
-            raise ValueError(
-                f"Rockwell Echo execution response {field} does not match the execution request"
-            )
+            raise ValueError(f"Rockwell Echo execution response {field} does not match the execution request")
     if not isinstance(loaded.get("signature"), dict):
-        raise ValueError(
-            "Rockwell Echo execution response must include a trusted Ed25519 signature"
-        )
+        raise ValueError("Rockwell Echo execution response must include a trusted Ed25519 signature")
 
 
 def run_echo_execution(
@@ -442,9 +429,7 @@ def run_echo_execution(
         preliminary_result.engineering.project.metadata.source_sha256,
     )
     if qualification.kind != "SIMULATOR":
-        raise ValueError(
-            f"Rockwell Echo adapter {descriptor.adapter_id!r} must be qualified as SIMULATOR"
-        )
+        raise ValueError(f"Rockwell Echo adapter {descriptor.adapter_id!r} must be qualified as SIMULATOR")
     binding, binding_signature, binding_bytes = load_runtime_binding(
         runtime_binding_path,
         trust_store=trust_store,
@@ -461,11 +446,7 @@ def run_echo_execution(
         backend_registry_sha256=backend_registry.source_sha256,
         time_quantum_us=time_quantum_us,
     )
-    response_bytes, response = execute_echo_runner(
-        runner_path,
-        request,
-        timeout_seconds=timeout_seconds,
-    )
+    response_bytes, response = execute_echo_runner(runner_path, request, timeout_seconds=timeout_seconds)
     validate_echo_execution_response(
         response,
         result=preliminary_result,
@@ -494,6 +475,7 @@ __all__ = [
     "RUNNER_SCHEMA",
     "build_echo_execution_request",
     "describe_echo_runner",
+    "echo_v6_test_compatibility",
     "execute_echo_runner",
     "load_runtime_binding",
     "run_echo_execution",

@@ -46,8 +46,10 @@ def test_plc_inspect_prints_human_semantic_summary(tmp_path: Path, capsys) -> No
     assert "Program RLL rungs: 2" in output
     assert "Analysis warnings:" in output
     assert "Program RLL deterministic instruction coverage:" in output
+    assert "Bounded data/compute action rungs: 1" in output
+    assert "Bounded action occurrences: 1" in output
     assert "XIC: 1 (DETERMINISTIC_PATH=1)" in output
-    assert "MOV: 1 (STRUCTURAL_RW=1)" in output
+    assert "MOV: 1 (BOUNDED_DETERMINISTIC=1)" in output
     assert "TRUST BOUNDARY" in output
 
 
@@ -63,6 +65,8 @@ def test_plc_inspect_json_is_machine_readable(tmp_path: Path, capsys) -> None:
     assert manifest["inventory"]["programs"] == 1
     assert manifest["inventory"]["program_rll_rungs"] == 2
     assert manifest["instruction_summary"]["scope"] == "PROGRAM_RLL"
+    assert manifest["action_semantics"]["modeled_actions"] == 1
+    assert manifest["stateful_runtime_semantics"]["modeled_occurrences"] == 0
     assert isinstance(manifest["project_boundaries"]["warnings"], list)
 
 

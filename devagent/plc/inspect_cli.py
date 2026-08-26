@@ -43,6 +43,8 @@ def _render(manifest: dict[str, object]) -> str:
     inventory = manifest["inventory"]
     summary = manifest["instruction_summary"]
     languages = manifest["language_summary"]
+    action = manifest["action_semantics"]
+    stateful = manifest["stateful_runtime_semantics"]
     boundaries = manifest["project_boundaries"]
     rll = languages["rll"]
     st = languages["structured_text"]
@@ -84,6 +86,10 @@ def _render(manifest: dict[str, object]) -> str:
         f"Program RLL rungs: {rll['program_rungs']}",
         f"Deterministic Boolean RLL rungs: {rll['deterministic_boolean_rungs']}",
         f"Bounded typed-compare rungs: {rll['bounded_compare_rungs']}",
+        f"Bounded data/compute action rungs: {rll['bounded_action_rungs']}",
+        f"Bounded action occurrences: {action['modeled_actions']}",
+        f"Stateful timer/counter runtime models: {stateful['modeled_occurrences']}",
+        f"Stateful runtime evidence required: {'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}",
         f"RLL branch coverage: {_pct(rll['branch_coverage_pct'])}",
         f"ST statements discovered: {st['statements']}",
         f"ST reachable FULL dataflow: {st['reachable_full_dataflow_statements']} ({_pct(st['reachable_full_dataflow_pct'])})",
