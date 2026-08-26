@@ -45,6 +45,8 @@ def _render(manifest: dict[str, object]) -> str:
     languages = manifest["language_summary"]
     action = manifest["action_semantics"]
     stateful = manifest["stateful_runtime_semantics"]
+    motion = manifest.get("motion_runtime_semantics", {})
+    state_machine = manifest.get("state_machine_semantics", {})
     boundaries = manifest["project_boundaries"]
     rll = languages["rll"]
     st = languages["structured_text"]
@@ -90,6 +92,10 @@ def _render(manifest: dict[str, object]) -> str:
         f"Bounded action occurrences: {action['modeled_actions']}",
         f"Stateful timer/counter runtime models: {stateful['modeled_occurrences']}",
         f"Stateful runtime evidence required: {'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}",
+        f"Motion runtime contracts: {motion.get('modeled_occurrences', 0)}",
+        f"Motion runtime evidence required: {'yes' if motion.get('requires_qualified_runtime_evidence') else 'no'}",
+        f"Discovered state transitions: {state_machine.get('transition_count', 0)} across {state_machine.get('state_tag_count', 0)} state tag(s)",
+        f"State-machine runtime evidence required: {'yes' if state_machine.get('runtime_evidence_required') else 'no'}",
         f"RLL branch coverage: {_pct(rll['branch_coverage_pct'])}",
         f"ST statements discovered: {st['statements']}",
         f"ST reachable FULL dataflow: {st['reachable_full_dataflow_statements']} ({_pct(st['reachable_full_dataflow_pct'])})",
