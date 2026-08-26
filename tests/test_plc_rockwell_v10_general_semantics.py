@@ -8,7 +8,7 @@ from devagent.plc.production_models import (
     RequirementCriticality,
     RequirementStatus,
     RequirementVerificationMode,
-    TestExecutionEvidence,
+    TestExecutionEvidence as ExecutionEvidence,
 )
 from devagent.plc import production_verification
 from devagent.plc.rockwell_semantic_capabilities import (
@@ -125,7 +125,7 @@ def test_qualified_execution_can_promote_action_effect_to_dynamic_verification(t
     assert result.linked_test_ids
 
     executions = [
-        TestExecutionEvidence(
+        ExecutionEvidence(
             test_id=test_id,
             status=ExecutionStatus.PASS,
             backend="qualified-echo",
@@ -146,7 +146,7 @@ def test_failed_qualified_execution_turns_action_effect_into_conflict(tmp_path: 
     assert result.linked_test_ids
 
     executions = [
-        TestExecutionEvidence(
+        ExecutionEvidence(
             test_id=result.linked_test_ids[0],
             status=ExecutionStatus.FAIL,
             backend="qualified-echo",
