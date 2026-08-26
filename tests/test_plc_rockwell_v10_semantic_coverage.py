@@ -60,6 +60,7 @@ def test_manifest_separates_proof_structural_partial_and_unmodeled_semantics(tmp
     assert _row(manifest, "VENDORMYSTERY")["levels"] == {"UNMODELED": 1}
 
     summary = manifest["instruction_summary"]
+    assert summary["scope"] == "PROGRAM_RLL"
     assert summary["total_occurrences"] == 5
     assert summary["deterministic_occurrences"] == 2
     assert summary["structural_only_occurrences"] == 1
@@ -76,9 +77,10 @@ def test_manifest_reports_language_and_project_boundaries_without_overclaiming(t
 
     rll = manifest["language_summary"]["rll"]
     st = manifest["language_summary"]["structured_text"]
+    aoi = manifest["language_summary"]["aoi"]
     boundaries = manifest["project_boundaries"]
 
-    assert rll["rungs"] == 4
+    assert rll["program_rungs"] == 4
     assert rll["deterministic_boolean_rungs"] == 1
     assert st["statements"] == 1
     # Sequence is not the program Main routine and is never reached by a JSR.
@@ -88,6 +90,8 @@ def test_manifest_reports_language_and_project_boundaries_without_overclaiming(t
     assert st["reachable_full_dataflow_statements"] == 0
     assert st["partial_or_unreachable_statements"] == 1
     assert st["reachable_full_dataflow_pct"] == 0.0
+    assert aoi["internal_rll_statements"] == 0
+    assert aoi["internal_st_statements"] == 0
     assert "MAJ" in boundaries["partially_modeled_instruction_names"]
     assert "VENDORMYSTERY" in boundaries["unmodeled_instruction_names"]
     assert "Structural coverage means reads/writes/calls are normalized" in manifest["trust_note"]
@@ -107,7 +111,7 @@ def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) 
     section = render_semantic_coverage_section(engineering.project)
 
     assert "## Semantic Coverage / Proof Boundary" in section
-    assert "Deterministic instruction coverage: **40.0%** (2/5)" in section
+    assert "Program RLL deterministic instruction coverage: **40.0%** (2/5)" in section
     assert "| MOV | 1 | STRUCTURAL_RW=1 |" in section
     assert "| MAJ | 1 | PARTIAL=1 |" in section
     assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
