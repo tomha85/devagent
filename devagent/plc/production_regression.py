@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import replace
 from pathlib import Path
 
@@ -57,8 +57,13 @@ def _logic_fingerprint(project, logic) -> tuple:
     paths = tuple(
         sorted(
             tuple(
-                (_logic_ref_identity(project, logic, term.tag), bool(term.required))
-                for term in path.terms
+                sorted(
+                    (
+                        _logic_ref_identity(project, logic, term.tag),
+                        bool(term.required),
+                    )
+                    for term in path.terms
+                )
             )
             for path in logic.paths
         )
@@ -72,12 +77,7 @@ def _logic_fingerprint(project, logic) -> tuple:
 
 
 def _logic_index(project):
-    """Index a source to a deterministic multiset of FULL output semantics.
-
-    A Rockwell rung can legally contain more than one output. Never overwrite a
-    second output that canonicalizes to the same source; regression comparison
-    must preserve the complete output set.
-    """
+    """Index a source to a deterministic multiset of FULL output semantics."""
     buckets: dict[tuple, list[tuple[tuple, object]]] = defaultdict(list)
     for logic in project.output_logic:
         if logic.semantic_state is not PLCSemanticState.FULL:
@@ -91,6 +91,26 @@ def _logic_index(project):
 
 def _bucket_fingerprints(bucket) -> tuple:
     return tuple(item[0] for item in bucket or ())
+
+
+def _changed_bucket_entries(before_bucket, after_bucket):
+    """Return only semantic entries not shared by the two source buckets."""
+    before_common = Counter(item[0] for item in before_bucket or ())
+    after_common = Counter(item[0] for item in after_bucket or ())
+    common = before_common & after_common
+
+    def remaining(bucket):
+        skip = common.copy()
+        result = []
+        for item in bucket or ():
+            fingerprint = item[0]
+            if skip[fingerprint] > 0:
+                skip[fingerprint] -= 1
+                continue
+            result.append(item)
+        return tuple(result)
+
+    return remaining(before_bucket), remaining(after_bucket)
 
 
 def _identity_names(project, identity: tuple[str, str]) -> set[str]:
@@ -160,8 +180,6 @@ def analyze_regression(
     previous = baseline.project
     changes: list[RegressionChange] = []
 
-    # Exported tag identity is Rockwell case-insensitive. Metadata changes are
-    # still tracked even when physical AliasFor storage is unchanged.
     current_tags = {_tag_key(tag): tag for tag in current.tags}
     previous_tags = {_tag_key(tag): tag for tag in previous.tags}
     for key in sorted(set(previous_tags) | set(current_tags)):
@@ -221,6 +239,7 @@ def analyze_regression(
         if _bucket_fingerprints(before_bucket) == _bucket_fingerprints(after_bucket):
             continue
 
+        changed_before, changed_after = _changed_bucket_entries(before_bucket, after_bucket)
         if not before_bucket:
             change_type = "LOGIC_ADDED"
         elif not after_bucket:
@@ -228,28 +247,28 @@ def analyze_regression(
         else:
             change_type = "LOGIC_CHANGED"
 
-        representative = (after_bucket or before_bucket)[0][1]
+        representative = (changed_after or changed_before or after_bucket or before_bucket)[0][1]
         locator = _source_locator(representative)
         affected_tags = _bucket_affected_names(
             current,
             previous,
-            before_bucket,
-            after_bucket,
+            changed_before,
+            changed_after,
         )
         outputs = sorted(
             {
                 logic.output_tag
-                for _, logic in (*before_bucket, *after_bucket)
+                for _, logic in (*changed_before, *changed_after)
             },
             key=str.casefold,
         )
-        output_label = ", ".join(outputs[:4])
+        output_label = ", ".join(outputs[:4]) or "output semantics"
         if len(outputs) > 4:
             output_label += f", +{len(outputs) - 4} output(s)"
         evidence_ids = tuple(
             dict.fromkeys(
                 logic.id
-                for _, logic in (*before_bucket, *after_bucket)
+                for _, logic in (*changed_before, *changed_after)
             )
         )
         changes.append(RegressionChange(
