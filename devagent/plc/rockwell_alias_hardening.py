@@ -58,10 +58,10 @@ def canonical_tag_identity(
     *,
     _seen: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[str, str]:
-    """Resolve scope, case, and Rockwell AliasFor chains to one identity.
+    """Resolve scope, case, member suffixes, and Rockwell AliasFor chains.
 
     Invalid/cyclic aliases remain unique unresolved identities rather than being
-    guessed. That is intentionally fail-closed for single-writer proof.
+    guessed. That is intentionally fail-closed for writer and proof decisions.
     """
     value = ref.strip()
     tag, scope, suffix = _find_tag(project, value, default_program)
@@ -85,29 +85,115 @@ def canonical_tag_identity(
     return scope.casefold(), tag.name.casefold() + suffix.casefold()
 
 
-def _same_source(statement, model) -> bool:
-    source = statement.source
+def _source_key(source, *, fallback: str) -> tuple[str, str, str, str, str]:
     return (
-        source.program == model.source.program
-        and source.routine == model.source.routine
-        and source.rung == model.source.rung
+        str(source.aoi or ""),
+        str(source.program or ""),
+        str(source.routine or ""),
+        str(source.rung if source.rung is not None else source.line or ""),
+        fallback,
     )
 
 
-def _has_other_writer(project, model) -> bool:
-    target = canonical_tag_identity(project, model.output_tag, model.program)
+def canonical_writer_sources(project, ref: str, default_program: str | None) -> tuple[str, ...]:
+    """Return unique executable source IDs writing the same underlying tag.
+
+    RLL statement mirrors of a parsed rung are deduplicated by source location.
+    ST/AOI statements remain distinct executable sources. This is intentionally
+    broader than output_logic so unsupported/partial writes can still block a
+    false single-writer proof.
+    """
+    target = canonical_tag_identity(project, ref, default_program)
+    sources: dict[tuple[str, str, str, str], str] = {}
+
     for rung in project.rungs:
-        if rung.id == model.rung_id:
+        if not any(canonical_tag_identity(project, write, rung.program) == target for write in rung.writes):
+            continue
+        key = (
+            str(rung.source.aoi or ""),
+            str(rung.source.program or rung.program or ""),
+            str(rung.source.routine or rung.routine or ""),
+            str(rung.source.rung if rung.source.rung is not None else rung.number),
+        )
+        sources.setdefault(key, rung.id)
+
+    for statement in project.logic_statements:
+        statement_program = statement.source.program or (
+            statement.owner_name if statement.owner_type == "program" else None
+        )
+        if not any(
+            canonical_tag_identity(project, write, statement_program) == target
+            for write in statement.writes
+        ):
+            continue
+        key = (
+            str(statement.source.aoi or ""),
+            str(statement.source.program or statement_program or ""),
+            str(statement.source.routine or statement.routine or ""),
+            str(
+                statement.source.rung
+                if statement.source.rung is not None
+                else statement.source.line
+                if statement.source.line is not None
+                else statement.locator
+            ),
+        )
+        sources.setdefault(key, statement.id)
+
+    return tuple(sorted(sources.values(), key=str.casefold))
+
+
+def distinct_named_tag_identities(project, name: str) -> tuple[tuple[str, str], ...]:
+    """Return physical identities for every exported tag sharing one spelling."""
+    identities = set()
+    for tag in project.tags:
+        if tag.name.casefold() != name.casefold():
+            continue
+        identities.add(
+            canonical_tag_identity(project, tag.name, _program_from_scope(tag.scope))
+        )
+    return tuple(sorted(identities))
+
+
+def _has_other_writer(project, model) -> bool:
+    current_key = (
+        str(model.source.aoi or ""),
+        str(model.source.program or model.program or ""),
+        str(model.source.routine or ""),
+        str(model.source.rung or ""),
+    )
+    target = canonical_tag_identity(project, model.output_tag, model.program)
+
+    for rung in project.rungs:
+        key = (
+            str(rung.source.aoi or ""),
+            str(rung.source.program or rung.program or ""),
+            str(rung.source.routine or rung.routine or ""),
+            str(rung.source.rung if rung.source.rung is not None else rung.number),
+        )
+        if key == current_key:
             continue
         if any(canonical_tag_identity(project, write, rung.program) == target for write in rung.writes):
             return True
 
     for statement in project.logic_statements:
-        if statement.language == "RLL" and _same_source(statement, model):
-            continue
         statement_program = statement.source.program or (
             statement.owner_name if statement.owner_type == "program" else None
         )
+        key = (
+            str(statement.source.aoi or ""),
+            str(statement.source.program or statement_program or ""),
+            str(statement.source.routine or statement.routine or ""),
+            str(
+                statement.source.rung
+                if statement.source.rung is not None
+                else statement.source.line
+                if statement.source.line is not None
+                else statement.locator
+            ),
+        )
+        if key == current_key:
+            continue
         if any(
             canonical_tag_identity(project, write, statement_program) == target
             for write in statement.writes
@@ -132,4 +218,10 @@ def install() -> None:
     _base.compare_models = compare_models
 
 
-__all__ = ["canonical_tag_identity", "compare_models", "install"]
+__all__ = [
+    "canonical_tag_identity",
+    "canonical_writer_sources",
+    "distinct_named_tag_identities",
+    "compare_models",
+    "install",
+]
