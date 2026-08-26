@@ -235,3 +235,85 @@ def test_missing_controller_major_fault_program_reference_is_fail_closed(tmp_pat
     assert profile["static_contract"] == "PARTIAL_FAIL_CLOSED"
     assert profile["static_gaps"]["execution_structure_warnings"] >= 1
     assert profile["execution_structure"]["missing_controller_entry_programs"] == ["NotExportedFaultProgram"]
+
+
+def test_typed_compare_requires_reachable_executable_rung(tmp_path: Path) -> None:
+    reachable = analyze_rockwell_l5x(
+        _write_project(
+            tmp_path,
+            name="ReachableCompare",
+            scheduled=True,
+            rung_text="GRT(Temperature,10)OTE(Fan);",
+            extra_tags='<Tag Name="Temperature" TagType="Base" DataType="DINT" />',
+        )
+    )
+    reachable_scenarios = {
+        test.scenario
+        for test in reachable.fat_tests
+        if test.output_tag == "Fan"
+    }
+    assert {"THRESHOLD_TRUE", "THRESHOLD_FALSE"} <= reachable_scenarios
+    reachable_verification = verify_requirement(
+        _static_requirement("IF Temperature > 10 THEN Fan=TRUE"),
+        reachable,
+        evidence_index(reachable),
+        reachable.fat_tests,
+    )
+    assert reachable_verification.status is RequirementStatus.STATICALLY_VERIFIED
+
+    unscheduled = analyze_rockwell_l5x(
+        _write_project(
+            tmp_path,
+            name="UnscheduledCompare",
+            scheduled=False,
+            rung_text="GRT(Temperature,10)OTE(Fan);",
+            extra_tags='<Tag Name="Temperature" TagType="Base" DataType="DINT" />',
+        )
+    )
+    assert not any(
+        test.output_tag == "Fan" and test.scenario.startswith("THRESHOLD_")
+        for test in unscheduled.fat_tests
+    )
+    unscheduled_verification = verify_requirement(
+        _static_requirement("IF Temperature > 10 THEN Fan=TRUE"),
+        unscheduled,
+        evidence_index(unscheduled),
+        unscheduled.fat_tests,
+    )
+    assert unscheduled_verification.status is not RequirementStatus.STATICALLY_VERIFIED
+
+    dead_payload = '''<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="DeadCompare" TargetType="Controller">
+  <Controller Use="Target" Name="DeadCompare" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+    <DataTypes /><Modules /><AddOnInstructionDefinitions />
+    <Tags>
+      <Tag Name="Start" TagType="Base" DataType="BOOL" />
+      <Tag Name="Alive" TagType="Base" DataType="BOOL" />
+      <Tag Name="Temperature" TagType="Base" DataType="DINT" />
+      <Tag Name="Fan" TagType="Base" DataType="BOOL" />
+    </Tags>
+    <Programs><Program Name="MainProgram" MainRoutineName="Main"><Routines>
+      <Routine Name="Main" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[XIC(Start)OTE(Alive);]]></Text></Rung>
+      </RLLContent></Routine>
+      <Routine Name="DeadCompareRoutine" Type="RLL"><RLLContent>
+        <Rung Number="0"><Text><![CDATA[GRT(Temperature,10)OTE(Fan);]]></Text></Rung>
+      </RLLContent></Routine>
+    </Routines></Program></Programs>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms></Task></Tasks>
+  </Controller>
+</RSLogix5000Content>'''
+    dead_path = tmp_path / "DeadCompare.L5X"
+    dead_path.write_text(dead_payload, encoding="utf-8")
+    dead = analyze_rockwell_l5x(dead_path)
+    assert not any(
+        test.output_tag == "Fan" and test.scenario.startswith("THRESHOLD_")
+        for test in dead.fat_tests
+    )
+    dead_verification = verify_requirement(
+        _static_requirement("IF Temperature > 10 THEN Fan=TRUE"),
+        dead,
+        evidence_index(dead),
+        dead.fat_tests,
+    )
+    assert dead_verification.status is not RequirementStatus.STATICALLY_VERIFIED
