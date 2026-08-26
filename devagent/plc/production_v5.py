@@ -37,6 +37,20 @@ def _sha256(path: Path | None) -> str | None:
     return hashlib.sha256(path.expanduser().resolve(strict=True).read_bytes()).hexdigest()
 
 
+def _require_verified_bytes_unchanged(
+    record: dict | None,
+    actual_sha256: str | None,
+    *,
+    purpose: str,
+) -> None:
+    if record is None:
+        return
+    if not actual_sha256 or record.get("artifact_sha256") != actual_sha256:
+        raise ValueError(
+            f"PLC artifact for {purpose} changed between signature verification and deterministic use"
+        )
+
+
 def _verify_optional_artifact(
     path: Path | None,
     *,
@@ -124,32 +138,38 @@ def run_production_verification_v5(
     trust_store = load_trusted_signer_store(trust_store_path)
     verified_signatures: list[dict] = []
 
-    # An external release policy defines the production gates themselves, so it
-    # is always authenticated by root trust. The policy cannot opt out of
-    # authenticating itself by removing a field from its own content.
+    policy_signature: dict | None = None
     if release_policy_path is not None:
-        record = verify_signed_json_artifact(
+        policy_signature = verify_signed_json_artifact(
             release_policy_path,
             purpose="RELEASE_POLICY",
             trust_store=trust_store,
             required=True,
         )
-        assert record is not None
-        verified_signatures.append(record)
+        assert policy_signature is not None
+        _require_verified_bytes_unchanged(
+            policy_signature,
+            policy.source_sha256,
+            purpose="RELEASE_POLICY",
+        )
+        verified_signatures.append(policy_signature)
 
     required_purposes = tuple(
         sorted(set(policy.require_signatures_for) | _MANDATORY_SIGNED_PURPOSES)
     )
-    for path, purpose in (
-        (execution_backend_registry_path, "EXECUTION_BACKEND_REGISTRY"),
-        (execution_results_path, "EXECUTION_RESULTS"),
-    ):
-        record = _verify_optional_artifact(
-            path,
-            purpose=purpose,
-            required_purposes=required_purposes,
-            trust_store=trust_store,
-        )
+    registry_signature = _verify_optional_artifact(
+        execution_backend_registry_path,
+        purpose="EXECUTION_BACKEND_REGISTRY",
+        required_purposes=required_purposes,
+        trust_store=trust_store,
+    )
+    execution_signature = _verify_optional_artifact(
+        execution_results_path,
+        purpose="EXECUTION_RESULTS",
+        required_purposes=required_purposes,
+        trust_store=trust_store,
+    )
+    for record in (registry_signature, execution_signature):
         if record is not None:
             verified_signatures.append(record)
 
@@ -178,6 +198,17 @@ def run_production_verification_v5(
         result.trust_store_sha256 = trust_store.source_sha256
     result.verified_signatures = verified_signatures
     result.execution_results_sha256 = _sha256(execution_results_path)
+
+    _require_verified_bytes_unchanged(
+        registry_signature,
+        result.execution_backend_registry_sha256,
+        purpose="EXECUTION_BACKEND_REGISTRY",
+    )
+    _require_verified_bytes_unchanged(
+        execution_signature,
+        result.execution_results_sha256,
+        purpose="EXECUTION_RESULTS",
+    )
 
     if result.execution_backend_id and result.execution_backend_registry:
         match = next(
@@ -225,6 +256,12 @@ def run_production_verification_v5(
         trust_store_sha256=result.trust_store_sha256,
         verification_context_sha256=result.verification_context_sha256,
     )
+    _require_verified_bytes_unchanged(
+        approval_signature,
+        _sha256(approval_path),
+        purpose="HUMAN_APPROVAL",
+    )
+
     result.readiness = evaluate_release_readiness_v5(
         result.engineering,
         result.requirements,
