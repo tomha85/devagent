@@ -24,6 +24,7 @@ _install_rockwell_compare_reachability_hardening()
 
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
 from devagent.plc.rockwell_v10_semantics import install as _install_rockwell_v10_semantics
+from devagent.plc.rockwell_action_requirements import install as _install_rockwell_action_requirements
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
 from devagent.plc.rockwell_closeout_gate_hardening import install as _install_rockwell_closeout_gate_hardening
 
@@ -33,6 +34,9 @@ _install_rockwell_requirement_hardening()
 # narrow same-active-Main-RLL-routine ordering theorem. Wider scheduling remains
 # fail-closed until explicitly modeled.
 _install_rockwell_v10_semantics()
+# Explicit natural-language requirements may bind to deterministic MOV/COPY/
+# CLR/RES local action effects, but never to final scan/process behavior.
+_install_rockwell_action_requirements()
 _install_rockwell_risk_hardening()
 # Install the V9 support-contract guard before importing regression/production
 # modules. Those modules import safe_analysis by value, so the patched support
