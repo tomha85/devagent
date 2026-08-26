@@ -4,7 +4,9 @@ from collections import Counter, defaultdict
 
 from devagent.plc.models import PLCSemanticState
 from devagent.plc.rockwell_compare import compare_models
+from devagent.plc.rockwell_general_actions import action_models, action_profile
 from devagent.plc.rockwell_l5x import _instruction_semantics
+from devagent.plc.rockwell_stateful_runtime import stateful_profile
 
 _LEVEL_ORDER = (
     "DETERMINISTIC_PATH",
@@ -34,25 +36,10 @@ def _rung_key(rung) -> tuple[str, str, str]:
 def build_semantic_coverage_manifest(project) -> dict[str, object]:
     """Describe what DevAgent understands for this exact PLC project.
 
-    Program-RLL instruction coverage and AOI definition coverage are intentionally
-    reported as separate scopes so AOI-heavy projects do not receive an inflated
-    or ambiguous instruction percentage.
-
-    Coverage levels are trust-oriented:
-
-    * DETERMINISTIC_PATH: the full reachable RLL Boolean path was normalized into
-      FULL output logic and can participate in deterministic path/action reasoning.
-    * BOUNDED_DETERMINISTIC: the reachable rung matches another explicitly
-      bounded deterministic theorem (currently typed linear compare semantics).
-    * STRUCTURAL_RW: operand direction/read/write/call structure is understood,
-      but behavioral/final-state proof is not claimed.
-    * PARTIAL: DevAgent recognizes the family or statement but explicitly
-      withholds complete/reachable behavior semantics.
-    * UNMODELED: the instruction is present but no supported semantics apply.
-
-    Structured Text reporting deliberately uses the final reachability-hardened
-    semantic state. Parser discovery is represented by the statement inventory;
-    it is not mislabeled as semantic proof.
+    Coverage separates proof-grade behavior, bounded instruction-effect theorems,
+    structural operand normalization, explicitly partial behavior, and unknown
+    behavior. A parser recognizing a token never becomes a behavioral PASS by
+    itself.
     """
 
     deterministic_rung_keys = {
@@ -63,6 +50,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         and not logic.origin.startswith("AOI_INTERNAL:")
     }
     bounded_compare_ids = {model.rung_id for model in compare_models(project)}
+    bounded_action_ids = {model.rung_id for model in action_models(project)}
     partial_names = {name.upper() for name in project.partially_modeled_instruction_names}
     unknown_names = {name.upper() for name in project.unknown_instruction_names}
     aoi_parameters = {item.name: item.parameters for item in project.aois}
@@ -70,18 +58,17 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     per_instruction: dict[str, Counter[str]] = defaultdict(Counter)
     totals: Counter[str] = Counter()
 
-    # Canonical project.rungs are program RLL rungs. AOI-internal RLL is stored
-    # separately in logic_statements and is summarized under the AOI scope below.
     for rung in project.rungs:
         key = _rung_key(rung)
         deterministic_path = key in deterministic_rung_keys
         bounded_compare = rung.id in bounded_compare_ids
+        bounded_action = rung.id in bounded_action_ids
         for instruction in rung.instructions:
             name = instruction.name.upper()
             _, _, _, _, structurally_supported = _instruction_semantics(instruction, aoi_parameters)
             if deterministic_path:
                 level = "DETERMINISTIC_PATH"
-            elif bounded_compare:
+            elif bounded_compare or bounded_action:
                 level = "BOUNDED_DETERMINISTIC"
             elif name in partial_names:
                 level = "PARTIAL"
@@ -133,6 +120,8 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     )
     protected_routines = sum(1 for routine in project.routines if routine.source_protected)
     protected_aois = sum(1 for aoi in project.aois if aoi.source_protected)
+    action = action_profile(project)
+    stateful = stateful_profile(project)
 
     return {
         "schema": "devagent-plc-semantic-coverage-v1",
@@ -178,6 +167,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 "program_rungs": len(project.rungs),
                 "deterministic_boolean_rungs": len(deterministic_rung_keys),
                 "bounded_compare_rungs": len(bounded_compare_ids),
+                "bounded_action_rungs": len(bounded_action_ids),
                 "branch_rungs": project.branch_rung_total,
                 "branch_rungs_modeled": project.branch_rung_semantic_count,
                 "branch_coverage_pct": pct(project.branch_rung_semantic_count, project.branch_rung_total),
@@ -202,6 +192,8 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 "calls_bound": project.aoi_call_bound_count,
             },
         },
+        "action_semantics": action,
+        "stateful_runtime_semantics": stateful,
         "project_boundaries": {
             "protected_routines": protected_routines,
             "unsupported_routine_types": dict(sorted(unsupported_routine_types.items())),
@@ -213,6 +205,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "Deterministic coverage describes bounded reachable software semantics only. "
             "Program RLL instruction coverage and AOI-definition coverage are separate scopes. "
             "Structural coverage means reads/writes/calls are normalized but behavior is not fully proven. "
+            "Timer/counter stateful runtime scenarios remain PARTIAL until qualified execution evidence is attached. "
             "Unreachable, partial, or unmodeled behavior is excluded from deterministic verification. "
             "Physical I/O, process physics, safety certification, and runtime behavior require separate evidence."
         ),
