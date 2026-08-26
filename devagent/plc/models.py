@@ -158,6 +158,7 @@ class CanonicalPLCProject:
     routines: list[PLCRoutine] = field(default_factory=list)
     rungs: list[PLCRung] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    unknown_instruction_names: list[str] = field(default_factory=list)
     instruction_total: int = 0
     instruction_semantic_count: int = 0
 
