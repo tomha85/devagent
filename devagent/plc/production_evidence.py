@@ -2,18 +2,38 @@ from __future__ import annotations
 
 from devagent.plc.models import PLCOutcome
 from devagent.plc.production_models import EngineeringFinding, EvidenceItem, Severity
+from devagent.plc.rockwell_closeout import rockwell_capability_profile
 
 
 def evidence_index(engineering) -> list[EvidenceItem]:
     project = engineering.project
-    result: list[EvidenceItem] = []
+    capability = rockwell_capability_profile(project)
+    capability_id = f"ROCKWELL-CAPABILITY:{project.metadata.source_sha256}"
+    result: list[EvidenceItem] = [
+        EvidenceItem(
+            capability_id,
+            "ROCKWELL_CAPABILITY_PROFILE",
+            f"Rockwell V9 support contract: {capability['static_contract']} for {project.metadata.controller_name}.",
+            project.metadata.source_path,
+            project.metadata.source_sha256,
+            capability,
+        )
+    ]
     for tag in project.tags:
         evidence_id = f"TAG:{tag.scope}:{tag.name}"
         result.append(EvidenceItem(
             evidence_id,
             "TAG",
             f"{tag.scope} tag {tag.name}: {tag.data_type}",
-            payload={"tag": tag.name, "scope": tag.scope, "data_type": tag.data_type},
+            payload={
+                "tag": tag.name,
+                "scope": tag.scope,
+                "data_type": tag.data_type,
+                "tag_type": tag.tag_type,
+                "alias_for": tag.alias_for,
+                "external_access": tag.external_access,
+                "constant": tag.constant,
+            },
         ))
     for rung in project.rungs:
         result.append(EvidenceItem(
@@ -55,6 +75,8 @@ def evidence_index(engineering) -> list[EvidenceItem]:
 
 def deterministic_engineering_findings(engineering, valid_evidence_ids: set[str]) -> list[EngineeringFinding]:
     project = engineering.project
+    capability = rockwell_capability_profile(project)
+    capability_id = f"ROCKWELL-CAPABILITY:{project.metadata.source_sha256}"
     checks = tuple(
         f"CHECK:{item.id}"
         for item in engineering.static_checks
@@ -69,6 +91,19 @@ def deterministic_engineering_findings(engineering, valid_evidence_ids: set[str]
         "Use the canonical IR as the authoritative downstream engineering input.",
         checks[:3],
     )]
+    findings.append(EngineeringFinding(
+        "ENG-ROCKWELL-SUPPORT-CONTRACT",
+        "ROCKWELL_SUPPORT",
+        "Rockwell production support contract",
+        Severity.INFO if capability["static_contract"] == "COMPLETE" else Severity.HIGH,
+        (
+            "All discovered exported semantics are within the V9 static support contract."
+            if capability["static_contract"] == "COMPLETE"
+            else "One or more exported Rockwell features remain PARTIAL/NOT_PROVEN under the V9 support contract."
+        ),
+        "Use the capability profile and static checks to disposition every unsupported/protected/partial feature; use a qualified execution backend for runtime PASS evidence.",
+        (capability_id,) if capability_id in valid_evidence_ids else checks,
+    ))
     if engineering.outcome is not PLCOutcome.STATICALLY_VERIFIED:
         findings.append(EngineeringFinding(
             "ENG-SEMANTIC-GAPS",
