@@ -103,6 +103,7 @@ def test_mixed_arbitrary_project_loads_tests_supported_surfaces_and_fails_closed
     assert any(item.output_tag == "Run" for item in result.project.output_logic)
     assert manifest["action_semantics"]["modeled_actions"] >= 2
     assert manifest["stateful_runtime_semantics"]["modeled_occurrences"] == 1
+    assert manifest["motion_runtime_semantics"]["modeled_occurrences"] == 1
     assert manifest["language_summary"]["structured_text"]["reachable_full_dataflow_statements"] == 1
 
     # Unsupported/opaque surfaces remain explicit rather than poisoning import or
@@ -116,8 +117,12 @@ def test_mixed_arbitrary_project_loads_tests_supported_surfaces_and_fails_closed
     assert "POSITIVE_PATH" in scenarios
     assert "ACTION_PATH" in scenarios
     assert "STATEFUL_RUNTIME" in scenarios
+    assert "MOTION_RUNTIME" in scenarios
     assert all(item.execution_status == "NOT_RUN" for item in result.fat_tests)
-    assert not any(item.output_tag in {"Axis1", "MysteryOut"} for item in result.fat_tests)
+    motion = [item for item in result.fat_tests if item.output_tag == "Axis1"]
+    assert len(motion) == 1
+    assert motion[0].scenario == "MOTION_RUNTIME"
+    assert not any(item.output_tag == "MysteryOut" for item in result.fat_tests)
 
 
 def test_standard_catalog_separates_known_partial_from_true_unknown(tmp_path: Path) -> None:
