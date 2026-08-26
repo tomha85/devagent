@@ -9,8 +9,12 @@ from pathlib import Path
 from typing import Sequence
 
 from devagent.config import ProviderConfig, load_config, provider_defaults
-from devagent.plc.models import PLCOutcome, plc_jsonable
-from devagent.plc.production import run_production_verification, compute_requirements_sha256, compute_test_plan_sha256
+from devagent.plc.models import plc_jsonable
+from devagent.plc.production import (
+    compute_requirements_sha256,
+    compute_test_plan_sha256,
+    run_production_verification,
+)
 from devagent.plc.production_models import ReadinessStatus
 from devagent.plc.production_report import render_production_report
 from devagent.plc.rockwell_l5x import L5XError
@@ -38,13 +42,33 @@ _STAGE_NAMES = (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent plc",
-        description="Evidence-driven PLC engineering review, requirements verification, FAT, regression, and release-readiness analysis",
+        description="Evidence-driven PLC engineering review, requirements verification, qualified FAT execution, regression, and release-readiness analysis",
     )
     parser.add_argument("project", type=Path, help="Rockwell Studio 5000 full-project .L5X export")
-    parser.add_argument("--requirements", action="append", default=[], type=Path, metavar="FILE", help="Requirement artifact (.txt/.md/.csv/.json/.docx; .pdf when pypdf is installed). Repeatable.")
+    parser.add_argument(
+        "--requirements",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="FILE",
+        help="Requirement artifact (.txt/.md/.csv/.json/.docx; .pdf when pypdf is installed). Repeatable.",
+    )
     parser.add_argument("--baseline", type=Path, help="Previous full-project L5X for semantic regression analysis")
-    parser.add_argument("--execution-results", type=Path, help="JSON execution evidence from an approved simulator/HIL/controller test backend")
-    parser.add_argument("--approval", type=Path, help="JSON human engineering approval bound to the exact project SHA-256")
+    parser.add_argument(
+        "--execution-results",
+        type=Path,
+        help="JSON execution evidence from a simulator/HIL/controller backend",
+    )
+    parser.add_argument(
+        "--execution-backend-registry",
+        type=Path,
+        help="Approved backend qualification registry. Required when --execution-results is supplied.",
+    )
+    parser.add_argument(
+        "--approval",
+        type=Path,
+        help="JSON human engineering approval bound to the exact verification context",
+    )
     parser.add_argument("--ai", action="store_true", help="Enable evidence-constrained AI engineering review and requirement trace candidates")
     parser.add_argument("--require-ai", action="store_true", help="Fail the run if requested AI review cannot complete")
     parser.add_argument("--provider", help="Override configured AI provider for this PLC run")
@@ -70,19 +94,29 @@ def _sha256(path: Path) -> str:
 
 def _persist_run(output_dir: Path, result, report: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=False)
+    project_sha = result.engineering.project.metadata.source_sha256
+    plan_sha = compute_test_plan_sha256(result.engineering.fat_tests)
+    requirements_sha = compute_requirements_sha256(result.requirements)
     files: dict[str, object | str] = {
         "canonical_ir.json": result.engineering.project,
         "dependency_graph.json": result.engineering.graph,
-        "static_verification.json": {"outcome": result.engineering.outcome, "checks": result.engineering.static_checks, "limitations": result.engineering.limitations},
+        "static_verification.json": {
+            "outcome": result.engineering.outcome,
+            "checks": result.engineering.static_checks,
+            "limitations": result.engineering.limitations,
+        },
         "engineering_review.json": result.engineering_findings,
         "requirements.json": result.requirements,
         "requirement_verification.json": result.requirement_verification,
         "fat_tests.json": result.engineering.fat_tests,
         "execution_plan.json": {
-            "schema": "devagent-plc-execution-plan-v1",
-            "project_sha256": result.engineering.project.metadata.source_sha256,
-            "test_plan_sha256": compute_test_plan_sha256(result.engineering.fat_tests),
-            "requirements_sha256": compute_requirements_sha256(result.requirements),
+            "schema": "devagent-plc-execution-plan-v2",
+            "project_sha256": project_sha,
+            "test_plan_sha256": plan_sha,
+            "requirements_sha256": requirements_sha,
+            "backend_registry_sha256": result.execution_backend_registry_sha256,
+            "baseline_sha256": result.baseline_sha256,
+            "verification_context_sha256": result.verification_context_sha256,
             "tests": result.engineering.fat_tests,
         },
         "test_execution.json": result.executions,
@@ -90,11 +124,19 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "optimizations.json": result.optimizations,
         "regression.json": result.regression_changes,
         "recommendations.json": result.recommendations,
-        "evidence_manifest.json": {"project_sha256": result.engineering.project.metadata.source_sha256, "items": result.evidence, "warnings": result.warnings},
+        "evidence_manifest.json": {
+            "project_sha256": project_sha,
+            "backend_registry_sha256": result.execution_backend_registry_sha256,
+            "verification_context_sha256": result.verification_context_sha256,
+            "items": result.evidence,
+            "warnings": result.warnings,
+        },
         "release_readiness.json": result.readiness,
         "pipeline_stages.json": result.stages,
         "fat_report.md": report,
     }
+    if result.execution_backend_registry is not None:
+        files["execution_backend_registry.json"] = result.execution_backend_registry
     written: list[Path] = []
     for name, value in files.items():
         path = output_dir / name
@@ -104,15 +146,19 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
             _write_json(path, value)
         written.append(path)
     manifest = {
-        "schema": "devagent-plc-run-v3",
+        "schema": "devagent-plc-run-v4",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_source": result.engineering.project.metadata.source_path,
-        "project_sha256": result.engineering.project.metadata.source_sha256,
+        "project_sha256": project_sha,
         "ai_provider": result.ai_provider,
         "ai_model": result.ai_model,
         "readiness": result.readiness.status.value if result.readiness else "NOT_EVALUATED",
-        "test_plan_sha256": compute_test_plan_sha256(result.engineering.fat_tests),
-        "requirements_sha256": compute_requirements_sha256(result.requirements),
+        "test_plan_sha256": plan_sha,
+        "requirements_sha256": requirements_sha,
+        "backend_registry_sha256": result.execution_backend_registry_sha256,
+        "execution_backend_id": result.execution_backend_id,
+        "baseline_sha256": result.baseline_sha256,
+        "verification_context_sha256": result.verification_context_sha256,
         "artifacts": {path.name: _sha256(path) for path in written},
     }
     _write_json(output_dir / "run_manifest.json", manifest)
@@ -147,6 +193,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.require_ai:
         args.ai = True
+    if args.execution_results is not None and args.execution_backend_registry is None:
+        print(
+            "DevAgent PLC failed: --execution-results requires --execution-backend-registry",
+            file=sys.stderr,
+        )
+        return 1
     try:
         provider, provider_name, model_name = _provider_from_args(args)
         result = run_production_verification(
@@ -154,6 +206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             requirement_paths=args.requirements,
             baseline_path=args.baseline,
             execution_results_path=args.execution_results,
+            execution_backend_registry_path=args.execution_backend_registry,
             approval_path=args.approval,
             provider=provider,
             ai_enabled=args.ai,
@@ -168,10 +221,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("")
         print(report, end="")
         if not args.no_write:
-            output_dir = args.output_dir.expanduser().resolve(strict=False) if args.output_dir else _default_output_dir(args.project)
+            output_dir = (
+                args.output_dir.expanduser().resolve(strict=False)
+                if args.output_dir
+                else _default_output_dir(args.project)
+            )
             _persist_run(output_dir, result, report)
             print(f"Artifacts: {output_dir}")
-        if result.readiness and result.readiness.status in {ReadinessStatus.READY_FOR_ENGINEERING_APPROVAL, ReadinessStatus.APPROVED_FOR_RELEASE}:
+        if result.readiness and result.readiness.status in {
+            ReadinessStatus.READY_FOR_ENGINEERING_APPROVAL,
+            ReadinessStatus.APPROVED_FOR_RELEASE,
+        }:
             return 0
         return 2
     except (L5XError, OSError, ValueError, ProviderError) as exc:
