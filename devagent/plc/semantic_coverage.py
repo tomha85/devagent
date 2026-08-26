@@ -36,14 +36,14 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
 
     Coverage levels are intentionally trust-oriented:
 
-    * DETERMINISTIC_PATH: the full RLL Boolean path was normalized into FULL
-      output logic and can participate in deterministic path/action reasoning.
-    * BOUNDED_DETERMINISTIC: the rung matches another explicitly bounded
-      deterministic theorem (currently typed linear compare semantics).
+    * DETERMINISTIC_PATH: the full reachable RLL Boolean path was normalized into
+      FULL output logic and can participate in deterministic path/action reasoning.
+    * BOUNDED_DETERMINISTIC: the reachable rung matches another explicitly
+      bounded deterministic theorem (currently typed linear compare semantics).
     * STRUCTURAL_RW: operand direction/read/write/call structure is understood,
       but behavioral/final-state proof is not claimed.
-    * PARTIAL: DevAgent recognizes the family but explicitly withholds complete
-      behavior semantics.
+    * PARTIAL: DevAgent recognizes the family or statement but explicitly
+      withholds complete/reachable behavior semantics.
     * UNMODELED: the instruction is present but no supported semantics apply.
 
     The manifest is descriptive evidence, not a claim about physical machine
@@ -80,18 +80,16 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 level = "PARTIAL"
             elif structurally_supported:
                 level = "STRUCTURAL_RW"
-            elif name in unknown_names:
-                level = "UNMODELED"
             else:
-                # Unknown/custom instructions not retained by an upstream warning
-                # still fail closed rather than being counted as understood.
+                # Unknown/custom instructions fail closed whether or not an
+                # upstream warning happened to retain their spelling.
                 level = "UNMODELED"
             per_instruction[name][level] += 1
             totals[level] += 1
 
     instruction_total = sum(totals.values())
     deterministic_total = totals["DETERMINISTIC_PATH"] + totals["BOUNDED_DETERMINISTIC"]
-    understood_total = deterministic_total + totals["STRUCTURAL_RW"] + totals["PARTIAL"]
+    recognized_total = deterministic_total + totals["STRUCTURAL_RW"] + totals["PARTIAL"]
 
     def pct(value: int, total: int) -> float | None:
         return round(100.0 * value / total, 1) if total else None
@@ -107,7 +105,12 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             }
         )
 
-    st_states = Counter(statement.semantic_state.value for statement in project.logic_statements if statement.language.upper() == "ST")
+    st_states = Counter(
+        statement.semantic_state.value
+        for statement in project.logic_statements
+        if statement.language.upper() == "ST"
+    )
+    st_full = st_states[PLCSemanticState.FULL.value]
     unsupported_routine_types = Counter(
         routine.routine_type
         for routine in project.routines
@@ -136,7 +139,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "partial_occurrences": totals["PARTIAL"],
             "unmodeled_occurrences": totals["UNMODELED"],
             "unmodeled_pct": pct(totals["UNMODELED"], instruction_total),
-            "recognized_or_better_occurrences": understood_total,
+            "recognized_occurrences": recognized_total,
         },
         "instruction_levels": {level: totals[level] for level in _LEVEL_ORDER},
         "instructions": instruction_rows,
@@ -151,11 +154,12 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             },
             "structured_text": {
                 "statements": project.st_statement_total,
-                "full_dataflow_statements": st_states[PLCSemanticState.FULL.value],
-                "partial_statements": st_states[PLCSemanticState.PARTIAL.value],
+                "reachable_full_dataflow_statements": st_full,
+                "reachable_full_dataflow_pct": pct(st_full, project.st_statement_total),
+                "partial_or_unreachable_statements": st_states[PLCSemanticState.PARTIAL.value],
                 "opaque_statements": st_states[PLCSemanticState.OPAQUE.value],
-                "existing_semantic_count": project.st_statement_semantic_count,
-                "existing_semantic_coverage_pct": pct(
+                "parser_semantic_count": project.st_statement_semantic_count,
+                "parser_semantic_coverage_pct": pct(
                     project.st_statement_semantic_count, project.st_statement_total
                 ),
             },
@@ -175,9 +179,9 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "unmodeled_instruction_names": sorted(unknown_names),
         },
         "trust_note": (
-            "Deterministic coverage describes bounded software semantics only. "
+            "Deterministic coverage describes bounded reachable software semantics only. "
             "Structural coverage means reads/writes/calls are normalized but behavior is not fully proven. "
-            "Partial or unmodeled behavior is excluded from deterministic verification. "
+            "Unreachable, partial, or unmodeled behavior is excluded from deterministic verification. "
             "Physical I/O, process physics, safety certification, and runtime behavior require separate evidence."
         ),
     }
