@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from devagent.plc.execution_trust import load_execution_backend_registry
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.rockwell_echo import (
     EXECUTION_REQUEST_SCHEMA,
@@ -148,6 +149,32 @@ def _binding(
     return path
 
 
+def _registry(tmp_path: Path, project_sha: str, *, status: str = "QUALIFIED"):
+    path = tmp_path / f"registry-{status.lower()}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "devagent-plc-execution-backend-registry-v1",
+                "approved_by": "Controls Owner",
+                "approved_at": "2026-08-26T13:00:00Z",
+                "backends": [
+                    {
+                        "id": "echo-qualified",
+                        "kind": "SIMULATOR",
+                        "status": status,
+                        "project_sha256": [project_sha],
+                        "qualification_evidence": ["ECHO-QUAL-1"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = load_execution_backend_registry(path)
+    assert registry is not None
+    return registry
+
+
 def test_echo_runner_descriptor_requires_deterministic_capabilities(tmp_path: Path) -> None:
     private = Ed25519PrivateKey.generate()
     runner = _runner(tmp_path, private)
@@ -175,7 +202,7 @@ def test_runtime_binding_binds_analysis_runtime_and_exact_runner(tmp_path: Path)
         runtime_sha=runtime_sha,
         runner_sha=descriptor.runner_sha256,
     )
-    binding, signature = load_runtime_binding(
+    binding, signature, signed_bytes = load_runtime_binding(
         binding_path,
         trust_store=trust,
         analysis_project_sha256=project_sha,
@@ -185,6 +212,7 @@ def test_runtime_binding_binds_analysis_runtime_and_exact_runner(tmp_path: Path)
     )
     assert binding.runtime_project_sha256 == runtime_sha
     assert signature["purpose"] == "RUNTIME_PROJECT_BINDING"
+    assert signed_bytes == binding_path.read_bytes()
 
     runtime.write_bytes(b"changed")
     with pytest.raises(ValueError, match="runtime_project_sha256"):
@@ -213,7 +241,7 @@ def test_echo_request_has_typed_assertions_and_no_physical_writes(tmp_path: Path
         runtime_sha=hashlib.sha256(runtime.read_bytes()).hexdigest(),
         runner_sha=descriptor.runner_sha256,
     )
-    binding, _ = load_runtime_binding(
+    binding, _, _ = load_runtime_binding(
         binding_path,
         trust_store=trust,
         analysis_project_sha256=preliminary.engineering.project.metadata.source_sha256,
@@ -231,6 +259,7 @@ def test_echo_request_has_typed_assertions_and_no_physical_writes(tmp_path: Path
     assert request["schema"] == EXECUTION_REQUEST_SCHEMA
     assert request["execution_policy"]["physical_controller_writes_allowed"] is False
     assert request["execution_policy"]["restore_snapshot_before_each_test"] is True
+    assert request["execution_policy"]["runtime_project_hash_must_be_verified_before_download"] is True
     assert all(item["assertion"]["type"] == "BOOL" for item in request["tests"])
     assert len(request_sha) == 64
 
@@ -243,26 +272,58 @@ def test_echo_execution_response_is_bound_to_request_runtime_and_runner(tmp_path
     runner = _runner(tmp_path, private)
     descriptor = describe_echo_runner(runner)
     preliminary = run_production_verification_v5(project)
+    project_sha = preliminary.engineering.project.metadata.source_sha256
     binding_path = _binding(
         tmp_path,
         private,
-        project_sha=preliminary.engineering.project.metadata.source_sha256,
+        project_sha=project_sha,
         runtime_sha=hashlib.sha256(runtime.read_bytes()).hexdigest(),
         runner_sha=descriptor.runner_sha256,
     )
+    registry = _registry(tmp_path, project_sha)
     package = run_echo_execution(
         preliminary,
         runner_path=runner,
         runtime_project_path=runtime,
         runtime_binding_path=binding_path,
-        backend_registry_sha256="b" * 64,
+        backend_registry=registry,
         trust_store=trust,
     )
     assert package.execution_results["schema"] == "devagent-plc-execution-results-v1"
     assert package.execution_results["runtime_project_sha256"] == package.binding.runtime_project_sha256
     assert package.execution_results["runner_sha256"] == package.descriptor.runner_sha256
     assert package.execution_results["execution_request_sha256"] == package.request_sha256
+    assert package.binding_signature["purpose"] == "RUNTIME_PROJECT_BINDING"
+    assert package.runtime_binding_bytes == binding_path.read_bytes()
     assert all(row["status"] == "PASS" for row in package.execution_results["results"])
+
+
+def test_echo_execution_refuses_unqualified_backend_before_binding_or_execute(tmp_path: Path) -> None:
+    private = Ed25519PrivateKey.generate()
+    trust = load_trusted_signer_store(_trust_store(tmp_path, private))
+    assert trust is not None
+    project, runtime = _project_and_runtime(tmp_path)
+    runner = _runner(tmp_path, private)
+    descriptor = describe_echo_runner(runner)
+    preliminary = run_production_verification_v5(project)
+    project_sha = preliminary.engineering.project.metadata.source_sha256
+    binding_path = _binding(
+        tmp_path,
+        private,
+        project_sha=project_sha,
+        runtime_sha=hashlib.sha256(runtime.read_bytes()).hexdigest(),
+        runner_sha=descriptor.runner_sha256,
+    )
+    registry = _registry(tmp_path, project_sha, status="EXPERIMENTAL")
+    with pytest.raises(ValueError, match="not QUALIFIED"):
+        run_echo_execution(
+            preliminary,
+            runner_path=runner,
+            runtime_project_path=runtime,
+            runtime_binding_path=binding_path,
+            backend_registry=registry,
+            trust_store=trust,
+        )
 
 
 def test_echo_runner_rejects_missing_cosimulation_capability(tmp_path: Path) -> None:
