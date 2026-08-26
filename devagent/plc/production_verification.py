@@ -110,7 +110,7 @@ def verify_requirement(
         return RequirementVerification(
             requirement.id,
             RequirementStatus.TRACEABLE_NOT_PROVEN,
-            "Requirement constrains multiple modeled outputs; V4 withholds whole-requirement proof until a compound assertion model is available.",
+            "Requirement constrains multiple modeled outputs; compound assertion semantics are not yet statically proven.",
             tuple(evidence_ids),
             tuple(matched_tags),
         )
@@ -139,7 +139,7 @@ def verify_requirement(
             return RequirementVerification(
                 requirement.id,
                 RequirementStatus.TRACEABLE_NOT_PROVEN,
-                f"{output} has {len(matching_logic)} modeled writer logic object(s); V4 will not prove output state without deterministic writer-order semantics.",
+                f"{output} has {len(matching_logic)} modeled writer logic object(s); output state is withheld without deterministic writer-order semantics.",
                 combined_evidence,
                 tuple(matched_tags),
             )
@@ -171,7 +171,7 @@ def verify_requirement(
             return RequirementVerification(
                 requirement.id,
                 RequirementStatus.STATICALLY_VERIFIED,
-                f"Specified Boolean conditions deterministically imply {output}={'TRUE' if expected else 'FALSE'} in the single-writer modeled OTE logic; runtime behavior still requires execution when verification_mode=DYNAMIC.",
+                f"Specified Boolean conditions deterministically imply {output}={'TRUE' if expected else 'FALSE'} in the single-writer modeled OTE logic; runtime behavior still requires execution when policy requires dynamic proof.",
                 combined_evidence,
                 tuple(matched_tags),
                 tuple(linked),
@@ -310,6 +310,7 @@ def compute_requirements_sha256(requirements: list[PLCRequirement]) -> str:
             "source_sha256": item.source_sha256,
             "source_locator": item.source_locator,
             "verification_mode": item.verification_mode.value,
+            "criticality": item.criticality.value,
         }
         for item in requirements
     ]
@@ -346,14 +347,18 @@ def compute_verification_context_sha256(
     requirements_sha256: str,
     backend_registry_sha256: str | None,
     baseline_sha256: str | None,
+    release_policy_sha256: str | None = None,
+    trust_store_sha256: str | None = None,
 ) -> str:
     payload = {
-        "schema": "devagent-plc-verification-context-v1",
+        "schema": "devagent-plc-verification-context-v2",
         "project_sha256": project_sha256,
         "test_plan_sha256": test_plan_sha256,
         "requirements_sha256": requirements_sha256,
         "backend_registry_sha256": backend_registry_sha256,
         "baseline_sha256": baseline_sha256,
+        "release_policy_sha256": release_policy_sha256,
+        "trust_store_sha256": trust_store_sha256,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
