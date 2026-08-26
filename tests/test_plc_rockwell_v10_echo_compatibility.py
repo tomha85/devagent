@@ -87,15 +87,20 @@ def test_echo_v6_executes_boolean_subset_without_dropping_full_plan_binding(tmp_
     )
 
     assert request["test_plan_sha256"] == compute_test_plan_sha256(result.engineering.fat_tests)
-    assert request["execution_policy"]["adapter_test_scope"] == "TYPED_BOOLEAN_ONLY"
-    assert request["test_selection"]["full_plan_count"] == len(result.engineering.fat_tests)
-    assert request["test_selection"]["selected_count"] == len(request["tests"])
-    assert request["test_selection"]["excluded_count"] > 0
+    # Preserve the established Echo V6 request schema: subset selection is an
+    # adapter implementation detail, not a new field that could break a strict
+    # already-qualified runner.
+    assert "adapter_test_scope" not in request["execution_policy"]
+    assert "test_selection" not in request
     assert all(item["assertion"]["type"] == "BOOL" for item in request["tests"])
+
+    full_ids = {item.id for item in result.engineering.fat_tests}
     selected_ids = {item["test_id"] for item in request["tests"]}
-    excluded_ids = {item["test_id"] for item in request["test_selection"]["excluded"]}
-    assert selected_ids.isdisjoint(excluded_ids)
-    assert selected_ids | excluded_ids == {item.id for item in result.engineering.fat_tests}
+    excluded_ids = full_ids - selected_ids
+    assert selected_ids
+    assert selected_ids < full_ids
+    assert any(test_id.startswith("FAT-ACTION-") for test_id in excluded_ids)
+    assert any(test_id.startswith("FAT-STATEFUL-") for test_id in excluded_ids)
 
 
 def test_echo_v6_refuses_plan_with_no_boolean_compatible_tests(tmp_path: Path) -> None:
