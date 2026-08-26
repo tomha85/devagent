@@ -38,7 +38,7 @@ def test_plc_inspect_prints_human_semantic_summary(tmp_path: Path, capsys) -> No
 
     assert "DEVAGENT PLC PROJECT INSPECTION" in output
     assert "Controller: Inspect" in output
-    assert "Deterministic instruction coverage:" in output
+    assert "Program RLL deterministic instruction coverage:" in output
     assert "XIC: 1 (DETERMINISTIC_PATH=1)" in output
     assert "MOV: 1 (STRUCTURAL_RW=1)" in output
     assert "TRUST BOUNDARY" in output
@@ -52,6 +52,7 @@ def test_plc_inspect_json_is_machine_readable(tmp_path: Path, capsys) -> None:
 
     assert manifest["schema"] == "devagent-plc-semantic-coverage-v1"
     assert manifest["project"]["controller"] == "Inspect"
+    assert manifest["instruction_summary"]["scope"] == "PROGRAM_RLL"
 
 
 def test_plc_inspect_writes_new_manifest_without_modifying_project(tmp_path: Path) -> None:
