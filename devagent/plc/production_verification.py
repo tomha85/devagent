@@ -19,6 +19,7 @@ from devagent.plc.production_models import (
     TestExecutionEvidence,
 )
 from devagent.plc.production_utils import explicit_bool, tag_occurs, tokens
+from devagent.plc.rockwell_compare import verify_typed_compare_requirement
 
 _EXECUTION_SCHEMA = "devagent-plc-execution-results-v1"
 
@@ -74,6 +75,10 @@ def requirement_candidates(requirement: PLCRequirement, engineering, evidence: l
 
 
 def verify_requirement(requirement: PLCRequirement, engineering, evidence: list[EvidenceItem], tests: list[FATTestCase]) -> RequirementVerification:
+    typed_compare = verify_typed_compare_requirement(requirement, engineering, evidence, tests)
+    if typed_compare is not None:
+        return typed_compare
+
     matched_tags, evidence_ids = requirement_candidates(requirement, engineering, evidence)
     modeled_outputs = {
         logic.output_tag

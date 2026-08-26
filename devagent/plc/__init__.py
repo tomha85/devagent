@@ -1,6 +1,21 @@
 """Vendor-neutral PLC engineering and production verification foundations for DevAgent."""
 
 from devagent.plc import analysis as _analysis
+from devagent.plc.rockwell_compare_hardening import install as _install_rockwell_compare_hardening
+from devagent.plc.rockwell_alias_hardening import install as _install_rockwell_alias_hardening
+
+# Install fail-closed compare and alias guards before production verification is
+# imported. Every downstream Rockwell proof must share the same canonical tag
+# and writer identity.
+_install_rockwell_compare_hardening()
+_install_rockwell_alias_hardening()
+
+from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
+from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
+
+_install_rockwell_requirement_hardening()
+_install_rockwell_risk_hardening()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
 
