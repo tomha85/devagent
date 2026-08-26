@@ -139,6 +139,20 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "processor_type": project.metadata.processor_type,
             "source_sha256": project.metadata.source_sha256,
         },
+        "inventory": {
+            "tags": len(project.tags),
+            "data_types": len(project.data_types),
+            "modules": len(project.modules),
+            "tasks": len(project.tasks),
+            "scheduled_program_entries": sum(len(task.scheduled_programs) for task in project.tasks),
+            "programs": len(project.programs),
+            "routines": len(project.routines),
+            "program_rll_rungs": len(project.rungs),
+            "logic_statements": len(project.logic_statements),
+            "structured_text_statements": project.st_statement_total,
+            "aois": len(project.aois),
+            "output_logic_objects": len(project.output_logic),
+        },
         "instruction_summary": {
             "scope": "PROGRAM_RLL",
             "total_occurrences": instruction_total,
@@ -193,6 +207,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "unsupported_routine_types": dict(sorted(unsupported_routine_types.items())),
             "partially_modeled_instruction_names": sorted(partial_names),
             "unmodeled_instruction_names": sorted(unknown_names),
+            "warnings": list(project.warnings),
         },
         "trust_note": (
             "Deterministic coverage describes bounded reachable software semantics only. "
