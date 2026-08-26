@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from devagent.plc import analysis as _base
-from devagent.plc.models import PLCOutcome, StaticCheck, StaticCheckStatus
+from devagent.plc.models import PLCDependencyEdge, PLCOutcome, StaticCheck, StaticCheckStatus
 from devagent.plc.rockwell_compare import (
     augment_compare_instruction_semantics,
+    compare_models,
     generate_compare_fat_tests,
     rockwell_compare_check,
 )
@@ -32,6 +33,24 @@ def _filter_unproven_rll_statement_dependencies(project, graph) -> None:
         for edge in graph.edges
         if not (edge.kind == "DEPENDS_ON" and edge.evidence_id in rll_statement_ids)
     ]
+
+
+def _add_compare_dependencies(project, graph) -> None:
+    seen = {(edge.source, edge.target, edge.kind, edge.evidence_id) for edge in graph.edges}
+    for model in compare_models(project):
+        for dependency in (model.input_tag, *(tag for tag, _ in model.contacts)):
+            key = (model.output_tag, dependency, "DEPENDS_ON", model.rung_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            graph.edges.append(
+                PLCDependencyEdge(
+                    source=model.output_tag,
+                    target=dependency,
+                    kind="DEPENDS_ON",
+                    evidence_id=model.rung_id,
+                )
+            )
 
 
 def _bounded_compare_check(project):
@@ -115,6 +134,7 @@ def analyze_rockwell_l5x(path):
     graph = _base.build_dependency_graph(project)
     _filter_unproven_rll_statement_dependencies(project, graph)
     add_rockwell_structure_edges(project, graph)
+    _add_compare_dependencies(project, graph)
 
     fat_tests = _base.generate_fat_tests(project)
     known_ids = {item.id for item in fat_tests}
