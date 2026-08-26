@@ -13,9 +13,11 @@ def _pct(value) -> str:
 
 def render_semantic_coverage_section(project) -> str:
     manifest = build_semantic_coverage_manifest(project)
+    inventory = manifest["inventory"]
     summary = manifest["instruction_summary"]
     languages = manifest["language_summary"]
     boundaries = manifest["project_boundaries"]
+    warnings = boundaries["warnings"]
     st = languages["structured_text"]
     rll = languages["rll"]
     aoi = languages["aoi"]
@@ -24,6 +26,22 @@ def render_semantic_coverage_section(project) -> str:
         "## Semantic Coverage / Proof Boundary",
         "",
         "> This section separates deterministic behavior proof from structural parsing. Structural read/write/call recognition is not a behavioral PASS.",
+        "",
+        "### Project Inventory",
+        "",
+        f"- Tags: **{inventory['tags']}**",
+        f"- Data types: **{inventory['data_types']}**",
+        f"- Modules: **{inventory['modules']}**",
+        f"- Tasks: **{inventory['tasks']}**",
+        f"- Scheduled program entries: **{inventory['scheduled_program_entries']}**",
+        f"- Programs: **{inventory['programs']}**",
+        f"- Routines: **{inventory['routines']}**",
+        f"- Program RLL rungs: **{inventory['program_rll_rungs']}**",
+        f"- Structured Text statements: **{inventory['structured_text_statements']}**",
+        f"- AOIs: **{inventory['aois']}**",
+        f"- Analysis warnings: **{len(warnings)}**",
+        "",
+        "### Coverage",
         "",
         f"- Program RLL deterministic instruction coverage: **{_pct(summary['deterministic_pct'])}** ({summary['deterministic_occurrences']}/{summary['total_occurrences']})",
         f"- Program RLL structural-or-better instruction coverage: **{_pct(summary['structural_or_better_pct'])}**",
@@ -62,6 +80,7 @@ def render_semantic_coverage_section(project) -> str:
         + (", ".join(f"{name}={count}" for name, count in boundaries["unsupported_routine_types"].items()) or "none")
         + "`",
         f"- Protected routines: **{boundaries['protected_routines']}**",
+        f"- Analysis warnings: **{len(warnings)}** (full warning text remains in canonical/evidence artifacts and `devagent plc inspect --json`)",
         "",
         str(manifest["trust_note"]),
         "",
