@@ -10,12 +10,22 @@ from devagent.plc.production_models import (
     ReadinessStatus,
     ReleaseReadiness,
     RequirementStatus,
+    RequirementVerificationMode,
     RiskFinding,
     Severity,
 )
 
 
-def load_approval(path: Path | None, project_sha256: str, test_plan_sha256: str, requirements_sha256: str) -> dict[str, Any] | None:
+def load_approval(
+    path: Path | None,
+    *,
+    project_sha256: str,
+    test_plan_sha256: str,
+    requirements_sha256: str,
+    backend_registry_sha256: str | None,
+    baseline_sha256: str | None,
+    verification_context_sha256: str,
+) -> dict[str, Any] | None:
     if path is None:
         return None
     target = path.expanduser().resolve(strict=True)
@@ -24,12 +34,17 @@ def load_approval(path: Path | None, project_sha256: str, test_plan_sha256: str,
     loaded = json.loads(target.read_text(encoding="utf-8-sig"))
     if not isinstance(loaded, dict):
         raise ValueError("Approval artifact must be a JSON object")
-    if loaded.get("project_sha256") != project_sha256:
-        raise ValueError("Approval project_sha256 does not match the analyzed PLC project")
-    if loaded.get("test_plan_sha256") != test_plan_sha256:
-        raise ValueError("Approval test_plan_sha256 does not match the generated FAT plan")
-    if loaded.get("requirements_sha256") != requirements_sha256:
-        raise ValueError("Approval requirements_sha256 does not match the analyzed requirement set")
+    expected = {
+        "project_sha256": project_sha256,
+        "test_plan_sha256": test_plan_sha256,
+        "requirements_sha256": requirements_sha256,
+        "backend_registry_sha256": backend_registry_sha256,
+        "baseline_sha256": baseline_sha256,
+        "verification_context_sha256": verification_context_sha256,
+    }
+    for field, value in expected.items():
+        if loaded.get(field) != value:
+            raise ValueError(f"Approval {field} does not match the current PLC verification context")
     if str(loaded.get("decision", "")).upper() != "APPROVE":
         raise ValueError("Approval artifact decision must be APPROVE")
     if not str(loaded.get("approved_by", "")).strip() or not str(loaded.get("approved_at", "")).strip():
@@ -38,11 +53,29 @@ def load_approval(path: Path | None, project_sha256: str, test_plan_sha256: str,
         "decision": "APPROVE",
         "approved_by": str(loaded["approved_by"]),
         "approved_at": str(loaded["approved_at"]),
-        "project_sha256": project_sha256,
-        "test_plan_sha256": test_plan_sha256,
-        "requirements_sha256": requirements_sha256,
+        **expected,
         "source_path": str(target),
     }
+
+
+def _requirement_release_gaps(requirements, verifications) -> list[str]:
+    req_by_id = {item.id: item for item in requirements}
+    gaps: list[str] = []
+    for verification in verifications:
+        requirement = req_by_id.get(verification.requirement_id)
+        if requirement is None:
+            gaps.append(verification.requirement_id)
+            continue
+        if requirement.verification_mode is RequirementVerificationMode.STATIC:
+            accepted = verification.status in {
+                RequirementStatus.STATICALLY_VERIFIED,
+                RequirementStatus.DYNAMICALLY_VERIFIED,
+            }
+        else:
+            accepted = verification.status is RequirementStatus.DYNAMICALLY_VERIFIED
+        if not accepted:
+            gaps.append(verification.requirement_id)
+    return gaps
 
 
 def evaluate_release_readiness(
@@ -61,12 +94,20 @@ def evaluate_release_readiness(
         blockers.append("PLC semantic coverage is incomplete; one or more behaviors remain PARTIAL/NOT_PROVEN.")
     if not requirements:
         blockers.append("No customer/engineering requirements were supplied, so requirement coverage cannot be proven.")
-    unproven = [
-        item for item in verifications
-        if item.status not in {RequirementStatus.STATICALLY_VERIFIED, RequirementStatus.DYNAMICALLY_VERIFIED}
-    ]
-    if unproven:
-        blockers.append(f"{len(unproven)} requirement(s) are not deterministically verified.")
+
+    release_gaps = _requirement_release_gaps(requirements, verifications)
+    if release_gaps:
+        dynamic_gaps = sum(
+            1
+            for requirement_id in release_gaps
+            if next((item for item in requirements if item.id == requirement_id), None)
+            and next(item for item in requirements if item.id == requirement_id).verification_mode
+            is RequirementVerificationMode.DYNAMIC
+        )
+        blockers.append(
+            f"{len(release_gaps)} requirement(s) do not satisfy their release verification policy"
+            + (f"; {dynamic_gaps} require qualified-backend dynamic PASS evidence." if dynamic_gaps else ".")
+        )
 
     statuses = {item.test_id: item.status for item in executions}
     if tests:
@@ -80,19 +121,22 @@ def evaluate_release_readiness(
         blockers.append("No executable FAT candidates were generated for the normalized logic.")
 
     deterministic_high = [
-        risk for risk in risks
+        risk
+        for risk in risks
         if risk.origin == "DETERMINISTIC" and risk.severity in {Severity.CRITICAL, Severity.HIGH}
     ]
     if deterministic_high:
         blockers.append(f"{len(deterministic_high)} unresolved deterministic HIGH/CRITICAL risk(s) remain.")
     medium = [
-        risk for risk in risks
+        risk
+        for risk in risks
         if risk.origin == "DETERMINISTIC" and risk.severity is Severity.MEDIUM
     ]
     if medium:
         conditions.append(f"Disposition {len(medium)} deterministic MEDIUM risk(s).")
     ai_high = [
-        risk for risk in risks
+        risk
+        for risk in risks
         if risk.origin != "DETERMINISTIC" and risk.severity in {Severity.HIGH, Severity.CRITICAL}
     ]
     if ai_high:
@@ -108,7 +152,7 @@ def evaluate_release_readiness(
     score = 100
     score -= 25 if engineering.outcome is not PLCOutcome.STATICALLY_VERIFIED else 0
     score -= 25 if not requirements else 0
-    score -= min(25, 5 * len(unproven))
+    score -= min(30, 6 * len(release_gaps))
     if not tests:
         score -= 20
     else:
@@ -144,8 +188,19 @@ def evaluate_release_readiness(
     }[status]
     metrics = {
         "requirements_total": len(requirements),
-        "requirements_dynamic_verified": sum(1 for item in verifications if item.status is RequirementStatus.DYNAMICALLY_VERIFIED),
-        "requirements_static_verified": sum(1 for item in verifications if item.status is RequirementStatus.STATICALLY_VERIFIED),
+        "requirements_dynamic_policy": sum(
+            1 for item in requirements if item.verification_mode is RequirementVerificationMode.DYNAMIC
+        ),
+        "requirements_static_policy": sum(
+            1 for item in requirements if item.verification_mode is RequirementVerificationMode.STATIC
+        ),
+        "requirements_dynamic_verified": sum(
+            1 for item in verifications if item.status is RequirementStatus.DYNAMICALLY_VERIFIED
+        ),
+        "requirements_static_verified": sum(
+            1 for item in verifications if item.status is RequirementStatus.STATICALLY_VERIFIED
+        ),
+        "requirements_release_gaps": len(release_gaps),
         "tests_total": len(tests),
         "tests_passed": sum(1 for item in executions if item.status is ExecutionStatus.PASS),
         "tests_failed": sum(1 for item in executions if item.status is ExecutionStatus.FAIL),

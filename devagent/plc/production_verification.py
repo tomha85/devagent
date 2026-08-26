@@ -5,6 +5,10 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from devagent.plc.execution_trust import (
+    ExecutionBackendRegistry,
+    require_qualified_backend,
+)
 from devagent.plc.models import FATTestCase, PLCSemanticState
 from devagent.plc.production_models import (
     EvidenceItem,
@@ -16,22 +20,54 @@ from devagent.plc.production_models import (
 )
 from devagent.plc.production_utils import explicit_bool, tag_occurs, tokens
 
-
-def _logic_matches_assignment(logic, assignment: dict[str, bool], expected: bool) -> bool:
-    if logic.instruction not in {"OTE", "OTL", "OTU"}:
-        return False
-    path_true = any(
-        all(assignment.get(term.tag) == term.required for term in path.terms)
-        for path in logic.paths
-    )
-    if logic.instruction == "OTE":
-        return path_true is expected
-    if logic.instruction == "OTL":
-        return expected and path_true
-    return (not expected) and path_true
+_EXECUTION_SCHEMA = "devagent-plc-execution-results-v1"
 
 
-def requirement_candidates(requirement: PLCRequirement, engineering, evidence: list[EvidenceItem]) -> tuple[list[str], list[str]]:
+def _ote_truth(logic, assignment: dict[str, bool], expected: bool) -> str:
+    """Return PROVEN, CONFLICT, or UNKNOWN for a partial Boolean assignment.
+
+    A path is possible when none of the supplied inputs contradict it. A path is
+    definite when every term in that path was explicitly supplied and matched.
+    This prevents an under-specified requirement from being mislabeled as a
+    conflict simply because another PLC permissive was omitted from the prose.
+    """
+
+    possible = 0
+    definite = 0
+    for path in logic.paths:
+        contradicted = False
+        complete = True
+        for term in path.terms:
+            if term.tag not in assignment:
+                complete = False
+                continue
+            if assignment[term.tag] != term.required:
+                contradicted = True
+                break
+        if contradicted:
+            continue
+        possible += 1
+        if complete:
+            definite += 1
+
+    if expected:
+        if definite:
+            return "PROVEN"
+        if possible == 0:
+            return "CONFLICT"
+        return "UNKNOWN"
+    if possible == 0:
+        return "PROVEN"
+    if definite:
+        return "CONFLICT"
+    return "UNKNOWN"
+
+
+def requirement_candidates(
+    requirement: PLCRequirement,
+    engineering,
+    evidence: list[EvidenceItem],
+) -> tuple[list[str], list[str]]:
     project = engineering.project
     explicit_tags = sorted(
         {tag.name for tag in project.tags if tag_occurs(requirement.text, tag.name)},
@@ -60,15 +96,29 @@ def verify_requirement(
     tests: list[FATTestCase],
 ) -> RequirementVerification:
     matched_tags, evidence_ids = requirement_candidates(requirement, engineering, evidence)
-    output_names = {
+    modeled_outputs = {
         logic.output_tag
         for logic in engineering.project.output_logic
-        if logic.semantic_state is PLCSemanticState.FULL and not logic.origin.startswith("AOI_INTERNAL:")
+        if logic.semantic_state is PLCSemanticState.FULL
+        and not logic.origin.startswith("AOI_INTERNAL:")
     }
-    for output in [name for name in matched_tags if name in output_names]:
+    explicit_outputs = [
+        tag for tag in matched_tags
+        if tag in modeled_outputs and explicit_bool(requirement.text, tag) is not None
+    ]
+    if len(explicit_outputs) > 1:
+        return RequirementVerification(
+            requirement.id,
+            RequirementStatus.TRACEABLE_NOT_PROVEN,
+            "Requirement constrains multiple modeled outputs; V4 withholds whole-requirement proof until a compound assertion model is available.",
+            tuple(evidence_ids),
+            tuple(matched_tags),
+        )
+
+    if len(explicit_outputs) == 1:
+        output = explicit_outputs[0]
         expected = explicit_bool(requirement.text, output)
-        if expected is None:
-            continue
+        assert expected is not None
         assignment = {
             tag: value
             for tag in matched_tags
@@ -76,16 +126,43 @@ def verify_requirement(
             for value in [explicit_bool(requirement.text, tag)]
             if value is not None
         }
-        if not assignment:
-            continue
         matching_logic = [
             logic for logic in engineering.project.output_logic
             if logic.output_tag == output
             and logic.semantic_state is PLCSemanticState.FULL
             and not logic.origin.startswith("AOI_INTERNAL:")
         ]
-        if any(_logic_matches_assignment(logic, assignment, expected) for logic in matching_logic):
-            evidence_ids = list(dict.fromkeys([*evidence_ids, *(logic.id for logic in matching_logic)]))
+        logic_evidence = tuple(logic.id for logic in matching_logic)
+        combined_evidence = tuple(dict.fromkeys([*evidence_ids, *logic_evidence]))
+
+        if len(matching_logic) != 1:
+            return RequirementVerification(
+                requirement.id,
+                RequirementStatus.TRACEABLE_NOT_PROVEN,
+                f"{output} has {len(matching_logic)} modeled writer logic object(s); V4 will not prove output state without deterministic writer-order semantics.",
+                combined_evidence,
+                tuple(matched_tags),
+            )
+        logic = matching_logic[0]
+        if logic.instruction != "OTE":
+            return RequirementVerification(
+                requirement.id,
+                RequirementStatus.TRACEABLE_NOT_PROVEN,
+                f"{output} uses retentive/action instruction {logic.instruction}; static path truth alone cannot prove retained output state.",
+                combined_evidence,
+                tuple(matched_tags),
+            )
+        if not assignment:
+            return RequirementVerification(
+                requirement.id,
+                RequirementStatus.TRACEABLE_NOT_PROVEN,
+                f"Requirement names {output} but does not provide enough explicit Boolean input conditions for proof.",
+                combined_evidence,
+                tuple(matched_tags),
+            )
+
+        truth = _ote_truth(logic, assignment, expected)
+        if truth == "PROVEN":
             linked = [
                 test.id for test in tests
                 if test.output_tag == output
@@ -94,23 +171,32 @@ def verify_requirement(
             return RequirementVerification(
                 requirement.id,
                 RequirementStatus.STATICALLY_VERIFIED,
-                f"Explicit Boolean requirement is consistent with modeled logic for {output}; runtime behavior is not yet proven.",
-                tuple(evidence_ids),
+                f"Specified Boolean conditions deterministically imply {output}={'TRUE' if expected else 'FALSE'} in the single-writer modeled OTE logic; runtime behavior still requires execution when verification_mode=DYNAMIC.",
+                combined_evidence,
                 tuple(matched_tags),
                 tuple(linked),
             )
+        if truth == "CONFLICT":
+            return RequirementVerification(
+                requirement.id,
+                RequirementStatus.CONFLICT,
+                f"Specified Boolean conditions make required {output}={'TRUE' if expected else 'FALSE'} impossible in the single-writer modeled OTE logic.",
+                combined_evidence,
+                tuple(matched_tags),
+            )
         return RequirementVerification(
             requirement.id,
-            RequirementStatus.CONFLICT,
-            f"Explicit Boolean requirement conflicts with the currently modeled output paths for {output}.",
-            tuple(evidence_ids),
+            RequirementStatus.TRACEABLE_NOT_PROVEN,
+            f"Requirement maps to {output}, but supplied Boolean conditions under-specify one or more modeled dependencies; neither verification nor conflict is proven.",
+            combined_evidence,
             tuple(matched_tags),
         )
+
     if matched_tags:
         return RequirementVerification(
             requirement.id,
             RequirementStatus.TRACEABLE_NOT_PROVEN,
-            "Requirement references known PLC tags but its behavior cannot be deterministically proven from the bounded semantics.",
+            "Requirement references known PLC tags but its complete behavior cannot be deterministically proven from the bounded semantics.",
             tuple(evidence_ids),
             tuple(matched_tags),
         )
@@ -143,7 +229,10 @@ def generate_requirement_tests(
             continue
         requirement = req_by_id[verification.requirement_id]
         output = next(
-            (tag for tag in verification.matched_tags if any(logic.output_tag == tag for logic in engineering.project.output_logic)),
+            (
+                tag for tag in verification.matched_tags
+                if any(logic.output_tag == tag for logic in engineering.project.output_logic)
+            ),
             None,
         )
         if not output:
@@ -159,20 +248,24 @@ def generate_requirement_tests(
         if not assignment or signature in signatures:
             continue
         logic = next((logic_by_id[item] for item in verification.evidence_ids if item in logic_by_id), None)
-        if logic is None:
+        if logic is None or logic.instruction != "OTE":
             continue
         digest = hashlib.sha1(f"{requirement.id}:{output}:{signature}".encode()).hexdigest()[:10]
         expected = explicit_bool(requirement.text, output)
-        tests.append(FATTestCase(
-            id=f"FAT-REQ-{digest}",
-            title=f"Verify {requirement.id}: {output}",
-            source=logic.source,
-            output_tag=output,
-            preconditions=dict(sorted(assignment.items())),
-            expected=f"Requirement {requirement.id} expects {output}={'TRUE' if expected else 'FALSE'}",
-            limitations=("Requirement-derived candidate; requires approved execution backend before PASS can be claimed.",),
-            scenario="REQUIREMENT",
-        ))
+        tests.append(
+            FATTestCase(
+                id=f"FAT-REQ-{digest}",
+                title=f"Verify {requirement.id}: {output}",
+                source=logic.source,
+                output_tag=output,
+                preconditions=dict(sorted(assignment.items())),
+                expected=f"Requirement {requirement.id} expects {output}={'TRUE' if expected else 'FALSE'}",
+                limitations=(
+                    "Requirement-derived candidate; requires approved execution backend before PASS can be claimed.",
+                ),
+                scenario="REQUIREMENT",
+            )
+        )
         signatures.add(signature)
     engineering.fat_tests = tests
     return tests
@@ -209,20 +302,25 @@ def link_tests_to_verifications(
     return result
 
 
-
-
-def compute_requirements_sha256(requirements) -> str:
+def compute_requirements_sha256(requirements: list[PLCRequirement]) -> str:
     payload = [
         {
             "id": item.id,
             "text": item.text,
             "source_sha256": item.source_sha256,
             "source_locator": item.source_locator,
+            "verification_mode": item.verification_mode.value,
         }
         for item in requirements
     ]
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
 
 def compute_test_plan_sha256(tests: list[FATTestCase]) -> str:
     payload = [
@@ -241,11 +339,33 @@ def compute_test_plan_sha256(tests: list[FATTestCase]) -> str:
     ).hexdigest()
 
 
+def compute_verification_context_sha256(
+    *,
+    project_sha256: str,
+    test_plan_sha256: str,
+    requirements_sha256: str,
+    backend_registry_sha256: str | None,
+    baseline_sha256: str | None,
+) -> str:
+    payload = {
+        "schema": "devagent-plc-verification-context-v1",
+        "project_sha256": project_sha256,
+        "test_plan_sha256": test_plan_sha256,
+        "requirements_sha256": requirements_sha256,
+        "backend_registry_sha256": backend_registry_sha256,
+        "baseline_sha256": baseline_sha256,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def load_execution_results(
     path: Path | None,
     project_sha256: str,
     plan_sha256: str,
     test_ids: set[str],
+    backend_registry: ExecutionBackendRegistry | None = None,
 ) -> list[TestExecutionEvidence]:
     if path is None:
         return []
@@ -255,6 +375,8 @@ def load_execution_results(
     loaded = json.loads(target.read_text(encoding="utf-8-sig"))
     if not isinstance(loaded, dict):
         raise ValueError("Execution evidence must be a JSON object")
+    if loaded.get("schema") != _EXECUTION_SCHEMA:
+        raise ValueError(f"Execution evidence schema must be {_EXECUTION_SCHEMA}")
     if str(loaded.get("project_sha256", "")) != project_sha256:
         raise ValueError("Execution evidence project_sha256 does not match the analyzed PLC artifact")
     if str(loaded.get("test_plan_sha256", "")) != plan_sha256:
@@ -263,6 +385,10 @@ def load_execution_results(
     run_id = str(loaded.get("run_id") or "").strip()
     if not backend or not run_id:
         raise ValueError("Execution evidence requires non-empty backend and run_id")
+    qualification = require_qualified_backend(backend_registry, backend, project_sha256)
+    assert qualification.id == backend
+    if loaded.get("backend_registry_sha256") != backend_registry.source_sha256:
+        raise ValueError("Execution evidence backend_registry_sha256 does not match the supplied qualification registry")
     rows = loaded.get("results")
     if not isinstance(rows, list):
         raise ValueError("Execution evidence requires a results list")
@@ -287,15 +413,17 @@ def load_execution_results(
         evidence_items = tuple(str(item) for item in raw_evidence if str(item).strip())
         if any(len(item) > 2048 for item in evidence_items):
             raise ValueError(f"Execution evidence reference for {test_id} exceeds 2048 characters")
-        result.append(TestExecutionEvidence(
-            test_id,
-            status,
-            backend[:256],
-            run_id[:256],
-            str(row.get("observed"))[:8192] if row.get("observed") is not None else None,
-            str(row.get("timestamp"))[:128] if row.get("timestamp") is not None else None,
-            evidence_items,
-        ))
+        result.append(
+            TestExecutionEvidence(
+                test_id,
+                status,
+                backend[:256],
+                run_id[:256],
+                str(row.get("observed"))[:8192] if row.get("observed") is not None else None,
+                str(row.get("timestamp"))[:128] if row.get("timestamp") is not None else None,
+                evidence_items,
+            )
+        )
     return result
 
 
@@ -312,13 +440,13 @@ def promote_requirement_execution(
                 item = replace(
                     item,
                     status=RequirementStatus.DYNAMICALLY_VERIFIED,
-                    summary=item.summary + " Linked execution evidence passed.",
+                    summary=item.summary + " Linked qualified-backend execution evidence passed.",
                 )
             elif any(status is ExecutionStatus.FAIL for status in known):
                 item = replace(
                     item,
                     status=RequirementStatus.CONFLICT,
-                    summary=item.summary + " Linked execution evidence contains a FAIL result.",
+                    summary=item.summary + " Linked qualified-backend execution evidence contains a FAIL result.",
                 )
         result.append(item)
     return result

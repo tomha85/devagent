@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from devagent.plc.production_models import PLCRequirement
+from devagent.plc.production_models import PLCRequirement, RequirementVerificationMode
 
 _REQ_PREFIX = re.compile(r"^\s*(?:[-*•]\s*)?(?:(REQ[-_ ]?[A-Za-z0-9_.-]+|[A-Z]{2,10}[-_][0-9][A-Za-z0-9_.-]*)\s*[:.)-]?\s*)?(.*)$")
 _NUMBERED = re.compile(r"^\s*(?:[-*•]|\d+(?:\.\d+)*[.)])\s+(.*)$")
@@ -35,6 +35,18 @@ def _stable_id(source_sha: str, locator: str, text: str, explicit: str | None = 
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _verification_mode(value: object | None, *, source: str) -> RequirementVerificationMode:
+    if value is None or not str(value).strip():
+        return RequirementVerificationMode.DYNAMIC
+    normalized = str(value).strip().upper()
+    try:
+        return RequirementVerificationMode(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            f"Requirement verification_mode must be DYNAMIC or STATIC at {source}; received {value!r}"
+        ) from exc
 
 
 def _requirements_from_lines(path: Path, text: str, source_sha: str) -> list[PLCRequirement]:
@@ -65,7 +77,16 @@ def _requirements_from_lines(path: Path, text: str, source_sha: str) -> list[PLC
             if key in seen:
                 continue
             seen.add(key)
-            result.append(PLCRequirement(req_id, chunk, str(path), locator, source_sha))
+            result.append(
+                PLCRequirement(
+                    req_id,
+                    chunk,
+                    str(path),
+                    locator,
+                    source_sha,
+                    RequirementVerificationMode.DYNAMIC,
+                )
+            )
     return result
 
 
@@ -78,8 +99,21 @@ def _requirements_from_csv(path: Path, text: str, source_sha: str) -> list[PLCRe
         if not body:
             continue
         explicit = next((lowered[key] for key in ("id", "requirement_id", "req_id") if lowered.get(key)), None)
+        raw_mode = next(
+            (lowered[key] for key in ("verification_mode", "verification", "mode") if lowered.get(key)),
+            None,
+        )
         locator = f"row {row_no}"
-        result.append(PLCRequirement(_stable_id(source_sha, locator, body, explicit), _normalize_text(body), str(path), locator, source_sha))
+        result.append(
+            PLCRequirement(
+                _stable_id(source_sha, locator, body, explicit),
+                _normalize_text(body),
+                str(path),
+                locator,
+                source_sha,
+                _verification_mode(raw_mode, source=f"{path}:{locator}"),
+            )
+        )
     return result
 
 
@@ -92,18 +126,29 @@ def _requirements_from_json(path: Path, text: str, source_sha: str) -> list[PLCR
     result: list[PLCRequirement] = []
     for index, item in enumerate(loaded, start=1):
         explicit = None
+        raw_mode: object | None = None
         if isinstance(item, str):
             body = item
         elif isinstance(item, dict):
             body = str(item.get("text") or item.get("requirement") or item.get("description") or "")
             explicit = str(item.get("id") or item.get("requirement_id") or "") or None
+            raw_mode = item.get("verification_mode", item.get("mode"))
         else:
             continue
         body = _normalize_text(body)
         if not body:
             continue
         locator = f"item {index}"
-        result.append(PLCRequirement(_stable_id(source_sha, locator, body, explicit), body, str(path), locator, source_sha))
+        result.append(
+            PLCRequirement(
+                _stable_id(source_sha, locator, body, explicit),
+                body,
+                str(path),
+                locator,
+                source_sha,
+                _verification_mode(raw_mode, source=f"{path}:{locator}"),
+            )
+        )
     return result
 
 
@@ -172,7 +217,14 @@ def ingest_requirements(paths: list[Path] | tuple[Path, ...]) -> list[PLCRequire
             req_id = item.id
             if req_id in ids:
                 digest = hashlib.sha1(f"{item.source_sha256}:{item.source_locator}:{item.text}".encode()).hexdigest()[:6].upper()
-                item = PLCRequirement(f"{req_id}-{digest}", item.text, item.source_path, item.source_locator, item.source_sha256)
+                item = PLCRequirement(
+                    f"{req_id}-{digest}",
+                    item.text,
+                    item.source_path,
+                    item.source_locator,
+                    item.source_sha256,
+                    item.verification_mode,
+                )
             ids.add(item.id)
             result.append(item)
             if len(result) > _MAX_REQUIREMENTS:
