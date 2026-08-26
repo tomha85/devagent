@@ -22,6 +22,11 @@ class RequirementStatus(str, Enum):
     CONFLICT = "CONFLICT"
 
 
+class RequirementVerificationMode(str, Enum):
+    DYNAMIC = "DYNAMIC"
+    STATIC = "STATIC"
+
+
 class Severity(str, Enum):
     INFO = "INFO"
     LOW = "LOW"
@@ -61,6 +66,7 @@ class PLCRequirement:
     source_path: str
     source_locator: str
     source_sha256: str
+    verification_mode: RequirementVerificationMode = RequirementVerificationMode.DYNAMIC
 
 
 @dataclass(frozen=True)
@@ -188,3 +194,8 @@ class PLCProductionResult:
     warnings: list[str] = field(default_factory=list)
     ai_provider: str | None = None
     ai_model: str | None = None
+    execution_backend_registry: dict[str, Any] | None = None
+    execution_backend_registry_sha256: str | None = None
+    execution_backend_id: str | None = None
+    baseline_sha256: str | None = None
+    verification_context_sha256: str | None = None
