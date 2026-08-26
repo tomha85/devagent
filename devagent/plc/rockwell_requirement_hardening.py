@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from devagent.plc import production_verification as _verification
+from devagent.plc import rockwell_compare as _compare
 from devagent.plc.models import PLCSemanticState
 from devagent.plc.production_models import RequirementStatus, RequirementVerification
 from devagent.plc.production_utils import explicit_bool
@@ -39,38 +40,58 @@ def _unsafe(result: RequirementVerification, summary: str, evidence_ids=()) -> R
     )
 
 
-def _proof_output(requirement, engineering, result: RequirementVerification):
-    explicit = [
-        tag
-        for tag in result.matched_tags
-        if explicit_bool(requirement.text, tag) is not None
-    ]
-    if len(explicit) != 1:
-        return None, None
-    output = explicit[0]
-    logic = [
-        item
-        for item in engineering.project.output_logic
-        if item.output_tag.casefold() == output.casefold()
-        and item.semantic_state is PLCSemanticState.FULL
-        and not item.origin.startswith("AOI_INTERNAL:")
-    ]
-    if len(logic) != 1:
-        return output, None
-    return output, logic[0]
+def _proof_target(requirement, engineering, result: RequirementVerification):
+    """Resolve the exact output/program already selected by the base theorem.
+
+    Boolean proofs cite one FULL PLCOutputLogic object. Typed compare proofs cite
+    the compare rung. We deliberately derive the target from that evidence rather
+    than counting every explicit Boolean assignment in the requirement, because
+    antecedent inputs such as Start=TRUE and Guard=TRUE are not outputs.
+    """
+
+    project = engineering.project
+    logic_by_id = {
+        logic.id: logic
+        for logic in project.output_logic
+        if logic.semantic_state is PLCSemanticState.FULL
+        and not logic.origin.startswith("AOI_INTERNAL:")
+    }
+    evidenced_logic = []
+    for evidence_id in result.evidence_ids:
+        logic = logic_by_id.get(evidence_id)
+        if logic is not None and logic not in evidenced_logic:
+            evidenced_logic.append(logic)
+    if len(evidenced_logic) == 1:
+        logic = evidenced_logic[0]
+        if explicit_bool(requirement.text, logic.output_tag) is not None:
+            return logic.output_tag, logic.source.program
+
+    compare_candidates = []
+    evidence_set = set(result.evidence_ids)
+    for model in _compare.compare_models(project):
+        if model.rung_id not in evidence_set:
+            continue
+        if explicit_bool(requirement.text, model.output_tag) is None:
+            continue
+        compare_candidates.append(model)
+    if len(compare_candidates) == 1:
+        model = compare_candidates[0]
+        return model.output_tag, model.program
+
+    return None, None
 
 
 def verify_requirement(requirement, engineering, evidence, tests):
-    """Apply canonical Rockwell writer trust to Boolean proof/conflict claims."""
+    """Apply canonical Rockwell writer trust to Boolean/typed proof claims."""
     result = _ORIGINAL_VERIFY_REQUIREMENT(requirement, engineering, evidence, tests)
     if result.status not in {RequirementStatus.STATICALLY_VERIFIED, RequirementStatus.CONFLICT}:
         return result
 
-    output, logic = _proof_output(requirement, engineering, result)
-    if output is None or logic is None:
+    output, theorem_program = _proof_target(requirement, engineering, result)
+    if output is None:
         return _unsafe(
             result,
-            "Rockwell proof could not be bound to exactly one FULL output-logic object after canonical writer validation; static proof is withheld.",
+            "Rockwell proof could not be bound to exactly one theorem-selected output after canonical writer validation; static proof is withheld.",
         )
 
     qualified_program = _qualified_program(requirement.text, output)
@@ -81,7 +102,7 @@ def verify_requirement(requirement, engineering, evidence, tests):
             f"Requirement output {output} is ambiguous across {len(physical_identities)} distinct Rockwell tag scopes; qualify the program/controller identity before static proof.",
         )
 
-    program = qualified_program or logic.source.program
+    program = qualified_program or theorem_program
     identity = canonical_tag_identity(engineering.project, output, program)
     if not identity_is_resolved(identity):
         return _unsafe(
