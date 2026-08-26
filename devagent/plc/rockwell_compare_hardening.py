@@ -28,6 +28,15 @@ _IF_THEN = re.compile(
     r"^\s*(?:IF|WHEN|WHENEVER)\b(?P<antecedent>.+?)\bTHEN\b(?P<consequent>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+_PROGRAM_QUALIFIED = re.compile(r"^Program:([^\.]+)\.(.+)$", re.IGNORECASE)
+_BOOL_WORDS = {
+    "true": True,
+    "on": True,
+    "active": True,
+    "false": False,
+    "off": False,
+    "inactive": False,
+}
 
 
 def _representable(data_type: str, value: int | float) -> bool:
@@ -71,18 +80,57 @@ def _same_source(statement, model) -> bool:
     )
 
 
+def _canonical_tag_identity(project, ref: str, default_program: str | None) -> tuple[str, str]:
+    """Resolve one Rockwell reference to a scope-aware case-folded identity."""
+    value = ref.strip()
+    qualified = _PROGRAM_QUALIFIED.match(value)
+    if qualified is not None:
+        program, remainder = qualified.groups()
+        return f"program:{program.casefold()}", remainder.casefold()
+
+    top = re.split(r"[.\[]", value, maxsplit=1)[0]
+    suffix = value[len(top) :].casefold()
+    top_folded = top.casefold()
+    if default_program:
+        wanted_scope = f"program:{default_program}".casefold()
+        matches = [
+            tag for tag in project.tags
+            if tag.name.casefold() == top_folded and tag.scope.casefold() == wanted_scope
+        ]
+        if len(matches) == 1:
+            return wanted_scope, matches[0].name.casefold() + suffix
+    controller = [
+        tag for tag in project.tags
+        if tag.name.casefold() == top_folded and tag.scope.casefold() == "controller"
+    ]
+    if len(controller) == 1:
+        return "controller", controller[0].name.casefold() + suffix
+    # Unknown normalized references are kept program-scoped so equal spellings
+    # in the same executable program still collide conservatively.
+    fallback_scope = f"program:{default_program}".casefold() if default_program else "unresolved"
+    return fallback_scope, value.casefold()
+
+
 def _has_other_writer(project, model) -> bool:
+    target = _canonical_tag_identity(project, model.output_tag, model.program)
     for rung in project.rungs:
-        if rung.id != model.rung_id and model.output_tag in rung.writes:
+        if rung.id == model.rung_id:
+            continue
+        if any(_canonical_tag_identity(project, write, rung.program) == target for write in rung.writes):
             return True
     for statement in project.logic_statements:
-        if model.output_tag not in statement.writes:
-            continue
         # V2 can expose an RLL statement mirroring the same source rung. That is
         # evidence for the same writer, not an independent writer.
         if statement.language == "RLL" and _same_source(statement, model):
             continue
-        return True
+        statement_program = statement.source.program or (
+            statement.owner_name if statement.owner_type == "program" else None
+        )
+        if any(
+            _canonical_tag_identity(project, write, statement_program) == target
+            for write in statement.writes
+        ):
+            return True
     return False
 
 
@@ -175,6 +223,27 @@ def _parse_numeric_condition(segment: str, tag: str):
     return None if threshold is None else (operator, threshold)
 
 
+def _explicit_bool_assertions(segment: str, tag: str) -> list[bool]:
+    escaped = re.escape(tag)
+    patterns = [
+        re.compile(
+            rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])\s*(?:=|==|is|shall\s+be|must\s+be)\s*"
+            rf"(TRUE|FALSE|ON|OFF|ACTIVE|INACTIVE)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"\b(TRUE|FALSE|ON|OFF|ACTIVE|INACTIVE)\s*(?:=|==|for)\s*"
+            rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])",
+            re.IGNORECASE,
+        ),
+    ]
+    matches: list[tuple[int, bool]] = []
+    for pattern in patterns:
+        for match in pattern.finditer(segment):
+            matches.append((match.start(), _BOOL_WORDS[match.group(1).casefold()]))
+    return [value for _, value in sorted(matches)]
+
+
 def _unsafe_requirement(requirement, model, reason: str) -> RequirementVerification:
     return RequirementVerification(
         requirement.id,
@@ -222,12 +291,12 @@ def verify_typed_compare_requirement(requirement, engineering, evidence, tests):
             )
 
         condition = _parse_numeric_condition(antecedent, model.input_tag)
-        expected = _base.explicit_bool(consequent, model.output_tag)
-        if condition is None or expected is None:
+        output_assertions = _explicit_bool_assertions(consequent, model.output_tag)
+        if condition is None or len(output_assertions) != 1:
             return _unsafe_requirement(
                 requirement,
                 model,
-                "Typed requirement does not contain exactly one supported numeric antecedent and one explicit output-state consequent.",
+                "Typed requirement does not contain exactly one unambiguous output-state assertion in the consequent and one supported numeric antecedent.",
             )
         if _parse_numeric_condition(consequent, model.input_tag) is not None:
             return _unsafe_requirement(
