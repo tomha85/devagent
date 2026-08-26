@@ -206,6 +206,7 @@ class PLCProductionResult:
     execution_backend_registry_sha256: str | None = None
     execution_backend_id: str | None = None
     execution_backend_kind: str | None = None
+    execution_results_sha256: str | None = None
     baseline_sha256: str | None = None
     release_policy: dict[str, Any] | None = None
     release_policy_sha256: str | None = None
