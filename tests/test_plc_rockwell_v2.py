@@ -137,3 +137,105 @@ def test_v2_recognizes_motion_instructions_without_overclaiming_direction(tmp_pa
     assert result.project.partially_modeled_instruction_names == ["MAJ"]
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
     assert any("directionally PARTIAL" in item for item in result.limitations)
+
+
+def test_v2_elsif_branch_remains_partial_until_full_boolean_ast_exists(tmp_path: Path) -> None:
+    body = '''<Routine Name="Sequence" Type="ST"><STContent>
+      <Line Number="0"><![CDATA[IF A THEN]]></Line>
+      <Line Number="1"><![CDATA[X := B;]]></Line>
+      <Line Number="2"><![CDATA[ELSIF C THEN]]></Line>
+      <Line Number="3"><![CDATA[X := D;]]></Line>
+      <Line Number="4"><![CDATA[END_IF;]]></Line>
+    </STContent></Routine>'''
+    tags = ''.join(f'<Tag Name="{name}" TagType="Base" DataType="BOOL" />' for name in ("A", "B", "C", "D", "X"))
+    result = analyze_rockwell_l5x(_write(tmp_path, body, tags=tags))
+
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    elsif = next(s for s in result.project.logic_statements if s.text.startswith("ELSIF"))
+    branch_write = next(s for s in result.project.logic_statements if "X := D" in s.text)
+    assert elsif.semantic_state is PLCSemanticState.PARTIAL
+    assert branch_write.semantic_state is PLCSemanticState.PARTIAL
+    assert {"C", "D"} <= set(branch_write.reads)
+
+
+def test_v2_st_literals_do_not_become_fake_tag_dependencies(tmp_path: Path) -> None:
+    body = '''<Routine Name="Sequence" Type="ST"><STContent>
+      <Line Number="0"><![CDATA[Message := 'Motor Ready';]]></Line>
+      <Line Number="1"><![CDATA[Delay := T#5s;]]></Line>
+    </STContent></Routine>'''
+    tags = '<Tag Name="Message" TagType="Base" DataType="STRING" /><Tag Name="Delay" TagType="Base" DataType="TIME" />'
+    result = analyze_rockwell_l5x(_write(tmp_path, body, tags=tags))
+
+    assert result.outcome is PLCOutcome.STATICALLY_VERIFIED
+    message = next(s for s in result.project.logic_statements if s.text.startswith("Message"))
+    delay = next(s for s in result.project.logic_statements if s.text.startswith("Delay"))
+    assert message.reads == ()
+    assert delay.reads == ()
+
+
+def test_v2_packed_st_assignments_and_variable_indexes_fail_closed(tmp_path: Path) -> None:
+    body = '''<Routine Name="Sequence" Type="ST"><STContent>
+      <Line Number="0"><![CDATA[A := B; C := D;]]></Line>
+      <Line Number="1"><![CDATA[Output := Inputs[Index];]]></Line>
+    </STContent></Routine>'''
+    tags = ''.join(f'<Tag Name="{name}" TagType="Base" DataType="DINT" />' for name in ("A", "B", "C", "D", "Output", "Inputs", "Index"))
+    result = analyze_rockwell_l5x(_write(tmp_path, body, tags=tags))
+
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    assert all(s.semantic_state is PLCSemanticState.PARTIAL for s in result.project.logic_statements)
+    indexed = next(s for s in result.project.logic_statements if s.text.startswith("Output"))
+    assert "Index" in indexed.reads
+
+
+def test_v2_nested_aoi_call_is_reference_only_until_local_binding_is_proven(tmp_path: Path) -> None:
+    aoi = '''<AddOnInstructionDefinitions>
+      <AddOnInstructionDefinition Name="Inner">
+        <Parameters><Parameter Name="In" Usage="Input" DataType="BOOL" Required="true" />
+        <Parameter Name="Out" Usage="Output" DataType="BOOL" Required="true" /></Parameters>
+        <Routines><Routine Name="Logic" Type="RLL"><RLLContent>
+          <Rung Number="0"><Text><![CDATA[XIC(In)OTE(Out);]]></Text></Rung>
+        </RLLContent></Routine></Routines>
+      </AddOnInstructionDefinition>
+      <AddOnInstructionDefinition Name="Outer">
+        <Parameters><Parameter Name="In" Usage="Input" DataType="BOOL" Required="true" />
+        <Parameter Name="Out" Usage="Output" DataType="BOOL" Required="true" /></Parameters>
+        <Routines><Routine Name="Logic" Type="RLL"><RLLContent>
+          <Rung Number="0"><Text><![CDATA[Inner(InnerInst,In,Out);]]></Text></Rung>
+        </RLLContent></Routine></Routines>
+      </AddOnInstructionDefinition>
+    </AddOnInstructionDefinitions>'''
+    body = '<Routine Name="Main" Type="RLL"><RLLContent><Rung Number="0"><Text><![CDATA[XIC(Start)OTE(Run);]]></Text></Rung></RLLContent></Routine>'
+    tags = '<Tag Name="Start" TagType="Base" DataType="BOOL" /><Tag Name="Run" TagType="Base" DataType="BOOL" />'
+    result = analyze_rockwell_l5x(_write(tmp_path, body, tags=tags, aoi=aoi))
+
+    modeled = {item.name: item.internal_body_modeled for item in result.project.aois}
+    assert modeled["Inner"] is True
+    assert modeled["Outer"] is False
+    outer_statement = next(s for s in result.project.logic_statements if s.owner_name == "Outer")
+    assert outer_statement.semantic_state is PLCSemanticState.PARTIAL
+    assert outer_statement.reads == ()
+    assert outer_statement.writes == ()
+    assert "Inner" in outer_statement.calls
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+
+
+def test_v2_refuses_mixed_provenance_if_source_changes_between_passes(tmp_path: Path) -> None:
+    from devagent.plc.rockwell_l5x import parse_full_project_l5x
+    from devagent.plc.v2_guardrails import verify_v2_source_unchanged
+
+    body = '<Routine Name="Main" Type="RLL"><RLLContent><Rung Number="0"><Text><![CDATA[XIC(A)OTE(O);]]></Text></Rung></RLLContent></Routine>'
+    tags = '<Tag Name="A" TagType="Base" DataType="BOOL" /><Tag Name="O" TagType="Base" DataType="BOOL" />'
+    path = _write(tmp_path, body, tags=tags)
+    project = parse_full_project_l5x(path)
+    path.write_text(path.read_text(encoding="utf-8").replace("XIC(A)", "XIO(A)"), encoding="utf-8")
+
+    import pytest
+    with pytest.raises(ValueError, match="source changed during analysis"):
+        verify_v2_source_unchanged(project)
+
+
+def test_v2_public_analysis_import_is_guarded() -> None:
+    from devagent.plc.analysis import analyze_rockwell_l5x as public_analysis
+    from devagent.plc.safe_analysis import analyze_rockwell_l5x as guarded_analysis
+
+    assert public_analysis is guarded_analysis
