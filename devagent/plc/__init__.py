@@ -12,6 +12,14 @@ _install_rockwell_compare_hardening()
 _install_rockwell_alias_hardening()
 _install_rockwell_entrypoint_hardening()
 
+from devagent.plc.rockwell_compare_reachability_hardening import (
+    install as _install_rockwell_compare_reachability_hardening,
+)
+
+# The typed-compare theorem/FAT path is independent from boolean output-logic
+# normalization, so explicitly bind it to the same executable routine closure.
+_install_rockwell_compare_reachability_hardening()
+
 from devagent.plc.rockwell_requirement_hardening import install as _install_rockwell_requirement_hardening
 from devagent.plc.rockwell_risk_hardening import install as _install_rockwell_risk_hardening
 from devagent.plc.rockwell_closeout_gate_hardening import install as _install_rockwell_closeout_gate_hardening
