@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 from dataclasses import replace
 
@@ -12,14 +13,14 @@ from devagent.plc.models import (
     PLCEngineeringResult,
     PLCOutcome,
     PLCRung,
+    PLCSemanticState,
     StaticCheck,
     StaticCheckStatus,
 )
 from devagent.plc.rockwell_l5x import parse_full_project_l5x
+from devagent.plc.v2_semantics import apply_v2_semantics
 
 
-_SIMPLE_FAT_INSTRUCTIONS = {"XIC", "XIO", "OTE", "OTL", "OTU"}
-_OUTPUT_INSTRUCTIONS = {"OTE", "OTL", "OTU"}
 _UNKNOWN_WARNING_PREFIX = "Instruction semantics not modeled for: "
 _NORMALIZED_VENDOR_INSTRUCTIONS = {"GSV", "SSV", "MOVE"}
 _TIMER_COUNTER_INSTRUCTIONS = {"TON", "TOF", "RTO", "CTU", "CTD"}
@@ -30,13 +31,6 @@ _SUBSCRIPT = re.compile(r"\[([^\]]+)\]")
 
 
 def _has_neutral_text_branch(text: str) -> bool:
-    """Detect Rockwell neutral-text branch brackets outside instruction operands.
-
-    Array subscripts such as ``Inputs[0]`` occur inside instruction parentheses and
-    are not branch syntax. V1 still withholds per-output dependencies for true
-    branch groups until branch-path semantics are represented explicitly.
-    """
-
     paren_depth = 0
     quote: str | None = None
     for char in text:
@@ -104,14 +98,6 @@ def _rung_has_variable_array_subscript(rung: PLCRung) -> bool:
 
 
 def _expand_expression_refs(values: set[str]) -> set[str]:
-    """Repair parser tokens that joined subtraction expressions with a hyphen.
-
-    Logix tag identifiers do not use ``-`` as an identifier character; in compact
-    expressions such as ``Source-Offset`` it is an arithmetic operator. The initial
-    parser kept the original token for provenance, and this analysis pass expands it
-    into the individual source references before graph construction.
-    """
-
     expanded: set[str] = set()
     for value in values:
         if "-" in value:
@@ -124,8 +110,6 @@ def _expand_expression_refs(values: set[str]) -> set[str]:
 
 
 def _populate_structured_unknown_instruction_names(project: CanonicalPLCProject) -> None:
-    """Keep canonical machine output aligned with the parser's coverage warning."""
-
     if project.unknown_instruction_names:
         return
     names: set[str] = set()
@@ -138,16 +122,7 @@ def _populate_structured_unknown_instruction_names(project: CanonicalPLCProject)
 
 
 def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
-    """Normalize bounded vendor semantics before graph/test generation.
-
-    Rockwell v36 renamed MOV to MOVE. GSV writes its destination operand and SSV
-    reads its source operand. OSR/OSF have a storage bit plus a distinct output bit.
-    Timer/counter neutral text can carry tag-based preset/accumulator operands, which
-    are also represented explicitly here. AOI bodies are not normalized in V1, so
-    AOI call operands are retained as references while directional reads/writes are
-    withheld rather than inferred from an incomplete interface model.
-    """
-
+    """Preserve the V1 operand hardening before V2 structural reasoning."""
     unknown_upper = {name.upper() for name in project.unknown_instruction_names}
     newly_supported_occurrences = 0
     normalized_rungs: list[PLCRung] = []
@@ -163,7 +138,6 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
         for instruction in rung.instructions:
             name = instruction.name.upper()
             args = instruction.arguments
-
             for argument in args:
                 for index_ref in _variable_subscript_refs(argument):
                     reads.add(index_ref)
@@ -188,8 +162,8 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
                 if accumulator:
                     writes.add(accumulator)
             elif name == "MOVE":
-                for ref in _operand_refs(args[0]) if args else ():
-                    reads.add(ref)
+                if args:
+                    reads.update(_operand_refs(args[0]))
                 destination = _first_operand_ref(args, 1)
                 if destination:
                     writes.add(destination)
@@ -218,9 +192,6 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
                     aoi_operand_refs.update(_operand_refs(value))
 
         if aoi_operand_refs:
-            # The parser's original AOI parameter zip cannot safely distinguish the
-            # backing instance operand and implicit/system parameters. Until AOI
-            # interfaces/bodies are normalized, preserve operands only as references.
             reads.difference_update(aoi_operand_refs)
             writes.difference_update(aoi_operand_refs)
             references.update(aoi_operand_refs)
@@ -250,52 +221,16 @@ def _normalize_vendor_instruction_aliases(project: CanonicalPLCProject) -> None:
         if name.upper() not in _NORMALIZED_VENDOR_INSTRUCTIONS
     )
     project.unknown_instruction_names = remaining_unknown
-
-    retained_warnings = [
-        warning
-        for warning in project.warnings
-        if not warning.startswith(_UNKNOWN_WARNING_PREFIX)
-    ]
+    retained = [warning for warning in project.warnings if not warning.startswith(_UNKNOWN_WARNING_PREFIX)]
     if remaining_unknown:
-        retained_warnings.append(
-            f"{_UNKNOWN_WARNING_PREFIX}{', '.join(remaining_unknown)}"
-        )
-    project.warnings = retained_warnings
+        retained.append(f"{_UNKNOWN_WARNING_PREFIX}{', '.join(remaining_unknown)}")
+    project.warnings = retained
 
 
-def _simple_boolean_output(rung: PLCRung) -> tuple[str, str] | None:
-    """Return the single terminal output instruction for a proven-simple rung.
-
-    DEPENDS_ON is intentionally stronger than READS/WRITES. V1 only derives it for
-    a straight-line boolean rung made of XIC/XIO contacts followed by exactly one
-    terminal OTE/OTL/OTU. Complex instruction sequencing, branches, and indirect
-    addressing keep their source facts but do not receive speculative dependencies.
-    """
-
-    if (
-        _has_neutral_text_branch(rung.text)
-        or _rung_has_variable_array_subscript(rung)
-        or not rung.instructions
-    ):
-        return None
-    names = [instruction.name.upper() for instruction in rung.instructions]
-    if not set(names).issubset(_SIMPLE_FAT_INSTRUCTIONS):
-        return None
-    output_indexes = [
-        index for index, name in enumerate(names) if name in _OUTPUT_INSTRUCTIONS
-    ]
-    if len(output_indexes) != 1:
-        return None
-    output_index = output_indexes[0]
-    if output_index != len(rung.instructions) - 1:
-        return None
-    if any(name not in {"XIC", "XIO"} for name in names[:output_index]):
-        return None
-    instruction = rung.instructions[output_index]
-    output = _first_operand_ref(instruction.arguments)
-    if output is None:
-        return None
-    return instruction.name.upper(), output
+def _scoped_ref(owner_type: str, owner_name: str, value: str) -> str:
+    if owner_type == "aoi":
+        return f"AOI:{owner_name}::{value}"
+    return value
 
 
 def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
@@ -308,12 +243,7 @@ def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
             return
         seen.add(key)
         edges.append(
-            PLCDependencyEdge(
-                source=source,
-                target=target,
-                kind=kind,
-                evidence_id=evidence_id,
-            )
+            PLCDependencyEdge(source=source, target=target, kind=kind, evidence_id=evidence_id)
         )
 
     for rung in project.rungs:
@@ -327,12 +257,32 @@ def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
             if reference not in rung.reads and reference not in rung.writes:
                 add(rung.id, reference, "REFERENCES", rung.id)
 
-        simple_output = _simple_boolean_output(rung)
-        if simple_output is None:
+    for statement in project.logic_statements:
+        for tag in statement.reads:
+            add(statement.id, _scoped_ref(statement.owner_type, statement.owner_name, tag), "READS", statement.id)
+        for tag in statement.writes:
+            add(statement.id, _scoped_ref(statement.owner_type, statement.owner_name, tag), "WRITES", statement.id)
+        for call in statement.calls:
+            add(statement.id, call, "CALLS", statement.id)
+        if statement.semantic_state is PLCSemanticState.FULL:
+            for output in statement.writes:
+                for dependency in statement.reads:
+                    add(
+                        _scoped_ref(statement.owner_type, statement.owner_name, output),
+                        _scoped_ref(statement.owner_type, statement.owner_name, dependency),
+                        "DEPENDS_ON",
+                        statement.id,
+                    )
+
+    for logic in project.output_logic:
+        if logic.semantic_state is not PLCSemanticState.FULL:
             continue
-        _, output = simple_output
-        for dependency in rung.reads:
-            add(output, dependency, "DEPENDS_ON", rung.id)
+        owner_type = "aoi" if logic.source.aoi and logic.origin.startswith("AOI_INTERNAL:") else "program"
+        owner_name = logic.source.aoi or logic.source.program or "controller"
+        output = _scoped_ref(owner_type, owner_name, logic.output_tag)
+        for path in logic.paths:
+            for term in path.terms:
+                add(output, _scoped_ref(owner_type, owner_name, term.tag), "DEPENDS_ON", logic.id)
 
     return PLCDependencyGraph(
         edges=edges,
@@ -340,69 +290,145 @@ def build_dependency_graph(project: CanonicalPLCProject) -> PLCDependencyGraph:
     )
 
 
-def generate_fat_tests(project: CanonicalPLCProject) -> list[FATTestCase]:
-    """Generate conservative test candidates only for proven-simple boolean RLL."""
+def _expected_true(instruction: str, output: str) -> str:
+    if instruction == "OTE":
+        return f"{output}=TRUE while the evaluated logic path is TRUE"
+    if instruction == "OTL":
+        return f"{output}=TRUE (latched) after the evaluated logic path becomes TRUE"
+    return f"{output}=FALSE (unlatched) after the evaluated logic path becomes TRUE"
 
-    tests: list[FATTestCase] = []
-    for rung in project.rungs:
-        simple_output = _simple_boolean_output(rung)
-        if simple_output is None:
-            continue
-        output_instruction, output = simple_output
 
-        preconditions: dict[str, bool] = {}
-        contradictory = False
-        for instruction in rung.instructions[:-1]:
-            name = instruction.name.upper()
-            tag = _first_operand_ref(instruction.arguments)
-            if tag is None:
-                continue
-            required = name == "XIC"
-            if tag in preconditions and preconditions[tag] != required:
-                contradictory = True
-                break
-            preconditions[tag] = required
-        if contradictory or not preconditions:
-            continue
+def _path_preconditions(path) -> dict[str, bool]:
+    return {term.tag: term.required for term in path.terms}
 
-        if output_instruction == "OTE":
-            expected = f"{output}=TRUE while the evaluated rung-in condition is TRUE"
-        elif output_instruction == "OTL":
-            expected = (
-                f"{output}=TRUE (latched) after the evaluated rung-in condition becomes TRUE"
-            )
-        else:
-            expected = (
-                f"{output}=FALSE (unlatched) after the evaluated rung-in condition becomes TRUE"
-            )
-        digest = hashlib.sha1(
-            f"{rung.id}:{output_instruction}:{output}".encode("utf-8")
-        ).hexdigest()[:10]
-        tests.append(
-            FATTestCase(
-                id=f"FAT-RLL-{digest}",
-                title=(
-                    f"Exercise {output} logic at "
-                    f"{rung.program}/{rung.routine} rung {rung.number}"
-                ),
-                source=rung.source,
-                output_tag=output,
-                preconditions=dict(sorted(preconditions.items())),
-                expected=expected,
-                limitations=(
-                    "Generated from static RLL structure; no PLC scan was executed.",
-                    "Other writers, task ordering, I/O behavior, and retentive state are not simulated in V1.",
-                ),
-            )
+
+def _negative_assignment(paths) -> dict[str, bool] | None:
+    variables = sorted({term.tag for path in paths for term in path.terms})
+    if not variables or len(variables) > 8:
+        return None
+    for values in itertools.product((False, True), repeat=len(variables)):
+        assignment = dict(zip(variables, values))
+        result = any(
+            all(assignment.get(term.tag) == term.required for term in path.terms)
+            for path in paths
         )
+        if not result:
+            return assignment
+    return None
+
+
+def generate_fat_tests(project: CanonicalPLCProject) -> list[FATTestCase]:
+    tests: list[FATTestCase] = []
+    for logic in project.output_logic:
+        if logic.semantic_state is not PLCSemanticState.FULL:
+            continue
+        if logic.origin.startswith("AOI_INTERNAL:"):
+            continue
+        for index, path in enumerate(logic.paths, start=1):
+            preconditions = _path_preconditions(path)
+            if not preconditions:
+                continue
+            digest = hashlib.sha1(f"{logic.id}:positive:{index}".encode("utf-8")).hexdigest()[:10]
+            suffix = f" path {index}" if len(logic.paths) > 1 else ""
+            tests.append(
+                FATTestCase(
+                    id=f"FAT-RLL-{digest}",
+                    title=f"Exercise {logic.output_tag}{suffix} at {logic.source.locator}",
+                    source=logic.source,
+                    output_tag=logic.output_tag,
+                    preconditions=dict(sorted(preconditions.items())),
+                    expected=_expected_true(logic.instruction, logic.output_tag),
+                    limitations=(
+                        "Generated from deterministic static boolean-path semantics; no PLC scan was executed.",
+                        "Other writers, task ordering, I/O behavior, timing, and retentive state are not simulated in V2.",
+                    ),
+                    scenario="POSITIVE_PATH",
+                )
+            )
+
+        if logic.instruction != "OTE":
+            continue
+        if len(logic.paths) == 1:
+            base = _path_preconditions(logic.paths[0])
+            for tag in sorted(base):
+                blocked = dict(base)
+                blocked[tag] = not blocked[tag]
+                digest = hashlib.sha1(f"{logic.id}:negative:{tag}".encode("utf-8")).hexdigest()[:10]
+                tests.append(
+                    FATTestCase(
+                        id=f"FAT-RLL-{digest}",
+                        title=f"Block {logic.output_tag} by toggling {tag} at {logic.source.locator}",
+                        source=logic.source,
+                        output_tag=logic.output_tag,
+                        preconditions=dict(sorted(blocked.items())),
+                        expected=f"{logic.output_tag}=FALSE while the complete rung-in condition is FALSE",
+                        limitations=(
+                            "Generated from deterministic static boolean-path semantics; no PLC scan was executed.",
+                            "Other writers, task ordering, I/O behavior, timing, and retentive state are not simulated in V2.",
+                        ),
+                        scenario="NEGATIVE_BLOCK",
+                    )
+                )
+        else:
+            blocked = _negative_assignment(logic.paths)
+            if blocked:
+                digest = hashlib.sha1(f"{logic.id}:negative:branch".encode("utf-8")).hexdigest()[:10]
+                tests.append(
+                    FATTestCase(
+                        id=f"FAT-RLL-{digest}",
+                        title=f"Block all paths to {logic.output_tag} at {logic.source.locator}",
+                        source=logic.source,
+                        output_tag=logic.output_tag,
+                        preconditions=dict(sorted(blocked.items())),
+                        expected=f"{logic.output_tag}=FALSE while every modeled parallel path is FALSE",
+                        limitations=(
+                            "Generated from deterministic static branch semantics; no PLC scan was executed.",
+                            "Other writers, task ordering, I/O behavior, timing, and retentive state are not simulated in V2.",
+                        ),
+                        scenario="NEGATIVE_BRANCH",
+                    )
+                )
     return tests
 
 
-def static_verify(
-    project: CanonicalPLCProject,
-    graph: PLCDependencyGraph,
-    fat_tests: list[FATTestCase],
-) -> list[StaticCheck]:
+def _coverage_state(project: CanonicalPLCProject):
+    unsupported_types = sorted(
+        {
+            routine.routine_type
+            for routine in project.routines
+            if routine.routine_type not in {"RLL", "ST"}
+        }
+    )
+    protected_routines = sum(1 for routine in project.routines if routine.source_protected)
+    protected_aois = sum(1 for aoi in project.aois if aoi.source_protected)
+    unmodeled_aois = project.aoi_internal_total - project.aoi_internal_modeled_count
+    unresolved_aoi_calls = project.aoi_call_total - project.aoi_call_bound_count
+    unmodeled_branches = project.branch_rung_total - project.branch_rung_semantic_count
+    unmodeled_st = project.st_statement_total - project.st_statement_semantic_count
+    indirect = sum(1 for rung in project.rungs if _rung_has_variable_array_subscript(rung))
+    instruction_count = sum(len(rung.instructions) for rung in project.rungs)
+    no_logic = (
+        instruction_count == 0
+        and project.st_statement_total == 0
+        and not any(aoi.internal_body_modeled for aoi in project.aois)
+    )
+    return {
+        "unsupported_types": unsupported_types,
+        "protected_routines": protected_routines,
+        "protected_aois": protected_aois,
+        "unmodeled_aois": max(0, unmodeled_aois),
+        "unresolved_aoi_calls": max(0, unresolved_aoi_calls),
+        "unmodeled_branches": max(0, unmodeled_branches),
+        "unmodeled_st": max(0, unmodeled_st),
+        "indirect": indirect,
+        "no_logic": no_logic,
+        "incomplete_instruction": project.instruction_semantic_coverage < 1.0,
+        "partial_instructions": bool(project.partially_modeled_instruction_names),
+    }
+
+
+def static_verify(project: CanonicalPLCProject, graph: PLCDependencyGraph, fat_tests: list[FATTestCase]) -> list[StaticCheck]:
+    state = _coverage_state(project)
     checks: list[StaticCheck] = [
         StaticCheck(
             id="L5X_FULL_PROJECT",
@@ -412,123 +438,68 @@ def static_verify(
         )
     ]
 
-    if project.rungs and all(
-        rung.source.artifact
-        and rung.source.controller
-        and rung.source.program
-        and rung.source.routine
-        and rung.source.rung is not None
-        for rung in project.rungs
-    ):
-        checks.append(
-            StaticCheck(
-                id="SOURCE_PROVENANCE",
-                status=StaticCheckStatus.PASS,
-                summary=f"All {len(project.rungs)} parsed rungs retain source provenance.",
-            )
+    source_objects = [*project.rungs, *project.logic_statements]
+    provenance_ok = bool(source_objects) and all(
+        item.source.artifact and item.source.controller and item.source.routine
+        for item in source_objects
+    )
+    checks.append(
+        StaticCheck(
+            id="SOURCE_PROVENANCE",
+            status=StaticCheckStatus.PASS if provenance_ok else StaticCheckStatus.NOT_PROVEN,
+            summary=(
+                f"All {len(source_objects)} normalized logic object(s) retain source provenance."
+                if provenance_ok
+                else "No normalized executable logic, or one or more logic objects lack source provenance."
+            ),
         )
-    else:
-        checks.append(
-            StaticCheck(
-                id="SOURCE_PROVENANCE",
-                status=StaticCheckStatus.NOT_PROVEN,
-                summary=(
-                    "No parsed RLL logic is available for source-provenance verification."
-                    if not project.rungs
-                    else "One or more parsed logic objects are missing source provenance."
-                ),
-            )
-        )
-
-    unsupported_types = sorted(
-        {
-            routine.routine_type
-            for routine in project.routines
-            if routine.routine_type != "RLL"
-        }
     )
-    protected_routine_count = sum(
-        1 for routine in project.routines if routine.source_protected
-    )
-    protected_aoi_count = sum(1 for aoi in project.aois if aoi.source_protected)
-    unparsed_aoi_count = len(project.aois)
-    branch_rung_count = sum(
-        1 for rung in project.rungs if _has_neutral_text_branch(rung.text)
-    )
-    indirect_rung_count = sum(
-        1 for rung in project.rungs if _rung_has_variable_array_subscript(rung)
-    )
-    instruction_count = sum(len(rung.instructions) for rung in project.rungs)
-    no_parsed_logic = not project.rungs or instruction_count == 0
 
     coverage_evidence = (
-        f"semantic instructions={project.instruction_semantic_count}/{project.instruction_total}",
-        f"non-RLL types={','.join(unsupported_types) if unsupported_types else 'none'}",
-        f"protected routines={protected_routine_count}",
-        f"protected AOIs={protected_aoi_count}",
-        f"AOI internal bodies modeled=0/{unparsed_aoi_count}",
-        f"branched RLL rungs={branch_rung_count}",
-        f"indirect-addressed RLL rungs={indirect_rung_count}",
+        f"directional RLL instructions={project.instruction_semantic_count}/{project.instruction_total}",
+        f"ST statements modeled={project.st_statement_semantic_count}/{project.st_statement_total}",
+        f"branch rungs modeled={project.branch_rung_semantic_count}/{project.branch_rung_total}",
+        f"AOI internal bodies modeled={project.aoi_internal_modeled_count}/{project.aoi_internal_total}",
+        f"AOI call interfaces bound={project.aoi_call_bound_count}/{project.aoi_call_total}",
+        f"recognized-partial instructions={','.join(project.partially_modeled_instruction_names) if project.partially_modeled_instruction_names else 'none'}",
+        f"unmodeled instructions={','.join(project.unknown_instruction_names) if project.unknown_instruction_names else 'none'}",
+        f"indirect-addressed RLL rungs={state['indirect']}",
     )
-    if no_parsed_logic:
-        checks.append(
-            StaticCheck(
-                id="LOGIC_SEMANTIC_COVERAGE",
-                status=StaticCheckStatus.NOT_PROVEN,
-                summary=(
-                    "No executable RLL instructions were parsed; "
-                    "PLC logic semantic coverage cannot be proven."
-                ),
-                evidence=coverage_evidence,
-            )
+    incomplete = any(
+        state[key]
+        for key in (
+            "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
+            "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
+            "incomplete_instruction", "partial_instructions",
         )
-    elif (
-        unsupported_types
-        or protected_routine_count
-        or unparsed_aoi_count
-        or branch_rung_count
-        or indirect_rung_count
-        or project.instruction_semantic_coverage < 1.0
-    ):
-        checks.append(
-            StaticCheck(
-                id="LOGIC_SEMANTIC_COVERAGE",
-                status=StaticCheckStatus.WARN,
-                summary=(
-                    f"Deterministic instruction semantic coverage is "
-                    f"{project.instruction_semantic_coverage:.1%}; unmodeled, "
-                    "protected, AOI-body, branch-path, or indirect-addressing logic "
-                    "is not treated as fully proven."
-                ),
-                evidence=coverage_evidence,
-            )
+    )
+    checks.append(
+        StaticCheck(
+            id="LOGIC_SEMANTIC_COVERAGE",
+            status=(
+                StaticCheckStatus.NOT_PROVEN if state["no_logic"]
+                else StaticCheckStatus.WARN if incomplete
+                else StaticCheckStatus.PASS
+            ),
+            summary=(
+                "No executable logic was normalized; PLC logic semantic coverage cannot be proven."
+                if state["no_logic"]
+                else "V2 normalized the supported RLL/ST/AOI/branch semantics, but one or more logic regions remain partial or opaque."
+                if incomplete
+                else "All discovered supported RLL/ST/AOI/branch logic passed the V2 deterministic semantic model."
+            ),
+            evidence=coverage_evidence,
         )
-    else:
-        checks.append(
-            StaticCheck(
-                id="LOGIC_SEMANTIC_COVERAGE",
-                status=StaticCheckStatus.PASS,
-                summary=(
-                    "All parsed RLL instructions and supported dependency paths "
-                    "are covered by the V1 deterministic semantic model."
-                ),
-                evidence=coverage_evidence,
-            )
-        )
+    )
 
     checks.append(
         StaticCheck(
             id="BRANCH_DEPENDENCY_SEMANTICS",
-            status=(
-                StaticCheckStatus.WARN
-                if branch_rung_count
-                else StaticCheckStatus.PASS
-            ),
+            status=StaticCheckStatus.WARN if state["unmodeled_branches"] else StaticCheckStatus.PASS,
             summary=(
-                f"{branch_rung_count} branched RLL rung(s) retain rung-level "
-                "reads/writes, but per-output DEPENDS_ON edges and FAT candidates "
-                "are withheld to avoid false cross-branch dependencies."
-                if branch_rung_count
+                f"Modeled {project.branch_rung_semantic_count}/{project.branch_rung_total} branched RLL rung(s) with output-specific boolean paths; "
+                f"{state['unmodeled_branches']} remain withheld from derived dependencies/FAT."
+                if project.branch_rung_total
                 else "No Rockwell neutral-text branch syntax was detected in parsed RLL rungs."
             ),
         )
@@ -536,88 +507,81 @@ def static_verify(
 
     checks.append(
         StaticCheck(
-            id="INDIRECT_ADDRESSING_SEMANTICS",
+            id="STRUCTURED_TEXT_SEMANTICS",
+            status=StaticCheckStatus.WARN if state["unmodeled_st"] else StaticCheckStatus.PASS,
+            summary=(
+                f"Modeled {project.st_statement_semantic_count}/{project.st_statement_total} Structured Text statement(s) with source-traceable reads/writes/control dependencies."
+                if project.st_statement_total
+                else "No Structured Text statements require analysis."
+            ),
+        )
+    )
+
+    checks.append(
+        StaticCheck(
+            id="AOI_INTERNAL_LOGIC",
             status=(
-                StaticCheckStatus.WARN
-                if indirect_rung_count
+                StaticCheckStatus.NOT_PROVEN if state["unmodeled_aois"] or state["protected_aois"]
                 else StaticCheckStatus.PASS
             ),
             summary=(
-                f"{indirect_rung_count} RLL rung(s) use variable array subscripts; "
-                "index references are retained, but per-output DEPENDS_ON edges and "
-                "FAT candidates are withheld until an index value is fixed."
-                if indirect_rung_count
+                f"Normalized {project.aoi_internal_modeled_count}/{project.aoi_internal_total} Add-On Instruction internal bodies."
+                if project.aoi_internal_total
+                else "No Add-On Instruction definitions require internal-body analysis."
+            ),
+            evidence=tuple(aoi.name for aoi in project.aois),
+        )
+    )
+    checks.append(
+        StaticCheck(
+            id="AOI_CALL_BINDING",
+            status=StaticCheckStatus.WARN if state["unresolved_aoi_calls"] else StaticCheckStatus.PASS,
+            summary=(
+                f"Proved directional parameter binding for {project.aoi_call_bound_count}/{project.aoi_call_total} AOI invocation(s) using backing-tag type plus exported parameter order."
+                if project.aoi_call_total
+                else "No AOI invocations require call-interface binding."
+            ),
+        )
+    )
+
+    checks.append(
+        StaticCheck(
+            id="INDIRECT_ADDRESSING_SEMANTICS",
+            status=StaticCheckStatus.WARN if state["indirect"] else StaticCheckStatus.PASS,
+            summary=(
+                f"{state['indirect']} RLL rung(s) use variable array subscripts; index references are retained, but output-path derivation is withheld until an index value is fixed."
+                if state["indirect"]
                 else "No variable array subscripts were detected in parsed RLL rungs."
             ),
         )
     )
 
-    if unparsed_aoi_count:
-        checks.append(
-            StaticCheck(
-                id="AOI_INTERNAL_LOGIC",
-                status=StaticCheckStatus.NOT_PROVEN,
-                summary=(
-                    f"{unparsed_aoi_count} Add-On Instruction definition(s) were inventoried, "
-                    "but their internal routines are not normalized in PLC V1."
-                ),
-                evidence=tuple(aoi.name for aoi in project.aois),
-            )
-        )
-    else:
-        checks.append(
-            StaticCheck(
-                id="AOI_INTERNAL_LOGIC",
-                status=StaticCheckStatus.PASS,
-                summary="No Add-On Instruction definitions require internal-body analysis.",
-            )
-        )
-
     dependency_edges = [edge for edge in graph.edges if edge.kind == "DEPENDS_ON"]
     checks.append(
         StaticCheck(
             id="DEPENDENCY_GRAPH",
-            status=(
-                StaticCheckStatus.PASS
-                if project.rungs and dependency_edges
-                else StaticCheckStatus.WARN
-            ),
-            summary=(
-                f"Dependency graph contains {len(graph.edges)} edges, including "
-                f"{len(dependency_edges)} proven simple-boolean tag dependencies."
-            ),
+            status=StaticCheckStatus.PASS if dependency_edges else StaticCheckStatus.WARN,
+            summary=f"Dependency graph contains {len(graph.edges)} edges, including {len(dependency_edges)} deterministic DEPENDS_ON edges.",
         )
     )
 
-    rung_ids = {rung.id for rung in project.rungs}
-    traceable = all(
-        any(rung.id in rung_ids and rung.source == test.source for rung in project.rungs)
-        for test in fat_tests
-    )
+    traceable = bool(fat_tests) and all(test.source.artifact and test.source.routine for test in fat_tests)
     checks.append(
         StaticCheck(
             id="FAT_TEST_TRACEABILITY",
-            status=(
-                StaticCheckStatus.PASS
-                if fat_tests and traceable
-                else StaticCheckStatus.WARN
-            ),
+            status=StaticCheckStatus.PASS if traceable else StaticCheckStatus.WARN,
             summary=(
-                f"{len(fat_tests)} conservative FAT test candidate(s) are traceable to source rungs."
-                if fat_tests and traceable
-                else "No traceable proven-simple RLL FAT test candidates were generated."
+                f"{len(fat_tests)} deterministic static FAT candidate(s) are traceable to source logic."
+                if traceable
+                else "No source-traceable deterministic FAT candidates were generated."
             ),
         )
     )
-
     checks.append(
         StaticCheck(
             id="SIMULATOR_EXECUTION",
             status=StaticCheckStatus.NOT_PROVEN,
-            summary=(
-                "Simulator execution is not part of Rockwell PLC V1; "
-                "no dynamic machine behavior is claimed as verified."
-            ),
+            summary="Simulator execution is not part of PLC V2 static analysis; no dynamic machine behavior is claimed as verified.",
         )
     )
     return checks
@@ -627,68 +591,54 @@ def analyze_rockwell_l5x(path) -> PLCEngineeringResult:
     project = parse_full_project_l5x(path)
     _populate_structured_unknown_instruction_names(project)
     _normalize_vendor_instruction_aliases(project)
+    apply_v2_semantics(project)
     graph = build_dependency_graph(project)
     fat_tests = generate_fat_tests(project)
     checks = static_verify(project, graph, fat_tests)
+    state = _coverage_state(project)
 
-    unsupported_types = {
-        routine.routine_type
-        for routine in project.routines
-        if routine.routine_type != "RLL"
-    }
-    protected_routine_count = sum(
-        1 for routine in project.routines if routine.source_protected
-    )
-    protected_aoi_count = sum(1 for aoi in project.aois if aoi.source_protected)
-    unparsed_aoi_count = len(project.aois)
-    branch_rung_count = sum(
-        1 for rung in project.rungs if _has_neutral_text_branch(rung.text)
-    )
-    indirect_rung_count = sum(
-        1 for rung in project.rungs if _rung_has_variable_array_subscript(rung)
-    )
-    incomplete_semantics = project.instruction_semantic_coverage < 1.0
-    instruction_count = sum(len(rung.instructions) for rung in project.rungs)
-    no_parsed_logic = not project.rungs or instruction_count == 0
-
-    outcome = (
-        PLCOutcome.PARTIALLY_VERIFIED
-        if (
-            unsupported_types
-            or protected_routine_count
-            or unparsed_aoi_count
-            or branch_rung_count
-            or indirect_rung_count
-            or incomplete_semantics
-            or no_parsed_logic
+    incomplete = any(
+        state[key]
+        for key in (
+            "unsupported_types", "protected_routines", "protected_aois", "unmodeled_aois",
+            "unresolved_aoi_calls", "unmodeled_branches", "unmodeled_st", "indirect", "no_logic",
+            "incomplete_instruction", "partial_instructions",
         )
-        else PLCOutcome.STATICALLY_VERIFIED
     )
+    outcome = PLCOutcome.PARTIALLY_VERIFIED if incomplete else PLCOutcome.STATICALLY_VERIFIED
+
     limitations = [
-        "PLC V1 performs static analysis only; it does not execute Studio 5000, Logix Echo, or a real controller.",
+        "PLC V2 performs deterministic static analysis only; it does not execute Studio 5000, Logix Echo, or a real controller.",
         "FAT cases are engineering test candidates, not PASS results, until an execution backend observes expected behavior.",
         "The analyzer does not infer safety integrity level, required timing, or machine requirements that are absent from the project.",
         *project.warnings,
     ]
-    if no_parsed_logic:
+    if state["no_logic"]:
+        limitations.append("No executable supported logic was normalized; controller behavior remains NOT_PROVEN.")
+    if state["unmodeled_aois"]:
         limitations.append(
-            "No executable RLL instructions were parsed; controller logic verification remains NOT_PROVEN."
+            f"{state['unmodeled_aois']} Add-On Instruction definition(s) contain unsupported, protected, or partial internal logic; their behavior remains NOT_PROVEN."
         )
-    if unparsed_aoi_count:
+    if state["unresolved_aoi_calls"]:
         limitations.append(
-            f"{unparsed_aoi_count} Add-On Instruction definition(s) are inventoried, but their internal routines and directional call-interface semantics are not normalized in PLC V1; AOI behavior remains NOT_PROVEN."
+            f"{state['unresolved_aoi_calls']} AOI invocation(s) could not be directionally bound to an exported backing tag/interface and remain reference-only."
         )
-    if protected_aoi_count:
+    if state["unmodeled_branches"]:
         limitations.append(
-            f"{protected_aoi_count} Add-On Instruction definition(s) contain encoded/protected content."
+            f"{state['unmodeled_branches']} branched RLL rung(s) contain logic outside the bounded XIC/XIO/OTE/OTL/OTU boolean-path model; derived output dependencies/FAT are withheld for those rungs."
         )
-    if branch_rung_count:
+    if state["unmodeled_st"]:
         limitations.append(
-            f"{branch_rung_count} branched RLL rung(s) are retained as source facts, but V1 withholds per-output dependencies and FAT candidates until branch-path semantics are modeled."
+            f"{state['unmodeled_st']} Structured Text statement(s) contain control/call semantics outside the bounded V2 ST model and remain PARTIAL."
         )
-    if indirect_rung_count:
+    if state["indirect"]:
         limitations.append(
-            f"{indirect_rung_count} RLL rung(s) use variable array subscripts; index references are retained, but V1 withholds per-output dependencies and FAT candidates until an index value is fixed."
+            f"{state['indirect']} RLL rung(s) use variable array subscripts; index references are retained, but V2 withholds output-path FAT until an index value is fixed."
+        )
+    if project.partially_modeled_instruction_names:
+        limitations.append(
+            "Recognized Rockwell instructions remain directionally PARTIAL and do not contribute to fully proven instruction coverage: "
+            + ", ".join(project.partially_modeled_instruction_names)
         )
     return PLCEngineeringResult(
         outcome=outcome,

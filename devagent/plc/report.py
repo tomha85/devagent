@@ -15,7 +15,7 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
     routine_types = sorted({routine.routine_type for routine in project.routines})
 
     lines = [
-        "DEVAGENT ROCKWELL PLC FAT REPORT",
+        "DEVAGENT ROCKWELL PLC ENGINEERING VERIFICATION REPORT",
         "",
         "STATUS",
         result.outcome.value,
@@ -41,34 +41,41 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
         f"Tasks: {len(project.tasks)}",
         f"Controller/program tags: {len(project.tags)}",
         f"Programs: {len(project.programs)}",
-        f"Routines: {len(project.routines)}",
+        f"Program routines: {len(project.routines)}",
         f"Routine types: {', '.join(routine_types) if routine_types else 'none'}",
         f"Protected/encoded routines: {protected_routines}",
-        f"Parsed RLL rungs: {len(project.rungs)}",
-        f"Parsed RLL instructions: {project.instruction_total}",
+        f"Parsed program RLL rungs: {len(project.rungs)}",
+        f"Parsed program RLL instructions: {project.instruction_total}",
         f"Branched RLL rungs: {branched_rungs}",
+        f"Structured Text semantic statements: {project.st_statement_total}",
         f"Add-On Instructions: {len(project.aois)}",
-        f"AOI internal bodies normalized: 0/{len(project.aois)}",
+        f"AOI internal bodies normalized: {project.aoi_internal_modeled_count}/{project.aoi_internal_total}",
+        f"AOI calls directionally bound: {project.aoi_call_bound_count}/{project.aoi_call_total}",
         f"Protected/encoded AOIs: {protected_aois}",
         "",
-        "CANONICAL PLC IR",
-        "Canonical objects retain Rockwell controller/program/routine/rung provenance.",
-        f"Deterministic instruction semantic coverage: {project.instruction_semantic_coverage:.1%} "
+        "CANONICAL PLC IR — V2 COMPLETE LOGIC UNDERSTANDING",
+        "Canonical objects retain controller/program/routine/rung-or-line provenance.",
+        f"Directional RLL instruction semantic coverage: {project.instruction_semantic_coverage:.1%} "
         f"({project.instruction_semantic_count}/{project.instruction_total})",
+        f"RLL branch-path semantic coverage: {project.branch_semantic_coverage:.1%} "
+        f"({project.branch_rung_semantic_count}/{project.branch_rung_total})",
+        f"Structured Text semantic coverage: {project.st_semantic_coverage:.1%} "
+        f"({project.st_statement_semantic_count}/{project.st_statement_total})",
+        f"Recognized-partial instruction names: {', '.join(project.partially_modeled_instruction_names) if project.partially_modeled_instruction_names else 'none'}",
         f"Unmodeled instruction names: {', '.join(project.unknown_instruction_names) if project.unknown_instruction_names else 'none'}",
         "",
         "DEPENDENCY GRAPH",
         f"Total graph edges: {len(graph.edges)}",
-        f"Tag DEPENDS_ON edges: {len(dependency_edges)}",
-        "READS/WRITES/CALLS remain source facts for parsed rungs.",
-        "DEPENDS_ON is emitted only for proven-simple straight-line boolean rungs; complex sequencing and branched rungs are withheld to prevent speculative dependencies.",
+        f"Deterministic DEPENDS_ON edges: {len(dependency_edges)}",
+        "READS/WRITES/CALLS remain source facts for normalized logic.",
+        "DEPENDS_ON is emitted only from deterministic output-specific RLL paths, fully modeled ST statements, or proven AOI call translations; partial/opaque logic is withheld.",
         "",
         "FAT TEST MODEL",
-        f"Generated conservative static FAT candidates: {len(result.fat_tests)}",
+        f"Generated deterministic static FAT candidates: {len(result.fat_tests)}",
         "Execution status: NOT_RUN",
     ]
 
-    for test in result.fat_tests[:25]:
+    for test in result.fat_tests[:40]:
         conditions = ", ".join(
             f"{name}={'TRUE' if value else 'FALSE'}" for name, value in test.preconditions.items()
         )
@@ -76,14 +83,15 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
             [
                 "",
                 f"{test.id} — {test.title}",
+                f"Scenario: {test.scenario}",
                 f"Source: {test.source.locator}",
                 f"Preconditions: {conditions or 'none'}",
                 f"Expected: {test.expected}",
                 f"Execution: {test.execution_status}",
             ]
         )
-    if len(result.fat_tests) > 25:
-        lines.extend(["", f"... {len(result.fat_tests) - 25} additional FAT candidates are available in fat_tests.json"])
+    if len(result.fat_tests) > 40:
+        lines.extend(["", f"... {len(result.fat_tests) - 40} additional FAT candidates are available in fat_tests.json"])
 
     lines.extend(["", "STATIC VERIFICATION"])
     for check in result.static_checks:
@@ -99,8 +107,8 @@ def render_fat_report(result: PLCEngineeringResult) -> str:
         [
             "",
             "VERIFICATION BOUNDARY",
-            "STATICALLY_VERIFIED means the supported L5X structure, provenance, modeled RLL instruction semantics, proven-simple dependency paths, and test traceability passed deterministic checks.",
-            "It does NOT mean machine behavior, safety performance, AOI internal behavior, protected logic, branch-path behavior, complex instruction sequencing, or FAT execution passed. Dynamic PASS/FAIL requires a simulator or approved controller execution backend.",
+            "STATICALLY_VERIFIED means the exported project structure, source provenance, and every discovered logic region that contributes to the status are covered by the supported deterministic V2 RLL/ST/AOI/branch semantic model, with derived dependencies and FAT candidates traceable to source.",
+            "It does NOT mean real machine behavior, safety performance, timing, physical I/O, network/device behavior, or FAT execution passed. Protected, partial, opaque, or unresolved logic is never promoted to proven behavior. Dynamic PASS/FAIL requires an approved simulator or controller execution backend.",
         ]
     )
     return "\n".join(lines).rstrip() + "\n"

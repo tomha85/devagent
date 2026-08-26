@@ -60,7 +60,8 @@ def test_array_subscript_is_not_mistaken_for_parallel_branch(tmp_path: Path) -> 
         edge.kind == "DEPENDS_ON" and edge.source == "Output" and edge.target == "Inputs[0]"
         for edge in result.graph.edges
     )
-    assert len(result.fat_tests) == 1
+    assert len(result.fat_tests) == 2
+    assert {test.scenario for test in result.fat_tests} == {"POSITIVE_PATH", "NEGATIVE_BLOCK"}
 
 
 def test_variable_array_subscript_is_partial_and_withholds_fat(tmp_path: Path) -> None:
@@ -81,10 +82,10 @@ def test_instruction_free_rung_cannot_be_statically_verified(tmp_path: Path) -> 
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
     coverage = next(check for check in result.static_checks if check.id == "LOGIC_SEMANTIC_COVERAGE")
     assert coverage.status is StaticCheckStatus.NOT_PROVEN
-    assert any("No executable RLL instructions" in item for item in result.limitations)
+    assert any("No executable supported logic" in item for item in result.limitations)
 
 
-def test_unprotected_aoi_body_remains_not_proven(tmp_path: Path) -> None:
+def test_unprotected_aoi_body_is_modeled_but_unproven_call_binding_stays_partial(tmp_path: Path) -> None:
     aoi = '''<AddOnInstructionDefinitions>
       <AddOnInstructionDefinition Name="CustomAOI">
         <Parameters>
@@ -102,11 +103,15 @@ def test_unprotected_aoi_body_remains_not_proven(tmp_path: Path) -> None:
 
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
     aoi_check = next(check for check in result.static_checks if check.id == "AOI_INTERNAL_LOGIC")
-    assert aoi_check.status is StaticCheckStatus.NOT_PROVEN
-    assert any("internal routines" in item for item in result.limitations)
+    call_check = next(check for check in result.static_checks if check.id == "AOI_CALL_BINDING")
+    assert aoi_check.status is StaticCheckStatus.PASS
+    assert call_check.status is StaticCheckStatus.WARN
+    assert result.project.aoi_internal_modeled_count == 1
+    assert result.project.aoi_call_bound_count == 0
+    assert any("could not be directionally bound" in item for item in result.limitations)
 
 
-def test_aoi_call_operands_are_references_not_misaligned_directional_facts(tmp_path: Path) -> None:
+def test_aoi_call_direction_is_bound_only_from_proven_instance_and_interface(tmp_path: Path) -> None:
     aoi = '''<AddOnInstructionDefinitions>
       <AddOnInstructionDefinition Name="CustomAOI">
         <Parameters>
@@ -123,11 +128,12 @@ def test_aoi_call_operands_are_references_not_misaligned_directional_facts(tmp_p
     )
     rung = result.project.rungs[0]
 
-    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
-    assert {"Instance", "InputTag", "OutputTag"}.issubset(set(rung.references))
-    assert not ({"Instance", "InputTag", "OutputTag"} & set(rung.reads))
-    assert not ({"Instance", "InputTag", "OutputTag"} & set(rung.writes))
+    assert result.outcome is PLCOutcome.STATICALLY_VERIFIED
+    assert {"Instance", "InputTag"}.issubset(set(rung.reads))
+    assert {"Instance", "OutputTag"}.issubset(set(rung.writes))
     assert "CustomAOI" in rung.calls
+    call_check = next(check for check in result.static_checks if check.id == "AOI_CALL_BINDING")
+    assert call_check.status is StaticCheckStatus.PASS
 
 
 def test_osr_and_osf_record_distinct_output_operands(tmp_path: Path) -> None:
@@ -147,9 +153,7 @@ def test_osr_and_osf_record_distinct_output_operands(tmp_path: Path) -> None:
 
 
 def test_timer_counter_value_operands_are_normalized(tmp_path: Path) -> None:
-    result = analyze_rockwell_l5x(
-        _project(tmp_path, "TON(Timer,DelayPreset,Elapsed);")
-    )
+    result = analyze_rockwell_l5x(_project(tmp_path, "TON(Timer,DelayPreset,Elapsed);"))
     rung = result.project.rungs[0]
 
     assert "Timer" in rung.reads
@@ -187,13 +191,17 @@ def test_subtraction_expression_is_split_into_source_references(tmp_path: Path) 
     assert "Source-Offset" not in rung.references
 
 
-def test_true_parallel_branch_still_withholds_cross_branch_dependencies(tmp_path: Path) -> None:
+def test_true_parallel_branch_models_paths_without_cross_branch_dependencies(tmp_path: Path) -> None:
     result = analyze_rockwell_l5x(
         _project(tmp_path, "[XIC(Inputs[0])OTE(Output),XIC(Inputs[1])OTE(Pulse)];")
     )
 
     branch = next(check for check in result.static_checks if check.id == "BRANCH_DEPENDENCY_SEMANTICS")
-    assert branch.status is StaticCheckStatus.WARN
-    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
-    assert not any(edge.kind == "DEPENDS_ON" for edge in result.graph.edges)
-    assert result.fat_tests == []
+    assert branch.status is StaticCheckStatus.PASS
+    assert result.outcome is PLCOutcome.STATICALLY_VERIFIED
+    deps = {(edge.source, edge.target) for edge in result.graph.edges if edge.kind == "DEPENDS_ON"}
+    assert ("Output", "Inputs[0]") in deps
+    assert ("Pulse", "Inputs[1]") in deps
+    assert ("Output", "Inputs[1]") not in deps
+    assert ("Pulse", "Inputs[0]") not in deps
+    assert {test.output_tag for test in result.fat_tests} == {"Output", "Pulse"}

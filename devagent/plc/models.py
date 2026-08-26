@@ -18,6 +18,12 @@ class StaticCheckStatus(str, Enum):
     NOT_PROVEN = "NOT_PROVEN"
 
 
+class PLCSemanticState(str, Enum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+    OPAQUE = "OPAQUE"
+
+
 @dataclass(frozen=True)
 class PLCSourceRef:
     artifact: str
@@ -25,16 +31,22 @@ class PLCSourceRef:
     program: str | None = None
     routine: str | None = None
     rung: str | None = None
+    aoi: str | None = None
+    line: str | None = None
 
     @property
     def locator(self) -> str:
         parts = [self.controller]
+        if self.aoi:
+            parts.append(f"AOI {self.aoi}")
         if self.program:
             parts.append(self.program)
         if self.routine:
             parts.append(self.routine)
         if self.rung is not None:
             parts.append(f"Rung {self.rung}")
+        if self.line is not None:
+            parts.append(f"Line {self.line}")
         return " / ".join(parts)
 
 
@@ -80,6 +92,9 @@ class PLCAOIParameter:
     name: str
     usage: str
     data_type: str | None = None
+    required: bool = False
+    visible: bool = False
+    system_defined: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,12 +103,53 @@ class PLCAddOnInstruction:
     name: str
     parameters: tuple[PLCAOIParameter, ...] = ()
     source_protected: bool = False
+    routine_ids: tuple[str, ...] = ()
+    internal_body_modeled: bool = False
 
 
 @dataclass(frozen=True)
 class PLCInstruction:
     name: str
     arguments: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PLCBooleanTerm:
+    tag: str
+    required: bool
+
+
+@dataclass(frozen=True)
+class PLCLogicPath:
+    terms: tuple[PLCBooleanTerm, ...]
+
+
+@dataclass(frozen=True)
+class PLCOutputLogic:
+    id: str
+    output_tag: str
+    instruction: str
+    paths: tuple[PLCLogicPath, ...]
+    source: PLCSourceRef
+    language: str = "RLL"
+    origin: str = "RUNG"
+    semantic_state: PLCSemanticState = PLCSemanticState.FULL
+
+
+@dataclass(frozen=True)
+class PLCLogicStatement:
+    id: str
+    language: str
+    owner_type: str
+    owner_name: str
+    routine: str
+    locator: str
+    text: str
+    reads: tuple[str, ...]
+    writes: tuple[str, ...]
+    calls: tuple[str, ...]
+    semantic_state: PLCSemanticState
+    source: PLCSourceRef
 
 
 @dataclass(frozen=True)
@@ -157,16 +213,39 @@ class CanonicalPLCProject:
     programs: list[PLCProgram] = field(default_factory=list)
     routines: list[PLCRoutine] = field(default_factory=list)
     rungs: list[PLCRung] = field(default_factory=list)
+    logic_statements: list[PLCLogicStatement] = field(default_factory=list)
+    output_logic: list[PLCOutputLogic] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     unknown_instruction_names: list[str] = field(default_factory=list)
+    partially_modeled_instruction_names: list[str] = field(default_factory=list)
     instruction_total: int = 0
     instruction_semantic_count: int = 0
+    st_statement_total: int = 0
+    st_statement_semantic_count: int = 0
+    branch_rung_total: int = 0
+    branch_rung_semantic_count: int = 0
+    aoi_internal_total: int = 0
+    aoi_internal_modeled_count: int = 0
+    aoi_call_total: int = 0
+    aoi_call_bound_count: int = 0
 
     @property
     def instruction_semantic_coverage(self) -> float:
         if self.instruction_total == 0:
             return 1.0
         return self.instruction_semantic_count / self.instruction_total
+
+    @property
+    def st_semantic_coverage(self) -> float:
+        if self.st_statement_total == 0:
+            return 1.0
+        return self.st_statement_semantic_count / self.st_statement_total
+
+    @property
+    def branch_semantic_coverage(self) -> float:
+        if self.branch_rung_total == 0:
+            return 1.0
+        return self.branch_rung_semantic_count / self.branch_rung_total
 
 
 @dataclass(frozen=True)
@@ -194,6 +273,7 @@ class FATTestCase:
     method: str = "STATIC_CANDIDATE"
     execution_status: str = "NOT_RUN"
     limitations: tuple[str, ...] = ()
+    scenario: str = "POSITIVE_PATH"
 
 
 @dataclass(frozen=True)
