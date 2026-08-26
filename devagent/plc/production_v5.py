@@ -21,6 +21,15 @@ from devagent.plc.signature_trust import (
 )
 from devagent.providers import ModelProvider
 
+# Production V5 has a non-downgradable authenticity floor. A release policy may
+# require additional signature purposes in future revisions, but it cannot make
+# these three trust-critical artifacts unsigned.
+_MANDATORY_SIGNED_PURPOSES = {
+    "EXECUTION_BACKEND_REGISTRY",
+    "EXECUTION_RESULTS",
+    "HUMAN_APPROVAL",
+}
+
 
 def _sha256(path: Path | None) -> str | None:
     if path is None:
@@ -60,6 +69,7 @@ def _append_v5_trust_evidence(result) -> None:
                     "require_baseline_for": result.release_policy.get("require_baseline_for", []),
                     "allowed_backend_kinds": result.release_policy.get("allowed_backend_kinds", []),
                     "require_signatures_for": result.release_policy.get("require_signatures_for", []),
+                    "mandatory_signed_purposes": sorted(_MANDATORY_SIGNED_PURPOSES),
                 },
             )
         )
@@ -127,7 +137,9 @@ def run_production_verification_v5(
         assert record is not None
         verified_signatures.append(record)
 
-    required_purposes = policy.require_signatures_for
+    required_purposes = tuple(
+        sorted(set(policy.require_signatures_for) | _MANDATORY_SIGNED_PURPOSES)
+    )
     for path, purpose in (
         (execution_backend_registry_path, "EXECUTION_BACKEND_REGISTRY"),
         (execution_results_path, "EXECUTION_RESULTS"),
