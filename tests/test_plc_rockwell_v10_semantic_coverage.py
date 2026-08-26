@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from devagent.plc import analyze_rockwell_l5x
+from devagent.plc import production_report
 from devagent.plc.semantic_coverage import build_semantic_coverage_manifest
+from devagent.plc.semantic_coverage_report import (
+    render_production_report as coverage_render_production_report,
+    render_semantic_coverage_section,
+)
 
 
 def _write_project(tmp_path: Path) -> Path:
@@ -95,3 +100,19 @@ def test_manifest_is_bound_to_exact_project_hash(tmp_path: Path) -> None:
     manifest = build_semantic_coverage_manifest(engineering.project)
 
     assert manifest["project"]["source_sha256"] == engineering.project.metadata.source_sha256
+
+
+def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) -> None:
+    engineering = analyze_rockwell_l5x(_write_project(tmp_path))
+    section = render_semantic_coverage_section(engineering.project)
+
+    assert "## Semantic Coverage / Proof Boundary" in section
+    assert "Deterministic instruction coverage: **40.0%** (2/5)" in section
+    assert "| MOV | 1 | STRUCTURAL_RW=1 |" in section
+    assert "| MAJ | 1 | PARTIAL=1 |" in section
+    assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
+    assert "Reachable FULL ST dataflow: **0**/1 (0.0%)" in section
+
+
+def test_semantic_report_augmentation_is_installed_before_cli_imports() -> None:
+    assert production_report.render_production_report is coverage_render_production_report
