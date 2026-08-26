@@ -6,6 +6,7 @@ from devagent.plc.models import StaticCheck, StaticCheckStatus
 
 
 _WARNING_PREFIX = "Rockwell V10 standard catalog: "
+_UNKNOWN_WARNING_PREFIX = "Instruction semantics not modeled for: "
 
 # Classification-only catalog. Presence in this table means DevAgent recognizes
 # the mnemonic as a Rockwell/Logix instruction family; it DOES NOT mean behavior
@@ -62,17 +63,29 @@ def augment_standard_catalog(project) -> None:
         return
 
     names = {name for values in present.values() for name in values}
-    unknown_folded = {name.casefold() for name in names}
+    classified_folded = {name.casefold() for name in names}
     project.unknown_instruction_names = [
         name for name in project.unknown_instruction_names
-        if name.casefold() not in unknown_folded
+        if name.casefold() not in classified_folded
     ]
     project.partially_modeled_instruction_names = sorted(
         set(project.partially_modeled_instruction_names) | names,
         key=str.casefold,
     )
 
-    retained = [warning for warning in project.warnings if not warning.startswith(_WARNING_PREFIX)]
+    # Rebuild the unknown warning from the authoritative post-classification list
+    # so reports never call a known-standard PARTIAL instruction "unknown".
+    retained = [
+        warning
+        for warning in project.warnings
+        if not warning.startswith(_WARNING_PREFIX)
+        and not warning.startswith(_UNKNOWN_WARNING_PREFIX)
+    ]
+    if project.unknown_instruction_names:
+        retained.append(
+            _UNKNOWN_WARNING_PREFIX
+            + ", ".join(sorted(project.unknown_instruction_names, key=str.casefold))
+        )
     for family in sorted(present):
         retained.append(
             _WARNING_PREFIX
