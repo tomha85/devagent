@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from devagent.plc import analysis as _base
-from devagent.plc.models import PLCOutcome, StaticCheckStatus
+from devagent.plc.models import PLCOutcome, StaticCheck, StaticCheckStatus
 from devagent.plc.rockwell_compare import (
     augment_compare_instruction_semantics,
     generate_compare_fat_tests,
@@ -16,6 +16,7 @@ from devagent.plc.v2_guardrails import enforce_v2_guardrails, verify_v2_source_u
 
 
 _BASE_ANALYZE = _base.analyze_rockwell_l5x
+_COMPLEX_COMPARE_NAMES = {"LIM", "LIMIT", "MEQ"}
 
 
 def _filter_unproven_rll_statement_dependencies(project, graph) -> None:
@@ -31,6 +32,27 @@ def _filter_unproven_rll_statement_dependencies(project, graph) -> None:
         for edge in graph.edges
         if not (edge.kind == "DEPENDS_ON" and edge.evidence_id in rll_statement_ids)
     ]
+
+
+def _bounded_compare_check(project):
+    check = rockwell_compare_check(project)
+    complex_rungs = [
+        rung.id
+        for rung in project.rungs
+        if any(instruction.name.upper() in _COMPLEX_COMPARE_NAMES for instruction in rung.instructions)
+    ]
+    if not complex_rungs:
+        return check
+    evidence = tuple(dict.fromkeys([*check.evidence, *complex_rungs]))
+    return StaticCheck(
+        id=check.id,
+        status=StaticCheckStatus.WARN,
+        summary=(
+            check.summary
+            + f" {len(complex_rungs)} LIM/LIMIT/MEQ rung(s) remain directionally recognized but withheld from typed output-threshold proof."
+        ),
+        evidence=evidence,
+    )
 
 
 def _limitations(project, state, compare_check) -> list[str]:
@@ -103,7 +125,7 @@ def analyze_rockwell_l5x(path):
 
     checks = _base.static_verify(project, graph, fat_tests)
     structure_check = rockwell_structure_check(project)
-    compare_check = rockwell_compare_check(project)
+    compare_check = _bounded_compare_check(project)
     checks.extend((structure_check, compare_check))
     state = _base._coverage_state(project)
     incomplete = (
