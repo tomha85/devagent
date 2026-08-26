@@ -250,6 +250,36 @@ def _expected_boolean(test) -> bool:
     return expected
 
 
+def _compatible_boolean_tests(tests):
+    selected: list[tuple[Any, bool]] = []
+    excluded: list[dict[str, str]] = []
+    for test in tests:
+        expected = _boolean_expectation(test)
+        if expected is None:
+            excluded.append(
+                {
+                    "test_id": test.id,
+                    "scenario": test.scenario,
+                    "reason": "ECHO_V6_REQUIRES_TYPED_BOOLEAN_ASSERTION",
+                }
+            )
+        else:
+            selected.append((test, expected))
+    return selected, excluded
+
+
+def echo_v6_test_compatibility(tests) -> dict[str, Any]:
+    selected, excluded = _compatible_boolean_tests(tests)
+    return {
+        "schema": "devagent-rockwell-echo-v6-test-compatibility-v1",
+        "full_plan_count": len(tests),
+        "selected_count": len(selected),
+        "excluded_count": len(excluded),
+        "selected_test_ids": [test.id for test, _ in selected],
+        "excluded": excluded,
+    }
+
+
 def build_echo_execution_request(
     result,
     *,
@@ -265,20 +295,7 @@ def build_echo_execution_request(
     if len(tests) > _MAX_TESTS:
         raise ValueError(f"Rockwell Echo execution plan exceeds {_MAX_TESTS} tests")
 
-    compatible: list[tuple[Any, bool]] = []
-    excluded: list[dict[str, str]] = []
-    for test in tests:
-        expected = _boolean_expectation(test)
-        if expected is None:
-            excluded.append(
-                {
-                    "test_id": test.id,
-                    "scenario": test.scenario,
-                    "reason": "ECHO_V6_REQUIRES_TYPED_BOOLEAN_ASSERTION",
-                }
-            )
-        else:
-            compatible.append((test, expected))
+    compatible, _excluded = _compatible_boolean_tests(tests)
     if not compatible:
         raise ValueError(
             "Rockwell Echo V6 has no compatible typed-Boolean FAT tests in this plan; non-Boolean/action/stateful tests remain NOT_RUN until a compatible qualified runner is supplied"
@@ -297,8 +314,8 @@ def build_echo_execution_request(
         "runtime_project_sha256": binding.runtime_project_sha256,
         "runtime_binding_sha256": binding.source_sha256,
         "controller_name": result.engineering.project.metadata.controller_name,
-        # Bind execution evidence to the complete generated plan even though this
-        # V6 adapter executes only its typed-Boolean compatible subset.
+        # The signed/hash-bound plan remains the complete engineering plan. Echo
+        # V6 executes only the typed-Boolean subset it is qualified to assert.
         "test_plan_sha256": compute_test_plan_sha256(tests),
         "backend_registry_sha256": backend_registry_sha256,
         "adapter": {
@@ -313,13 +330,6 @@ def build_echo_execution_request(
             "time_quantum_us": quantum,
             "physical_controller_writes_allowed": False,
             "runtime_project_hash_must_be_verified_before_download": True,
-            "adapter_test_scope": "TYPED_BOOLEAN_ONLY",
-        },
-        "test_selection": {
-            "full_plan_count": len(tests),
-            "selected_count": len(compatible),
-            "excluded_count": len(excluded),
-            "excluded": excluded,
         },
         "tests": [
             {
@@ -465,6 +475,7 @@ __all__ = [
     "RUNNER_SCHEMA",
     "build_echo_execution_request",
     "describe_echo_runner",
+    "echo_v6_test_compatibility",
     "execute_echo_runner",
     "load_runtime_binding",
     "run_echo_execution",
