@@ -76,6 +76,12 @@ def test_v8_st_writer_prevents_single_writer_threshold_proof(tmp_path: Path) -> 
     )
     engineering, verification = _verify(path, "IF Temperature > 80 THEN Fan=TRUE")
     assert any(statement.language == "ST" and "Fan" in statement.writes for statement in engineering.project.logic_statements)
+    compare_check = next(
+        item for item in engineering.static_checks
+        if item.id == "ROCKWELL_TYPED_COMPARE_SEMANTICS"
+    )
+    assert compare_check.status.value == "WARN"
+    assert engineering.outcome.value == "PARTIALLY_VERIFIED"
     assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
     assert not any(item.scenario.startswith("THRESHOLD_") for item in engineering.fat_tests)
 
