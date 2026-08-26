@@ -93,7 +93,7 @@ def test_v9_complex_instruction_families_are_partial_not_fake_full(tmp_path: Pat
             tmp_path,
             rung_text=(
                 "MSG(MsgControl);"
-                "GSV(WallClockTime,,DateTime,CurrentTime);"
+                "FAL(FileControl,0,ALL,Destination,Source);"
                 "PID(PIDLoop,ProcessVariable,ControlVariable,0,0,0);"
                 "MAM(Axis1,1,0,1,1,1,0,0,0,0,0,0,0);"
             ),
@@ -101,10 +101,10 @@ def test_v9_complex_instruction_families_are_partial_not_fake_full(tmp_path: Pat
     )
     profile = rockwell_capability_profile(engineering.project)
     partial = {name.upper() for name in engineering.project.partially_modeled_instruction_names}
-    assert {"MSG", "GSV", "PID", "MAM"} <= partial
-    assert not ({"MSG", "GSV", "PID", "MAM"} & {name.upper() for name in engineering.project.unknown_instruction_names})
+    assert {"MSG", "FAL", "PID", "MAM"} <= partial
+    assert not ({"MSG", "FAL", "PID", "MAM"} & {name.upper() for name in engineering.project.unknown_instruction_names})
     assert profile["instruction_semantics"]["partial_families"]["COMMUNICATION"] == ["MSG"]
-    assert profile["instruction_semantics"]["partial_families"]["SYSTEM"] == ["GSV"]
+    assert profile["instruction_semantics"]["partial_families"]["FILE_ARRAY"] == ["FAL"]
     assert profile["instruction_semantics"]["partial_families"]["PROCESS_CONTROL"] == ["PID"]
     assert profile["instruction_semantics"]["partial_families"]["MOTION"] == ["MAM"]
     assert _support_check(engineering).status.value == "WARN"
