@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 from devagent.plc.models import plc_jsonable
 from devagent.plc.production_models import EvidenceItem, StageRecord, StageStatus
@@ -25,7 +26,7 @@ def _plan_sha256(plan) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _install_planner_classification_guards() -> None:
+def _install_planner_guards() -> None:
     from devagent.plc import project_test_planner as _planner
 
     def fat_behavior_kind(test):
@@ -38,6 +39,47 @@ def _install_planner_classification_guards() -> None:
 
     _planner._fat_behavior_kind = fat_behavior_kind
 
+    original_timer_counter = _planner._timer_counter_behaviors
+
+    def timer_counter_behaviors(engineering):
+        behaviors, intents = original_timer_counter(engineering)
+        by_id = {item.id: item for item in behaviors}
+        guarded = []
+        replaced_timers: set[str] = set()
+        for intent in intents:
+            if intent.kind is not BehaviorKind.TIMER:
+                guarded.append(intent)
+                continue
+            behavior = by_id.get(intent.behavior_id)
+            instruction = str((behavior.metadata or {}).get("instruction") or "").upper() if behavior else ""
+            if instruction == "TON":
+                guarded.append(intent)
+                continue
+            # TOF and RTO have timing/retentive semantics that are materially
+            # different from TON. Until their dedicated theorem is implemented,
+            # do not reuse TON boundary expectations merely because PRE is known.
+            if intent.behavior_id in replaced_timers:
+                continue
+            replaced_timers.add(intent.behavior_id)
+            guarded.append(
+                replace(
+                    intent,
+                    scenario=f"{instruction or 'TIMER'}_DYNAMIC_BEHAVIOR",
+                    title=f"Exercise {instruction or 'timer'} runtime behavior for {intent.subject}",
+                    preconditions={},
+                    expected=None,
+                    method=TestIntentMethod.SIMULATOR,
+                    trust=TestIntentTrust.NOT_PROVEN,
+                    limitations=(
+                        f"{instruction or 'Timer'} timing semantics require a dedicated deterministic theorem or qualified runtime evidence.",
+                        "DevAgent intentionally does not substitute TON timing expectations for a different timer instruction.",
+                    ),
+                )
+            )
+        return behaviors, guarded
+
+    _planner._timer_counter_behaviors = timer_counter_behaviors
+
 
 def install() -> None:
     """Wrap V5 once so every production run receives a project-specific test plan."""
@@ -48,7 +90,7 @@ def install() -> None:
 
     from devagent.plc import production_v5 as _production_v5
 
-    _install_planner_classification_guards()
+    _install_planner_guards()
     original = _production_v5.run_production_verification_v5
 
     def run_production_verification_v5(*args, **kwargs):
