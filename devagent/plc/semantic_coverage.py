@@ -34,7 +34,11 @@ def _rung_key(rung) -> tuple[str, str, str]:
 def build_semantic_coverage_manifest(project) -> dict[str, object]:
     """Describe what DevAgent understands for this exact PLC project.
 
-    Coverage levels are intentionally trust-oriented:
+    Program-RLL instruction coverage and AOI definition coverage are intentionally
+    reported as separate scopes so AOI-heavy projects do not receive an inflated
+    or ambiguous instruction percentage.
+
+    Coverage levels are trust-oriented:
 
     * DETERMINISTIC_PATH: the full reachable RLL Boolean path was normalized into
       FULL output logic and can participate in deterministic path/action reasoning.
@@ -45,9 +49,6 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     * PARTIAL: DevAgent recognizes the family or statement but explicitly
       withholds complete/reachable behavior semantics.
     * UNMODELED: the instruction is present but no supported semantics apply.
-
-    The manifest is descriptive evidence, not a claim about physical machine
-    behavior, safety certification, simulator execution, or site readiness.
     """
 
     deterministic_rung_keys = {
@@ -65,6 +66,8 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     per_instruction: dict[str, Counter[str]] = defaultdict(Counter)
     totals: Counter[str] = Counter()
 
+    # Canonical project.rungs are program RLL rungs. AOI-internal RLL is stored
+    # separately in logic_statements and is summarized under the AOI scope below.
     for rung in project.rungs:
         key = _rung_key(rung)
         deterministic_path = key in deterministic_rung_keys
@@ -81,8 +84,6 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             elif structurally_supported:
                 level = "STRUCTURAL_RW"
             else:
-                # Unknown/custom instructions fail closed whether or not an
-                # upstream warning happened to retain their spelling.
                 level = "UNMODELED"
             per_instruction[name][level] += 1
             totals[level] += 1
@@ -111,6 +112,16 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         if statement.language.upper() == "ST"
     )
     st_full = st_states[PLCSemanticState.FULL.value]
+    aoi_rll_states = Counter(
+        statement.semantic_state.value
+        for statement in project.logic_statements
+        if statement.owner_type == "aoi" and statement.language.upper() == "RLL"
+    )
+    aoi_st_states = Counter(
+        statement.semantic_state.value
+        for statement in project.logic_statements
+        if statement.owner_type == "aoi" and statement.language.upper() == "ST"
+    )
     unsupported_routine_types = Counter(
         routine.routine_type
         for routine in project.routines
@@ -129,6 +140,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "source_sha256": project.metadata.source_sha256,
         },
         "instruction_summary": {
+            "scope": "PROGRAM_RLL",
             "total_occurrences": instruction_total,
             "deterministic_occurrences": deterministic_total,
             "deterministic_pct": pct(deterministic_total, instruction_total),
@@ -145,7 +157,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         "instructions": instruction_rows,
         "language_summary": {
             "rll": {
-                "rungs": len(project.rungs),
+                "program_rungs": len(project.rungs),
                 "deterministic_boolean_rungs": len(deterministic_rung_keys),
                 "bounded_compare_rungs": len(bounded_compare_ids),
                 "branch_rungs": project.branch_rung_total,
@@ -168,6 +180,10 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 "protected_definitions": protected_aois,
                 "internal_bodies_total": project.aoi_internal_total,
                 "internal_bodies_modeled": project.aoi_internal_modeled_count,
+                "internal_rll_statements": sum(aoi_rll_states.values()),
+                "internal_rll_full_statements": aoi_rll_states[PLCSemanticState.FULL.value],
+                "internal_st_statements": sum(aoi_st_states.values()),
+                "internal_st_full_statements": aoi_st_states[PLCSemanticState.FULL.value],
                 "calls_total": project.aoi_call_total,
                 "calls_bound": project.aoi_call_bound_count,
             },
@@ -180,6 +196,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         },
         "trust_note": (
             "Deterministic coverage describes bounded reachable software semantics only. "
+            "Program RLL instruction coverage and AOI-definition coverage are separate scopes. "
             "Structural coverage means reads/writes/calls are normalized but behavior is not fully proven. "
             "Unreachable, partial, or unmodeled behavior is excluded from deterministic verification. "
             "Physical I/O, process physics, safety certification, and runtime behavior require separate evidence."
