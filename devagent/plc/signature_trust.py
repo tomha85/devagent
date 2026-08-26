@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,17 @@ class TrustedSignerStore:
         }
 
 
+def _parse_timestamp(value: str, *, field: str) -> datetime:
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"PLC trusted signer store {field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"PLC trusted signer store {field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
 def load_trusted_signer_store(path: Path | None) -> TrustedSignerStore | None:
     if path is None:
         return None
@@ -77,6 +89,7 @@ def load_trusted_signer_store(path: Path | None) -> TrustedSignerStore | None:
     approved_at = str(loaded.get("approved_at") or "").strip()
     if not approved_by or not approved_at:
         raise ValueError("PLC trusted signer store requires approved_by and approved_at")
+    _parse_timestamp(approved_at, field="approved_at")
     rows = loaded.get("signers")
     if not isinstance(rows, list) or not rows or len(rows) > _MAX_SIGNERS:
         raise ValueError(f"PLC trusted signer store requires 1..{_MAX_SIGNERS} signers")
