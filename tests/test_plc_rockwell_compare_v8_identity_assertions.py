@@ -100,6 +100,40 @@ def _write_program_qualified_project(tmp_path: Path) -> Path:
     return path
 
 
+def _write_independent_program_fans(tmp_path: Path) -> Path:
+    payload = '''<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="V8IndependentScopes" TargetType="Controller">
+  <Controller Use="Target" Name="V8IndependentScopes" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+    <DataTypes />
+    <AddOnInstructionDefinitions />
+    <Tags>
+      <Tag Name="Temperature" TagType="Base" DataType="DINT" />
+      <Tag Name="OtherStart" TagType="Base" DataType="BOOL" />
+    </Tags>
+    <Programs>
+      <Program Name="MainProgram" MainRoutineName="MainRoutine">
+        <Tags><Tag Name="Fan" TagType="Base" DataType="BOOL" /></Tags>
+        <Routines><Routine Name="MainRoutine" Type="RLL"><RLLContent>
+          <Rung Number="0"><Text><![CDATA[GT(Temperature,80)OTE(Fan);]]></Text></Rung>
+        </RLLContent></Routine></Routines>
+      </Program>
+      <Program Name="OtherProgram" MainRoutineName="OtherRoutine">
+        <Tags><Tag Name="Fan" TagType="Base" DataType="BOOL" /></Tags>
+        <Routines><Routine Name="OtherRoutine" Type="RLL"><RLLContent>
+          <Rung Number="0"><Text><![CDATA[XIC(OtherStart)OTE(Fan);]]></Text></Rung>
+        </RLLContent></Routine></Routines>
+      </Program>
+    </Programs>
+    <Tasks><Task Name="MainTask" Type="CONTINUOUS"><ScheduledPrograms>
+      <ScheduledProgram Name="MainProgram" /><ScheduledProgram Name="OtherProgram" />
+    </ScheduledPrograms></Task></Tasks>
+  </Controller>
+</RSLogix5000Content>'''
+    path = tmp_path / "V8IndependentScopes.L5X"
+    path.write_text(payload, encoding="utf-8")
+    return path
+
+
 def test_v8_casefolded_st_writer_blocks_threshold_proof(tmp_path: Path) -> None:
     engineering, verification = _verify(
         _write_casefold_project(tmp_path),
@@ -130,8 +164,6 @@ def test_v8_program_qualified_writer_blocks_program_scope_output(tmp_path: Path)
 
 def test_v8_contradictory_output_consequent_is_not_proven(tmp_path: Path) -> None:
     engineering = analyze_rockwell_l5x(_write_casefold_project(tmp_path))
-    # Use a project with an additional writer only for parsing coverage; the
-    # assertion guard must independently refuse contradictory consequent state.
     verification = verify_requirement(
         _requirement("IF Temperature > 80 THEN Fan=TRUE AND Fan=FALSE"),
         engineering,
@@ -140,3 +172,14 @@ def test_v8_contradictory_output_consequent_is_not_proven(tmp_path: Path) -> Non
     )
     assert verification.status is RequirementStatus.TRACEABLE_NOT_PROVEN
     assert "exactly one unambiguous output-state assertion" in verification.summary
+
+
+def test_v8_independent_program_scoped_fans_remain_independent_writers(tmp_path: Path) -> None:
+    engineering = analyze_rockwell_l5x(_write_independent_program_fans(tmp_path))
+    threshold_tests = [
+        test for test in engineering.fat_tests
+        if test.scenario.startswith("THRESHOLD_") and test.source.program == "MainProgram"
+    ]
+    assert {test.scenario for test in threshold_tests} == {"THRESHOLD_TRUE", "THRESHOLD_FALSE"}
+    check = next(item for item in engineering.static_checks if item.id == "ROCKWELL_TYPED_COMPARE_SEMANTICS")
+    assert "additional executable writers" not in check.summary
