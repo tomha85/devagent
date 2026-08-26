@@ -7,26 +7,29 @@ from devagent.plc import production_regression as _regression
 _ORIGINAL_ANALYZE_REGRESSION = _regression.analyze_regression
 
 
-def _current_evidence_ids(project) -> set[str]:
-    ids = {tag.id for tag in project.tags}
-    ids.update(rung.id for rung in project.rungs)
-    ids.update(statement.id for statement in project.logic_statements)
-    ids.update(logic.id for logic in project.output_logic)
-    ids.update(program.id for program in project.programs)
-    ids.update(routine.id for routine in project.routines)
-    ids.update(task.id for task in project.tasks)
-    ids.update(aoi.id for aoi in project.aois)
-    ids.update(data_type.id for data_type in project.data_types)
-    return ids
+def _packaged_evidence_map(project) -> dict[str, str]:
+    """Map current canonical object IDs to IDs actually emitted by evidence_index()."""
+
+    mapping: dict[str, str] = {
+        tag.id: f"TAG:{tag.scope}:{tag.name}"
+        for tag in project.tags
+    }
+    for item in project.rungs:
+        mapping[item.id] = item.id
+    for item in project.logic_statements:
+        mapping[item.id] = item.id
+    for item in project.output_logic:
+        mapping[item.id] = item.id
+    return mapping
 
 
 def analyze_regression(baseline_path, engineering, verifications):
-    """Remove baseline-only IDs from regression evidence references.
+    """Remove or remap regression references not present in the current package.
 
     Regression claims are deterministic derived artifacts. Their `evidence_ids`
-    must only point to objects that are actually packaged in the current run.
-    Baseline-only source objects remain represented by the regression change
-    itself and the baseline SHA/context; they are never emitted as dangling IDs.
+    must resolve against the evidence package emitted for the current run.
+    Current tag object IDs are remapped to the package's `TAG:<scope>:<name>` IDs;
+    baseline-only source IDs are dropped instead of becoming dangling references.
     """
 
     changes, baseline = _ORIGINAL_ANALYZE_REGRESSION(
@@ -34,18 +37,15 @@ def analyze_regression(baseline_path, engineering, verifications):
         engineering,
         verifications,
     )
-    valid_ids = _current_evidence_ids(engineering.project)
-    sanitized = [
-        replace(
-            change,
-            evidence_ids=tuple(
-                evidence_id
-                for evidence_id in change.evidence_ids
-                if evidence_id in valid_ids
-            ),
-        )
-        for change in changes
-    ]
+    evidence_map = _packaged_evidence_map(engineering.project)
+    sanitized = []
+    for change in changes:
+        remapped: list[str] = []
+        for evidence_id in change.evidence_ids:
+            packaged = evidence_map.get(evidence_id)
+            if packaged and packaged not in remapped:
+                remapped.append(packaged)
+        sanitized.append(replace(change, evidence_ids=tuple(remapped)))
     return sanitized, baseline
 
 
