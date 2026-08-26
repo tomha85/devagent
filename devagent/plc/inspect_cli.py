@@ -40,12 +40,14 @@ def _pct(value) -> str:
 
 def _render(manifest: dict[str, object]) -> str:
     project = manifest["project"]
+    inventory = manifest["inventory"]
     summary = manifest["instruction_summary"]
     languages = manifest["language_summary"]
     boundaries = manifest["project_boundaries"]
     rll = languages["rll"]
     st = languages["structured_text"]
     aoi = languages["aoi"]
+    warnings = boundaries["warnings"]
 
     lines = [
         "DEVAGENT PLC PROJECT INSPECTION",
@@ -55,6 +57,20 @@ def _render(manifest: dict[str, object]) -> str:
         f"Controller: {project['controller']}",
         f"Processor: {project['processor_type'] or 'unknown'}",
         f"Source SHA-256: {project['source_sha256']}",
+        "",
+        "PROJECT INVENTORY",
+        f"Tags: {inventory['tags']}",
+        f"Data types: {inventory['data_types']}",
+        f"Modules: {inventory['modules']}",
+        f"Tasks: {inventory['tasks']}",
+        f"Scheduled program entries: {inventory['scheduled_program_entries']}",
+        f"Programs: {inventory['programs']}",
+        f"Routines: {inventory['routines']}",
+        f"Program RLL rungs: {inventory['program_rll_rungs']}",
+        f"Structured Text statements: {inventory['structured_text_statements']}",
+        f"AOIs: {inventory['aois']}",
+        f"Output logic objects: {inventory['output_logic_objects']}",
+        f"Analysis warnings: {len(warnings)}",
         "",
         "SEMANTIC COVERAGE",
         f"Program RLL instruction occurrences: {summary['total_occurrences']}",
@@ -88,6 +104,13 @@ def _render(manifest: dict[str, object]) -> str:
         "Unsupported routine types: "
         + (", ".join(f"{name}={count}" for name, count in boundaries["unsupported_routine_types"].items()) or "none"),
         f"Protected routines: {boundaries['protected_routines']}",
+        f"Warnings: {len(warnings)}",
+    ]
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings[:20])
+        if len(warnings) > 20:
+            lines.append(f"- ... {len(warnings) - 20} additional warning(s) available in --json/--output manifest")
+    lines += [
         "",
         "PROGRAM RLL INSTRUCTION BREAKDOWN",
     ]
