@@ -31,7 +31,7 @@ def _write_project(tmp_path: Path) -> Path:
     return path
 
 
-def test_stateful_instructions_are_partial_but_generate_runtime_fat(tmp_path: Path) -> None:
+def test_stateful_instructions_are_partial_but_generate_engineer_fat(tmp_path: Path) -> None:
     result = analyze_rockwell_l5x(_write_project(tmp_path))
 
     assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
@@ -44,6 +44,8 @@ def test_stateful_instructions_are_partial_but_generate_runtime_fat(tmp_path: Pa
     assert {item.output_tag for item in tests} == {"Timer1", "Counter1"}
     assert all(item.execution_status == "NOT_RUN" for item in tests)
     assert all(item.scenario == "STATEFUL_RUNTIME" for item in tests)
+    assert all(item.engineer_execution_required for item in tests)
+    assert all(item.setup_steps and item.action_steps and item.watch_tags for item in tests)
     assert any("false-to-true" in item.expected for item in tests if item.output_tag == "Counter1")
     assert any("controller time" in item.expected for item in tests if item.output_tag == "Timer1")
 
@@ -52,10 +54,10 @@ def test_stateful_instructions_are_partial_but_generate_runtime_fat(tmp_path: Pa
         if item.id == "ROCKWELL_STATEFUL_RUNTIME_SEMANTICS"
     )
     assert check.status is StaticCheckStatus.WARN
-    assert any("qualified runtime evidence" in item for item in result.limitations)
+    assert any("engineer-executed observation" in item for item in result.limitations)
 
 
-def test_stateful_profile_reports_runtime_evidence_requirement(tmp_path: Path) -> None:
+def test_stateful_profile_reports_fat_requirement(tmp_path: Path) -> None:
     result = analyze_rockwell_l5x(_write_project(tmp_path))
     profile = stateful_profile(result.project)
 
