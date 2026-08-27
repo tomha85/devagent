@@ -81,11 +81,29 @@ from devagent.plc.rockwell_branch_coverage_v16 import install as _install_rockwe
 # partially understood branch grammars remain fail-closed and withheld.
 _install_rockwell_branch_coverage_v16()
 
+from devagent.plc.rockwell_system_service_install_v17 import (
+    install as _install_rockwell_system_service_v17,
+)
+
+# V17 does not widen static proof. Reachable GSV/SSV system-service logic stays
+# PARTIAL, but every such runtime-dependent gap receives an evidence-linked,
+# engineer-executed FAT procedure and a specific commissioning risk. The install
+# happens before production imports capture analysis/risk functions by value.
+_install_rockwell_system_service_v17()
+
 from devagent.plc.semantic_coverage_report import install as _install_semantic_coverage_report
 
 # Ensure any later CLI import of render_production_report receives the
 # reachability-aware semantic coverage augmentation.
 _install_semantic_coverage_report()
+
+from devagent.plc.rockwell_system_service_report_install_v17 import (
+    install as _install_rockwell_system_service_report_v17,
+)
+
+# Keep the public report renderer identity stable while adding an explicit V17
+# system-service runtime boundary inside the semantic coverage section.
+_install_rockwell_system_service_report_v17()
 
 from devagent.plc.four_contract_v13 import install as _install_four_contract_v13
 
