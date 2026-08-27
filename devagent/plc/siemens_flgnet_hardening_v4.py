@@ -29,17 +29,45 @@ def _warning_matches(statement, warning: str) -> bool:
     )
 
 
+def _withheld_traceability_warning(statement, reason: str) -> str:
+    """Keep the V1 traceability contract while reporting the V4 reason.
+
+    Older consumers/tests rely on the explicit statement that an unsupported
+    Openness network was structurally imported. V4 may refine why proof is
+    withheld, but it must not erase that useful provenance signal.
+    """
+
+    return (
+        f"TIA XML {statement.language} network "
+        f"{statement.source.program or statement.owner_name}/"
+        f"{statement.locator} is structurally imported but V4 withholds "
+        f"executable behavior proof ({reason}); engineer FAT is required."
+    )
+
+
 def _hardened_analyzer(path: Path):
     result = _PREVIOUS_ANALYZER(path)
     facts = getattr(result.project, "_siemens_v4_facts", None)
-    if facts is None or not facts.modeled:
+    if facts is None:
         return result
 
     by_id = {item.id: item for item in result.project.logic_statements}
-    modeled = {
-        item.statement_id
-        for item in facts.modeled
-    }
+    modeled = {item.statement_id for item in facts.modeled}
+
+    # FULL V4 networks legitimately close their old V1 OPAQUE warning. Withheld
+    # networks keep a structurally-imported provenance warning, augmented with
+    # the exact V4 fail-closed reason. This preserves backward compatibility
+    # without weakening the theorem boundary.
+    warnings = list(result.project.warnings)
+    for fact in facts.withheld:
+        statement = by_id.get(fact.statement_id)
+        if statement is None:
+            continue
+        warning = _withheld_traceability_warning(statement, fact.reason)
+        if warning not in warnings:
+            warnings.append(warning)
+    result.project.warnings = list(dict.fromkeys(warnings))
+
     limitations = []
     for item in result.limitations:
         if any(
