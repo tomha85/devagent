@@ -10,6 +10,100 @@ from devagent.plc import siemens_tia_v1 as _v1
 
 
 _INSTALLED = False
+_LITERAL_RESOLUTION_PREFIXES = ("STATE_LITERAL", "ENUM_LITERAL:")
+
+
+def _literal_resolution(resolution: str) -> bool:
+    return str(resolution or "").startswith(_LITERAL_RESOLUTION_PREFIXES)
+
+
+def _statement_line(statement) -> int | None:
+    raw = getattr(getattr(statement, "source", None), "line", None)
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_literal_bindings(project, types, bindings):
+    """Classify proven state/enum literals without pretending they are PLC symbols.
+
+    V5/V7 may prove a named CASE state such as IDLE or FAULT even when the enum
+    declaration was not included in the export bundle. The legacy SCL parser can
+    still surface the assignment RHS as a read reference. V8 must preserve that
+    theorem by recording the token as a literal, not by treating it as an
+    unresolved variable. Genuine unresolved symbols remain fail-closed.
+    """
+
+    statements = {item.id: item for item in project.logic_statements}
+
+    enum_literals: dict[str, list[str]] = {}
+    for item in types:
+        if item.kind != "ENUM":
+            continue
+        for literal in item.enum_literals:
+            enum_literals.setdefault(str(literal).casefold(), []).append(item.name)
+
+    machine_contexts: list[tuple[str, int, int, frozenset[str]]] = []
+    machine_facts = getattr(project, "_siemens_v5_state_machine_facts", None)
+    for machine in getattr(machine_facts, "machines", ()):
+        literals = {str(value).casefold() for value in machine.states}
+        literals.update(
+            str(transition.target_state).casefold()
+            for transition in machine.transitions
+        )
+        machine_contexts.append(
+            (
+                str(machine.block).casefold(),
+                int(machine.case_line),
+                int(machine.end_line),
+                frozenset(literals),
+            )
+        )
+
+    normalized = []
+    for binding in bindings:
+        if binding.canonical_symbol_id is not None or binding.resolution.startswith("AMBIGUOUS"):
+            normalized.append(binding)
+            continue
+
+        raw = _v8._clean(binding.raw_ref)
+        literal_key = raw.casefold()
+        enum_types = enum_literals.get(literal_key, [])
+        if len(enum_types) == 1:
+            normalized.append(
+                replace(
+                    binding,
+                    resolution=f"ENUM_LITERAL:{enum_types[0]}",
+                    semantic_state=PLCSemanticState.FULL,
+                )
+            )
+            continue
+
+        statement = statements.get(binding.statement_id)
+        if statement is not None:
+            block = str(statement.source.program or statement.owner_name or "").casefold()
+            line = _statement_line(statement)
+            if line is not None and any(
+                block == machine_block
+                and case_line <= line <= end_line
+                and literal_key in literals
+                for machine_block, case_line, end_line, literals in machine_contexts
+            ):
+                normalized.append(
+                    replace(
+                        binding,
+                        resolution="STATE_LITERAL",
+                        semantic_state=PLCSemanticState.FULL,
+                    )
+                )
+                continue
+
+        normalized.append(binding)
+
+    return tuple(normalized)
 
 
 def _canonicalize_v8(base, target: Path, files):
@@ -17,7 +111,7 @@ def _canonicalize_v8(base, target: Path, files):
     project = base.project
     types = _v8._build_types(project, files)
     symbols = _v8._build_symbols(project, types)
-    bindings = _v8._bindings(project, symbols)
+    bindings = _normalize_literal_bindings(project, types, _v8._bindings(project, symbols))
 
     # V1 already owns exact same-symbol multiple-writer detection. V8 adds the
     # missing structure/member and array/member ownership overlap only, avoiding
@@ -38,6 +132,7 @@ def _canonicalize_v8(base, target: Path, files):
             for item in bindings
             if item.canonical_symbol_id is None
             and not item.resolution.startswith("AMBIGUOUS")
+            and not _literal_resolution(item.resolution)
         ),
     )
     setattr(project, "_siemens_v8_identity_facts", facts)
@@ -99,7 +194,9 @@ def _canonicalize_v8(base, target: Path, files):
         if statement.semantic_state is PLCSemanticState.FULL
     }
     identity_gap_on_proven_statement = any(
-        item.statement_id in full_ids and item.canonical_symbol_id is None
+        item.statement_id in full_ids
+        and item.canonical_symbol_id is None
+        and not _literal_resolution(item.resolution)
         for item in bindings
     )
     outcome = base.outcome
@@ -116,6 +213,7 @@ def _canonicalize_v8(base, target: Path, files):
         [
             "Siemens V8 canonical identity/type analysis is fail-closed for unresolved, ambiguous, indirect, dynamically indexed, malformed, or recursively excessive shapes.",
             "ARRAY identity supports ownership/traceability; dynamic index runtime behavior is not promoted to static proof.",
+            "Named CASE state targets proven by V5/V7 and uniquely identified ENUM literals are recorded as literals, not PLC symbol reads.",
         ]
     )
     return replace(
