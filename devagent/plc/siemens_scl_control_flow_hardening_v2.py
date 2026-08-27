@@ -77,5 +77,12 @@ def install() -> None:
 
     _install_siemens_call_graph_v3()
 
+    # V4 runs after the V3 call/interface closure. It may upgrade only bounded
+    # LAD/FBD FlgNet networks, then rebuilds V3 projection so local FB/FC visual
+    # logic cannot prove active machine behavior without the same OB/call guards.
+    from devagent.plc.siemens_flgnet_v4 import install as _install_siemens_flgnet_v4
+
+    _install_siemens_flgnet_v4()
+
 
 __all__ = ["install"]
