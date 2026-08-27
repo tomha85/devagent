@@ -31,6 +31,15 @@ def install() -> None:
         return overview + "\n" + base
 
     _semantic_report._ORIGINAL_RENDER = render_base_with_professional_overview
+
+    # Level 1 terminal reporting is a separate presentation surface. Install the
+    # engineer-focused Risk -> Why -> Impact -> Recommended Action -> Fix/FAT
+    # summary before ``devagent.plc.cli`` imports ``render_console_summary``.
+    # This does not alter the complete report, risk register, proof, FAT, or
+    # readiness decisions.
+    from devagent.plc.top_engineering_risks_v1 import install as _install_top_engineering_risks_v1
+
+    _install_top_engineering_risks_v1()
     _INSTALLED = True
 
 
