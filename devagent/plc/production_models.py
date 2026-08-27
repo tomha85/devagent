@@ -203,6 +203,9 @@ class PLCProductionResult:
     warnings: list[str] = field(default_factory=list)
     ai_provider: str | None = None
     ai_model: str | None = None
+    # V15: auditable orchestration trace for bounded AI review/mapping workflows.
+    # This trace never participates in deterministic proof or release readiness.
+    ai_harness_trace: list[dict[str, Any]] = field(default_factory=list)
     execution_backend_registry: dict[str, Any] | None = None
     execution_backend_registry_sha256: str | None = None
     execution_backend_id: str | None = None
