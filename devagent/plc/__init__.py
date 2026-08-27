@@ -149,6 +149,15 @@ from devagent.plc.siemens_scl_control_flow_v2 import install as _install_siemens
 # expressions stay fail-closed and require engineer-executed FAT evidence.
 _install_siemens_scl_control_flow_v2()
 
+from devagent.plc.siemens_scl_control_flow_hardening_v2 import (
+    install as _install_siemens_scl_control_flow_hardening_v2,
+)
+
+# A syntactically complete inner IF is still nested control flow. Do not allow an
+# inner chain to become independently FULL when its enclosing region is outside
+# the V2 single-level theorem.
+_install_siemens_scl_control_flow_hardening_v2()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.siemens_v5_bindings_v1 import install as _install_siemens_v5_bindings_v1
 
