@@ -242,11 +242,25 @@ END_CASE;
     assert timed.target_state == "20"
     assert timed.runtime_dependencies == ("Delay:TON",)
     assert timed.guard_paths == ((("Delay.Q", True),),)
-    assert any(
-        statement.calls
-        and statement.semantic_state is not PLCSemanticState.FULL
+
+    runtime_call_statements = [
+        statement
         for statement in project.logic_statements
-    )
+        if statement.calls
+        and statement.semantic_state is not PLCSemanticState.FULL
+    ]
+    diagnostic = [
+        {
+            "text": statement.text,
+            "calls": statement.calls,
+            "semantic_state": statement.semantic_state.value,
+            "line": statement.source.line,
+        }
+        for statement in project.logic_statements
+        if statement.language == "SCL"
+    ]
+    assert runtime_call_statements, diagnostic
+
     assert any(
         test.scenario == "SIEMENS_STATE_TRANSITION"
         and "Runtime dependency: Delay:TON" in test.expected
