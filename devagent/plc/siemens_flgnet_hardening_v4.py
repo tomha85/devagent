@@ -106,5 +106,14 @@ def install() -> None:
     _dispatch.analyze_siemens_tia = _hardened_analyzer
     _INSTALLED = True
 
+    # Extended V4 remains Siemens-only. Import it only after the hardened V4
+    # analyzer is installed so it captures the exact fail-closed visual baseline;
+    # Rockwell and the shared software-engineering runtime are untouched.
+    from devagent.plc.siemens_flgnet_extended_v4 import (
+        install as _install_siemens_flgnet_extended_v4,
+    )
+
+    _install_siemens_flgnet_extended_v4()
+
 
 __all__ = ["install"]
