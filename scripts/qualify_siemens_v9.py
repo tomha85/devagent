@@ -149,10 +149,13 @@ END_ORGANIZATION_BLOCK
 
 
 def _large_project(root: Path) -> dict[str, object]:
+    # Stress the executable-block path, not DATA_BLOCK-as-program bookkeeping.
+    # Each FB is a real independently parsed engineering block with two scoped
+    # interface symbols and one bounded assignment theorem.
     blocks = []
     for index in range(1000):
         blocks.append(
-            f'''DATA_BLOCK DB_{index:04d}\nVAR\n    Value : Bool;\nEND_VAR\nBEGIN\nEND_DATA_BLOCK'''
+            f'''FUNCTION_BLOCK FB_{index:04d}\nVAR_INPUT\n    InValue : Bool;\nEND_VAR\nVAR_OUTPUT\n    OutValue : Bool;\nEND_VAR\nBEGIN\n    OutValue := InValue;\nEND_FUNCTION_BLOCK'''
         )
     blocks.append(
         '''ORGANIZATION_BLOCK Main\nVAR\n    Start : Bool;\n    Run : Bool;\nEND_VAR\nBEGIN\n    Run := Start;\nEND_ORGANIZATION_BLOCK'''
@@ -169,10 +172,15 @@ def _large_project(root: Path) -> dict[str, object]:
     if len(engineering.project.tags) < 2500:
         raise RuntimeError(f"large Siemens qualification imported only {len(engineering.project.tags)} tags")
     if len(engineering.project.programs) < 1000:
-        raise RuntimeError(f"large Siemens qualification imported only {len(engineering.project.programs)} blocks/programs")
+        raise RuntimeError(f"large Siemens qualification imported only {len(engineering.project.programs)} executable blocks/programs")
+    if len(engineering.project.logic_statements) < 1000:
+        raise RuntimeError(f"large Siemens qualification imported only {len(engineering.project.logic_statements)} logic statements")
     profile = siemens_capability_profile_v9(engineering.project)
+    if not profile["coverage_accounting_complete"]:
+        raise RuntimeError(f"large Siemens support accounting incomplete: {profile}")
     return {
         "blocks_programs": len(engineering.project.programs),
+        "logic_statements": len(engineering.project.logic_statements),
         "tags": len(engineering.project.tags),
         "source_files": profile["source_files"],
         "source_bytes": profile["source_bytes"],
