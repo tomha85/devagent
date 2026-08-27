@@ -47,8 +47,8 @@ def test_siemens_v2_complete_if_else_gets_bounded_static_proof_fat_and_report(tm
     assert profile["static_contract"] == "COMPLETE"
     assert profile["if_chain_models"] == 1
     assert profile["if_chain_output_logic"] == 1
-    assert project.st_statement_total == 4
-    assert project.st_statement_semantic_count == 4
+    assert project.st_statement_total == 5
+    assert project.st_statement_semantic_count == 5
     assert all(item.semantic_state is PLCSemanticState.FULL for item in project.logic_statements)
 
     logic = next(item for item in project.output_logic if item.output_tag == "Run")
