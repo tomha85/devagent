@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   siemens:
-    name: Siemens TIA V3 qualification
+    name: Siemens TIA V4 qualification
     runs-on: ubuntu-latest
 
     steps:
@@ -45,7 +45,9 @@ jobs:
             devagent/plc \
             scripts/qualify_siemens_v1.py \
             scripts/qualify_siemens_v2.py \
-            scripts/qualify_siemens_v3.py
+            scripts/qualify_siemens_v3.py \
+            scripts/qualify_siemens_v4.py \
+            scripts/qualify_siemens_v4_extended.py
 
       - name: Run complete PLC regression suite
         run: python -m pytest -q tests/test_plc*.py
@@ -64,6 +66,16 @@ jobs:
         run: |
           python scripts/qualify_siemens_v3.py \
             --report .devagent/siemens-production-qualification-v3.json
+
+      - name: Run Siemens TIA V4 LAD/FBD Boolean qualification
+        run: |
+          python scripts/qualify_siemens_v4.py \
+            --report .devagent/siemens-production-qualification-v4.json
+
+      - name: Run Siemens TIA V4 extended action/call/runtime qualification
+        run: |
+          python scripts/qualify_siemens_v4_extended.py \
+            --report .devagent/siemens-production-qualification-v4-extended.json
 
       - name: Record exact qualification revision
         env:
@@ -85,6 +97,8 @@ jobs:
                   "siemens_v1": "PASS",
                   "siemens_v2": "PASS",
                   "siemens_v3": "PASS",
+                  "siemens_v4_boolean": "PASS",
+                  "siemens_v4_extended": "PASS",
               },
           }
           path = Path(".devagent/siemens-qualified-head.json")
@@ -102,10 +116,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: siemens-production-qualification-v3
+          name: siemens-production-qualification-v4
           path: |
             .devagent/siemens-production-qualification-v1.json
             .devagent/siemens-production-qualification-v2.json
             .devagent/siemens-production-qualification-v3.json
+            .devagent/siemens-production-qualification-v4.json
+            .devagent/siemens-production-qualification-v4-extended.json
             .devagent/siemens-qualified-head.json
           if-no-files-found: warn
