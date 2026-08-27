@@ -43,12 +43,35 @@ _install_rockwell_risk_hardening()
 # check must already be visible when safe_analysis is first loaded.
 _install_rockwell_closeout_gate_hardening()
 
+from devagent.plc.rockwell_core_review_v12 import install as _install_rockwell_core_review_v12
+
+# V12 makes the commercial engineering-review contract explicit: cause/effect,
+# unreachable logic, contradictory linear paths, and sequence-branch risks are
+# deterministic review outputs. They remain evidence-backed findings, not AI
+# guesses and not runtime PASS claims.
+_install_rockwell_core_review_v12()
+
+from devagent.plc.fat_procedure_v12 import install as _install_fat_procedure_v12
+
+# Every FAT candidate, including tests created later by requirement mapping,
+# must be an engineer-ready manual procedure. DevAgent plans the FAT; it does not
+# connect to or execute the engineer's external simulator/HIL/controller.
+_install_fat_procedure_v12()
+
 from devagent.plc.rockwell_regression_evidence_hardening import (
     install as _install_rockwell_regression_evidence_hardening,
     install_domain_evidence as _install_rockwell_regression_domain_evidence,
 )
 
 _install_rockwell_regression_evidence_hardening()
+
+from devagent.plc.rockwell_regression_case_compat_v12 import (
+    install as _install_rockwell_regression_case_compat_v12,
+)
+
+# FAT-plan regression is semantic and case-insensitive. Studio 5000 identifier
+# spelling changes alone must not force a retest or create a false regression.
+_install_rockwell_regression_case_compat_v12()
 
 from devagent.plc.semantic_coverage_report import install as _install_semantic_coverage_report
 

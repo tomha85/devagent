@@ -25,8 +25,8 @@ class RockwellMotionRuntimeModel:
 
 def _expectation(name: str, primary: str) -> str:
     common = (
-        "Qualified runtime execution must record command acceptance, completion/in-process state, "
-        "fault/error state, and any controller-visible state transition caused by this instruction."
+        "The engineer should record command acceptance, completion/in-process state, fault/error state, "
+        "and any controller-visible state transition caused by this instruction."
     )
     if name == "MAH":
         return f"Exercise axis-home command for {primary}. {common}"
@@ -80,29 +80,29 @@ def motion_runtime_models(project) -> list[RockwellMotionRuntimeModel]:
 
 
 def generate_motion_runtime_fat_tests(project) -> list[FATTestCase]:
-    """Generate traceable motion FAT scenarios without claiming static execution.
+    """Generate traceable motion FAT recommendations without executing motion.
 
     The current generic FAT schema can express Boolean setup directly but cannot
-    encode arbitrary motion structures/numeric trajectories as typed inputs.
-    Therefore these scenarios deliberately carry no fabricated preconditions.
-    A qualified Echo/HIL/controller adapter must obtain the exact instruction
-    arguments from the evidence-linked source and return authenticated evidence.
+    infer arbitrary motion structures/numeric trajectories safely. Therefore
+    these procedures deliberately carry no fabricated setup values. The PLC
+    engineer uses the exact evidence-linked project/instruction configuration in
+    an independently selected test environment.
     """
     tests: list[FATTestCase] = []
     for model in motion_runtime_models(project):
-        digest = hashlib.sha1(f"{model.id}:runtime".encode("utf-8")).hexdigest()[:10]
+        digest = hashlib.sha1(f"{model.id}:fat".encode("utf-8")).hexdigest()[:10]
         tests.append(
             FATTestCase(
                 id=f"FAT-MOTION-{digest}",
-                title=f"Runtime-check {model.instruction} at {model.source.locator}",
+                title=f"FAT-check {model.instruction} at {model.source.locator}",
                 source=model.source,
                 output_tag=model.primary_ref,
                 preconditions={},
                 expected=model.expectation,
                 limitations=(
                     "Motion behavior is not statically executed or certified by DevAgent.",
-                    "The current generic FAT schema does not fabricate motion trajectories or numeric setup values; the qualified runtime adapter must use the exact evidence-linked project/instruction configuration.",
-                    "PASS requires authenticated qualified Logix Echo/HIL/controller evidence bound to this project hash and test-plan hash.",
+                    "DevAgent does not fabricate motion trajectories or numeric setup values; the PLC engineer must use the exact evidence-linked project/instruction configuration.",
+                    "DevAgent does not connect to or execute the external simulator/HIL/controller used by the engineer for this FAT procedure.",
                 ),
                 scenario="MOTION_RUNTIME",
             )
@@ -116,14 +116,14 @@ def motion_runtime_check(project) -> StaticCheck:
         return StaticCheck(
             id="ROCKWELL_MOTION_RUNTIME_CONTRACT",
             status=StaticCheckStatus.PASS,
-            summary="No reachable MAH/MAJ/MCPM/MCS/MCTO/MDCC instruction requires a motion runtime FAT contract.",
+            summary="No reachable MAH/MAJ/MCPM/MCS/MCTO/MDCC instruction requires a motion FAT procedure.",
         )
     return StaticCheck(
         id="ROCKWELL_MOTION_RUNTIME_CONTRACT",
         status=StaticCheckStatus.WARN,
         summary=(
-            f"Generated {len(models)} evidence-linked motion runtime contract(s). "
-            "Motion remains PARTIAL until qualified Logix Echo/HIL/controller execution evidence is attached."
+            f"Generated {len(models)} evidence-linked motion FAT contract(s). "
+            "Motion remains PARTIAL until the PLC engineer executes and reviews the recommended FAT procedures."
         ),
         evidence=tuple(model.rung_id for model in models),
     )

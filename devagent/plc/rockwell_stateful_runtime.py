@@ -80,15 +80,15 @@ def _expectation(name: str, tag: str) -> str:
     if name == "RTO":
         return (
             f"With the modeled rung path TRUE, {tag}.ACC accumulates using controller time and retains accumulated state "
-            f"across a FALSE rung condition until a qualified reset action is executed"
+            f"across a FALSE rung condition until the configured reset action is executed"
         )
     if name == "CTU":
         return (
-            f"Drive the modeled rung path FALSE then TRUE; {tag}.ACC increments on the qualified false-to-true transition "
+            f"Drive the modeled rung path FALSE then TRUE; {tag}.ACC increments on the false-to-true transition "
             f"and {tag}.DN reflects the configured preset comparison"
         )
     return (
-        f"Drive the modeled rung path FALSE then TRUE; {tag}.ACC decrements on the qualified false-to-true transition "
+        f"Drive the modeled rung path FALSE then TRUE; {tag}.ACC decrements on the false-to-true transition "
         f"and {tag}.DN reflects the configured counter state"
     )
 
@@ -208,7 +208,7 @@ def augment_stateful_semantics(project) -> None:
     retained = [warning for warning in project.warnings if not warning.startswith(_WARNING_PREFIX)]
     retained.append(
         _WARNING_PREFIX
-        + "timer/counter instruction(s) require runtime time/edge evidence for behavioral PASS: "
+        + "timer/counter instruction(s) require engineer FAT observation of time/edge behavior: "
         + ", ".join(names)
     )
     project.warnings = retained
@@ -219,19 +219,19 @@ def generate_stateful_fat_tests(project) -> list[FATTestCase]:
     for model in stateful_models(project):
         for index, path in enumerate(model.paths, start=1):
             preconditions = {term.tag: term.required for term in path.terms}
-            digest = hashlib.sha1(f"{model.id}:runtime:{index}".encode("utf-8")).hexdigest()[:10]
+            digest = hashlib.sha1(f"{model.id}:fat:{index}".encode("utf-8")).hexdigest()[:10]
             suffix = f" path {index}" if len(model.paths) > 1 else ""
             tests.append(
                 FATTestCase(
                     id=f"FAT-STATEFUL-{digest}",
-                    title=f"Runtime-check {model.instruction} {model.structure_tag}{suffix} at {model.source.locator}",
+                    title=f"FAT-check {model.instruction} {model.structure_tag}{suffix} at {model.source.locator}",
                     source=model.source,
                     output_tag=model.structure_tag,
                     preconditions=dict(sorted(preconditions.items())),
                     expected=model.runtime_expectation,
                     limitations=(
-                        "This is a runtime FAT candidate; static source analysis does not execute controller time, prescan, edge storage, or retentive state.",
-                        "PASS requires qualified Logix Echo/HIL/controller evidence bound to this exact project and test ID.",
+                        "This is an engineer-executed FAT recommendation; static source analysis does not execute controller time, prescan, edge storage, or retentive state.",
+                        "DevAgent does not connect to or execute the external simulator/HIL/controller used by the engineer for this FAT procedure.",
                     ),
                     scenario="STATEFUL_RUNTIME",
                 )
@@ -250,7 +250,7 @@ def stateful_runtime_check(project) -> StaticCheck:
         return StaticCheck(
             id="ROCKWELL_STATEFUL_RUNTIME_SEMANTICS",
             status=StaticCheckStatus.PASS,
-            summary="No reachable TON/TOF/RTO/CTU/CTD instructions require stateful runtime FAT modeling.",
+            summary="No reachable TON/TOF/RTO/CTU/CTD instructions require stateful FAT modeling.",
         )
     models = stateful_models(project)
     modeled_rungs = {model.rung_id for model in models}
@@ -259,9 +259,9 @@ def stateful_runtime_check(project) -> StaticCheck:
         id="ROCKWELL_STATEFUL_RUNTIME_SEMANTICS",
         status=StaticCheckStatus.WARN,
         summary=(
-            f"Generated bounded runtime semantics for {len(models)} timer/counter occurrence(s) across {len(modeled_rungs)} rung(s). "
-            "Timer/counter behavior remains PARTIAL until qualified execution evidence is attached."
-            + (f" {len(withheld)} reachable stateful rung(s) are also withheld from runtime test generation." if withheld else "")
+            f"Generated bounded FAT semantics for {len(models)} timer/counter occurrence(s) across {len(modeled_rungs)} rung(s). "
+            "Timer/counter behavior remains PARTIAL until the PLC engineer performs the recommended FAT procedure."
+            + (f" {len(withheld)} reachable stateful rung(s) are also withheld from FAT generation." if withheld else "")
         ),
         evidence=tuple(withheld),
     )

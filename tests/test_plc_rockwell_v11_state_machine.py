@@ -43,13 +43,17 @@ def test_v11_discovers_bounded_deterministic_state_transition(tmp_path: Path) ->
     assert len(tests) == 1
     assert tests[0].execution_status == "NOT_RUN"
     assert "2 -> 3" in tests[0].title
+    assert tests[0].engineer_execution_required is True
+    assert tests[0].setup_steps
+    assert tests[0].action_steps
+    assert tests[0].evidence_required
 
     check = next(item for item in result.static_checks if item.id == "ROCKWELL_STATE_MACHINE_DISCOVERY")
     assert check.status is StaticCheckStatus.PASS
     assert "1 bounded deterministic" in check.summary
 
 
-def test_v11_state_transition_with_motion_is_runtime_trace_only(tmp_path: Path) -> None:
+def test_v11_state_transition_with_motion_is_fat_required_trace_only(tmp_path: Path) -> None:
     result = analyze_rockwell_l5x(
         _write(tmp_path, "EQU(Step,2)MCPM(Coord,Path,MotionCtl)MOV(3,Step);")
     )
@@ -61,4 +65,4 @@ def test_v11_state_transition_with_motion_is_runtime_trace_only(tmp_path: Path) 
 
     check = next(item for item in result.static_checks if item.id == "ROCKWELL_STATE_MACHINE_DISCOVERY")
     assert check.status is StaticCheckStatus.WARN
-    assert "1 traceable runtime transition" in check.summary
+    assert "1 FAT-required transition" in check.summary

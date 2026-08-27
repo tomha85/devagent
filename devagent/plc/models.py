@@ -289,6 +289,15 @@ class FATTestCase:
     execution_status: str = "NOT_RUN"
     limitations: tuple[str, ...] = ()
     scenario: str = "POSITIVE_PATH"
+    purpose: str = ""
+    setup_steps: tuple[str, ...] = ()
+    action_steps: tuple[str, ...] = ()
+    watch_tags: tuple[str, ...] = ()
+    evidence_required: tuple[str, ...] = ()
+    why_required: str = ""
+    failure_implication: str = ""
+    recommended_environment: str = "Engineer-selected simulator, HIL/test bench, or real PLC under approved engineering procedures"
+    engineer_execution_required: bool = True
 
 
 @dataclass(frozen=True)

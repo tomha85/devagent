@@ -76,7 +76,7 @@ def test_v11_case_with_nested_control_remains_partial(tmp_path: Path) -> None:
     )
 
 
-def test_v11_motion_generates_runtime_fat_without_static_pass(tmp_path: Path) -> None:
+def test_v11_motion_generates_engineer_fat_without_static_pass(tmp_path: Path) -> None:
     body = '''<Routine Name="Motion" Type="RLL"><RLLContent>
       <Rung Number="0"><Text><![CDATA[XIC(Enable)MAJ(Axis1,JogControl,1,100.0);]]></Text></Rung>
       <Rung Number="1"><Text><![CDATA[MCPM(CoordSys,PathData,MotionControl);]]></Text></Rung>
@@ -94,7 +94,10 @@ def test_v11_motion_generates_runtime_fat_without_static_pass(tmp_path: Path) ->
     tests = [item for item in result.fat_tests if item.scenario == "MOTION_RUNTIME"]
     assert len(tests) == 2
     assert all(item.execution_status == "NOT_RUN" for item in tests)
-    assert all("qualified" in " ".join(item.limitations).lower() for item in tests)
+    assert all("does not connect" in " ".join(item.limitations).lower() for item in tests)
+    assert all(item.engineer_execution_required for item in tests)
+    assert all(item.purpose and item.setup_steps and item.action_steps for item in tests)
+    assert all(item.evidence_required and item.failure_implication for item in tests)
     assert {"Axis1", "CoordSys"} == {item.output_tag for item in tests}
 
     check = next(item for item in result.static_checks if item.id == "ROCKWELL_MOTION_RUNTIME_CONTRACT")

@@ -29,7 +29,7 @@ def render_semantic_coverage_section(project) -> str:
     lines = [
         "## Semantic Coverage / Proof Boundary",
         "",
-        "> This section separates deterministic behavior proof from structural parsing and runtime-required semantics. Structural recognition is not a behavioral PASS.",
+        "> This section separates deterministic behavior proof from structural parsing and FAT-required behavior. Structural recognition is not a behavioral PASS.",
         "",
         "### Project Inventory",
         "",
@@ -57,11 +57,11 @@ def render_semantic_coverage_section(project) -> str:
         f"- Bounded data/compute action RLL rungs: **{rll['bounded_action_rungs']}**",
         f"- Bounded action occurrences: **{action['modeled_actions']}** across **{action['modeled_rungs']}** rung(s)",
         f"- Stateful timer/counter runtime models: **{stateful['modeled_occurrences']}**",
-        f"- Stateful runtime evidence required: **{'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}**",
+        f"- Stateful runtime evidence required: **{'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}** (engineer-executed FAT; DevAgent does not execute external software)",
         f"- Motion runtime contracts: **{motion.get('modeled_occurrences', 0)}**",
-        f"- Motion runtime evidence required: **{'yes' if motion.get('requires_qualified_runtime_evidence') else 'no'}**",
+        f"- Motion runtime evidence required: **{'yes' if motion.get('requires_qualified_runtime_evidence') else 'no'}** (engineer-executed FAT; DevAgent does not execute external software)",
         f"- Discovered state transitions: **{state_machine.get('transition_count', 0)}** across **{state_machine.get('state_tag_count', 0)}** state tag(s)",
-        f"- State-machine runtime evidence required: **{'yes' if state_machine.get('runtime_evidence_required') else 'no'}**",
+        f"- State-machine runtime evidence required: **{'yes' if state_machine.get('runtime_evidence_required') else 'no'}** (engineer-executed FAT; DevAgent does not execute external software)",
         f"- ST statements discovered: **{st['statements']}**",
         f"- Reachable FULL ST dataflow: **{st['reachable_full_dataflow_statements']}**/{st['statements']} ({_pct(st['reachable_full_dataflow_pct'])})",
         f"- ST partial/unreachable: **{st['partial_or_unreachable_statements']}**",
@@ -102,9 +102,70 @@ def render_semantic_coverage_section(project) -> str:
     return "\n".join(lines)
 
 
+def render_fat_procedure_section(result) -> str:
+    lines = [
+        "## Engineer FAT Procedures",
+        "",
+        "> DevAgent generates these procedures from PLC evidence and requirements. DevAgent does not connect to, write to, or execute an external simulator/HIL/PLC. The PLC engineer performs the procedure and records the result.",
+        "",
+        f"Recommended FAT procedures: **{len(result.engineering.fat_tests)}**",
+        "",
+    ]
+    if not result.engineering.fat_tests:
+        lines += ["_No bounded FAT procedure could be generated for this project._", ""]
+        return "\n".join(lines)
+
+    for test in result.engineering.fat_tests:
+        lines += [
+            f"### {test.id} — {test.title}",
+            "",
+            f"- Scenario: `{test.scenario}`",
+            f"- Source: `{test.source.locator}`",
+            f"- Output / primary watch target: `{test.output_tag}`",
+            f"- Purpose: {test.purpose or test.title}",
+            f"- Why this test is required: {test.why_required or 'Confirm the evidence-linked behavior before commissioning.'}",
+            f"- Recommended environment: {test.recommended_environment}",
+            f"- DevAgent execution status: **{test.execution_status}**",
+            "",
+            "**Setup / Preconditions**",
+            "",
+        ]
+        lines += [f"{index}. {step}" for index, step in enumerate(test.setup_steps, start=1)] or ["1. Review the evidence-linked source and establish the required initial state."]
+        lines += ["", "**Test Actions**", ""]
+        lines += [f"{index}. {step}" for index, step in enumerate(test.action_steps, start=1)] or ["1. Execute the condition manually in the engineer-selected test environment."]
+        lines += [
+            "",
+            "**Watch / Record**",
+            "",
+            "- " + (", ".join(f"`{tag}`" for tag in test.watch_tags) or f"`{test.output_tag}`"),
+            "",
+            "**Expected Result**",
+            "",
+            test.expected,
+            "",
+            "**Evidence to Capture**",
+            "",
+        ]
+        lines += [f"- {item}" for item in test.evidence_required] or ["- Engineer-recorded observed result and relevant tag trace/screenshot."]
+        lines += [
+            "",
+            "**Failure Implication**",
+            "",
+            test.failure_implication or "The implementation may not match the intended behavior and should be reviewed before commissioning.",
+            "",
+        ]
+        if test.limitations:
+            lines += ["**Analysis Boundaries**", ""]
+            lines += [f"- {item}" for item in test.limitations]
+            lines.append("")
+    return "\n".join(lines)
+
+
 def render_production_report(result) -> str:
     base = _ORIGINAL_RENDER(result)
-    section = render_semantic_coverage_section(result.engineering.project)
+    semantic = render_semantic_coverage_section(result.engineering.project)
+    fat = render_fat_procedure_section(result)
+    section = semantic + "\n" + fat
     marker = "## Production Release Policy"
     if marker in base:
         return base.replace(marker, section + "\n" + marker, 1)
@@ -119,4 +180,9 @@ def install() -> None:
     _INSTALLED = True
 
 
-__all__ = ["install", "render_production_report", "render_semantic_coverage_section"]
+__all__ = [
+    "install",
+    "render_fat_procedure_section",
+    "render_production_report",
+    "render_semantic_coverage_section",
+]

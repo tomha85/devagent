@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from devagent.plc import analysis as _base
+from devagent.plc.fat_procedure_v12 import enrich_fat_procedures
 from devagent.plc.models import PLCDependencyEdge, PLCOutcome, StaticCheck, StaticCheckStatus
 from devagent.plc.rockwell_closeout import augment_closeout_semantics, rockwell_support_check
 from devagent.plc.rockwell_compare import (
@@ -101,8 +102,8 @@ def _bounded_compare_check(project):
 
 def _limitations(project, state, compare_check, support_check) -> list[str]:
     result = [
-        "PLC static analysis does not by itself execute Studio 5000, Logix Echo, or a real controller.",
-        "FAT cases are engineering test candidates, not PASS results, until an execution backend observes expected behavior.",
+        "DevAgent performs PLC engineering analysis and FAT planning; it does not execute or control an external simulator, HIL system, or PLC.",
+        "Generated FAT cases are engineer-executed test recommendations, not PASS results. The PLC engineer must perform the procedure and record the observed result separately.",
         "The analyzer does not infer safety integrity level, required timing, process physics, or machine requirements that are absent from the project.",
         *project.warnings,
     ]
@@ -184,6 +185,7 @@ def analyze_rockwell_l5x(path):
             if item.id not in known_ids:
                 fat_tests.append(item)
                 known_ids.add(item.id)
+    fat_tests = enrich_fat_procedures(project, fat_tests)
 
     checks = _base.static_verify(project, graph, fat_tests)
     structure_check = rockwell_structure_check(project)
@@ -231,15 +233,15 @@ def analyze_rockwell_l5x(path):
         )
     if stateful_check.status is StaticCheckStatus.WARN:
         limitations.append(
-            "Timer/counter FAT candidates require qualified runtime evidence for controller time, edge transitions, prescan, and retentive state; static analysis alone cannot mark them PASS."
+            "Timer/counter FAT procedures require engineer-executed observation of controller time, edge transitions, prescan, and retentive state; static analysis alone cannot mark them PASS."
         )
     if motion_check.status is StaticCheckStatus.WARN:
         limitations.append(
-            "Motion FAT contracts are generated as runtime scenarios only. MAH/MAJ/MCPM/MCS/MCTO/MDCC behavior remains PARTIAL until authenticated qualified Logix Echo/HIL/controller evidence is attached."
+            "Motion FAT procedures are recommendations only. MAH/MAJ/MCPM/MCS/MCTO/MDCC behavior remains PARTIAL until the PLC engineer tests the procedure in an appropriate external test environment."
         )
     if state_machine.status is StaticCheckStatus.WARN:
         limitations.append(
-            "State-machine transitions discovered on rungs containing behavior outside the bounded compare/MOV grammar remain traceable runtime candidates rather than static PASS claims."
+            "State-machine transitions discovered on rungs containing behavior outside the bounded compare/MOV grammar remain traceable FAT-required candidates rather than static PASS claims."
         )
     result.limitations = list(dict.fromkeys(limitations))
     return result

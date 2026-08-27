@@ -3,30 +3,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 from devagent.config import ProviderConfig, load_config, provider_defaults
 from devagent.plc.models import plc_jsonable
-from devagent.plc.production_models import EvidenceItem, ReadinessStatus, StageRecord, StageStatus
+from devagent.plc.production_models import ReadinessStatus
 from devagent.plc.production_report import render_production_report
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.production_verification import (
     compute_requirements_sha256,
     compute_test_plan_sha256,
 )
-from devagent.plc.rockwell_echo import EchoExecutionPackage, run_echo_execution
 from devagent.plc.rockwell_l5x import L5XError
-from devagent.plc.signature_trust import load_trusted_signer_store
-from devagent.plc.trusted_snapshot import (
-    parse_backend_registry_snapshot,
-    read_json_snapshot,
-    verify_snapshot_signature,
-)
 from devagent.providers import ProviderError, create_provider
 
 _STAGE_NAMES = (
@@ -38,20 +29,23 @@ _STAGE_NAMES = (
     "REQUIREMENT INGESTION",
     "REQUIREMENT VERIFICATION",
     "TEST GENERATION",
-    "TEST EXECUTION",
+    "FAT EXECUTION STATUS",
     "RISK DETECTION",
     "OPTIMIZATION REVIEW",
     "REGRESSION ANALYSIS",
     "RECOMMENDATIONS",
     "EVIDENCE + FAT REPORT",
-    "RELEASE READINESS",
+    "ENGINEERING READINESS",
 )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent plc",
-        description="Evidence-driven Rockwell PLC engineering review, requirements verification, qualified FAT execution, cryptographic trust, regression, and policy-based release readiness",
+        description=(
+            "Evidence-driven Rockwell PLC engineering review, requirements verification, logic/risk analysis, "
+            "regression impact analysis, and engineer-ready FAT planning. DevAgent does not connect to or execute external PLC software."
+        ),
     )
     parser.add_argument("project", type=Path, help="Rockwell Studio 5000 full-project .L5X export")
     parser.add_argument(
@@ -62,64 +56,45 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Requirement artifact (.txt/.md/.csv/.json/.docx; .pdf when pypdf is installed). Repeatable.",
     )
-    parser.add_argument("--baseline", type=Path, help="Previous full-project L5X for semantic regression analysis")
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="Previous full-project L5X for revision impact, regression risk, affected requirements, and FAT retest analysis",
+    )
     parser.add_argument(
         "--execution-results",
         type=Path,
-        help="Signed JSON execution evidence from a qualified simulator/HIL/controller backend",
+        help=(
+            "Optional signed results imported after the PLC engineer manually executes FAT in an external test environment. "
+            "DevAgent does not launch or control that environment."
+        ),
     )
     parser.add_argument(
         "--execution-backend-registry",
         type=Path,
-        help="Signed approved backend qualification registry. Required for execution evidence or direct Echo execution.",
-    )
-    parser.add_argument(
-        "--rockwell-echo-runner",
-        type=Path,
-        help="Explicit local FactoryTalk Logix Echo SDK runner implementing the DevAgent V6 runner protocol",
-    )
-    parser.add_argument(
-        "--rockwell-runtime-project",
-        type=Path,
-        help="Runtime project artifact downloaded by the Echo runner; its SHA-256 must match the signed runtime binding",
-    )
-    parser.add_argument(
-        "--rockwell-runtime-binding",
-        type=Path,
-        help="Signed binding between analyzed L5X, runtime project, controller identity, adapter ID, and exact runner SHA-256",
-    )
-    parser.add_argument(
-        "--rockwell-time-quantum-us",
-        type=int,
-        help="CoSimulation time quantum in microseconds. Required unless the qualified runner declares a default.",
-    )
-    parser.add_argument(
-        "--rockwell-execution-timeout-sec",
-        type=int,
-        default=900,
-        help="Maximum direct Echo runner execution time in seconds (1..7200; default 900).",
+        help="Optional signed provenance/qualification registry required only when importing --execution-results.",
     )
     parser.add_argument(
         "--release-policy",
         type=Path,
-        help="Signed production release policy. External policies always require trusted Ed25519 verification.",
+        help="Optional signed engineering/release policy. External policies require trusted Ed25519 verification.",
     )
     parser.add_argument(
         "--trust-store",
         type=Path,
-        help="Operator-supplied trusted signer store for release policy/evidence/runtime-binding/approval verification.",
+        help="Operator-supplied trusted signer store for imported policy/evidence/approval verification.",
     )
     parser.add_argument(
         "--approval",
         type=Path,
-        help="Signed human engineering approval bound to the exact verification context",
+        help="Optional signed human engineering approval bound to the exact verification context",
     )
     parser.add_argument("--ai", action="store_true", help="Enable evidence-constrained AI engineering review and requirement trace candidates")
     parser.add_argument("--require-ai", action="store_true", help="Fail the run if requested AI review cannot complete")
     parser.add_argument("--provider", help="Override configured AI provider for this PLC run")
     parser.add_argument("--model", help="Override configured AI model for this PLC run")
     parser.add_argument("--base-url", help="Override OpenAI-compatible base URL for this PLC run")
-    parser.add_argument("--output-dir", type=Path, help="Write the complete evidence/FAT package here")
+    parser.add_argument("--output-dir", type=Path, help="Write the complete FAT planning and engineering review package here")
     parser.add_argument("--no-write", action="store_true", help="Print the report without writing run artifacts")
     return parser
 
@@ -137,17 +112,41 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _persist_run(
-    output_dir: Path,
-    result,
-    report: str,
-    *,
-    rockwell_package: EchoExecutionPackage | None = None,
-) -> None:
+def _persist_run(output_dir: Path, result, report: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=False)
     project_sha = result.engineering.project.metadata.source_sha256
     plan_sha = compute_test_plan_sha256(result.engineering.fat_tests)
     requirements_sha = compute_requirements_sha256(result.requirements)
+
+    fat_plan = {
+        "schema": "devagent-plc-fat-plan-v1",
+        "project_sha256": project_sha,
+        "test_plan_sha256": plan_sha,
+        "requirements_sha256": requirements_sha,
+        "baseline_sha256": result.baseline_sha256,
+        "execution_owner": "PLC_ENGINEER",
+        "devagent_connects_to_external_test_software": False,
+        "tests": result.engineering.fat_tests,
+    }
+    # Preserve the established artifact name/schema for existing consumers while
+    # making the ownership boundary explicit. This is a planning artifact only;
+    # DevAgent does not launch, control, or write to external PLC test software.
+    execution_plan = {
+        "schema": "devagent-plc-execution-plan-v3",
+        "project_sha256": project_sha,
+        "test_plan_sha256": plan_sha,
+        "requirements_sha256": requirements_sha,
+        "backend_registry_sha256": result.execution_backend_registry_sha256,
+        "execution_results_sha256": result.execution_results_sha256,
+        "baseline_sha256": result.baseline_sha256,
+        "release_policy_sha256": result.release_policy_sha256,
+        "trust_store_sha256": result.trust_store_sha256,
+        "verification_context_sha256": result.verification_context_sha256,
+        "execution_owner": "PLC_ENGINEER",
+        "devagent_connects_to_external_test_software": False,
+        "tests": result.engineering.fat_tests,
+    }
+
     files: dict[str, object | str] = {
         "canonical_ir.json": result.engineering.project,
         "dependency_graph.json": result.engineering.graph,
@@ -160,19 +159,8 @@ def _persist_run(
         "requirements.json": result.requirements,
         "requirement_verification.json": result.requirement_verification,
         "fat_tests.json": result.engineering.fat_tests,
-        "execution_plan.json": {
-            "schema": "devagent-plc-execution-plan-v3",
-            "project_sha256": project_sha,
-            "test_plan_sha256": plan_sha,
-            "requirements_sha256": requirements_sha,
-            "backend_registry_sha256": result.execution_backend_registry_sha256,
-            "execution_results_sha256": result.execution_results_sha256,
-            "baseline_sha256": result.baseline_sha256,
-            "release_policy_sha256": result.release_policy_sha256,
-            "trust_store_sha256": result.trust_store_sha256,
-            "verification_context_sha256": result.verification_context_sha256,
-            "tests": result.engineering.fat_tests,
-        },
+        "fat_plan.json": fat_plan,
+        "execution_plan.json": execution_plan,
         "test_execution.json": result.executions,
         "risks.json": result.risks,
         "optimizations.json": result.optimizations,
@@ -201,10 +189,6 @@ def _persist_run(
         files["trusted_signers_normalized.json"] = result.trust_store
     if result.verified_signatures:
         files["verified_signatures.json"] = result.verified_signatures
-    if rockwell_package is not None:
-        files["rockwell_echo_runner.json"] = rockwell_package.descriptor.jsonable()
-        files["rockwell_runtime_binding_normalized.json"] = rockwell_package.binding.jsonable()
-        files["rockwell_echo_execution_request.json"] = rockwell_package.request
 
     written: list[Path] = []
     for name, value in files.items():
@@ -214,17 +198,13 @@ def _persist_run(
         else:
             _write_json(path, value)
         written.append(path)
-    if rockwell_package is not None:
-        raw_binding = output_dir / "rockwell_runtime_binding_signed.json"
-        raw_binding.write_bytes(rockwell_package.runtime_binding_bytes)
-        written.append(raw_binding)
-        raw_results = output_dir / "rockwell_echo_execution_results_signed.json"
-        raw_results.write_bytes(rockwell_package.execution_results_bytes)
-        written.append(raw_results)
 
     manifest = {
+        # V12 is additive at the artifact level. Keep the run-manifest schema
+        # stable so existing automation does not break when FAT planning fields
+        # are added.
         "schema": "devagent-plc-run-v4",
-        "production_profile": "ROCKWELL_V6_ECHO" if rockwell_package is not None else "PLC_V5_TRUST",
+        "production_profile": "PLC_ENGINEERING_REVIEW_FAT_PLANNING",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_source": result.engineering.project.metadata.source_path,
         "project_sha256": project_sha,
@@ -243,18 +223,8 @@ def _persist_run(
         "trust_store_sha256": result.trust_store_sha256,
         "verified_signature_count": len(result.verified_signatures),
         "verification_context_sha256": result.verification_context_sha256,
-        "rockwell_runtime_project_sha256": (
-            rockwell_package.binding.runtime_project_sha256 if rockwell_package is not None else None
-        ),
-        "rockwell_runtime_binding_sha256": (
-            rockwell_package.binding.source_sha256 if rockwell_package is not None else None
-        ),
-        "rockwell_echo_runner_sha256": (
-            rockwell_package.descriptor.runner_sha256 if rockwell_package is not None else None
-        ),
-        "rockwell_echo_execution_request_sha256": (
-            rockwell_package.request_sha256 if rockwell_package is not None else None
-        ),
+        "execution_owner": "PLC_ENGINEER",
+        "devagent_connects_to_external_test_software": False,
         "artifacts": {path.name: _sha256(path) for path in written},
     }
     _write_json(output_dir / "run_manifest.json", manifest)
@@ -285,209 +255,12 @@ def _provider_from_args(args) -> tuple[object | None, str | None, str | None]:
     return create_provider(config), config.provider, config.model
 
 
-def _rockwell_direct_requested(args) -> bool:
-    return any(
-        value is not None
-        for value in (
-            args.rockwell_echo_runner,
-            args.rockwell_runtime_project,
-            args.rockwell_runtime_binding,
-            args.rockwell_time_quantum_us,
-        )
-    )
-
-
 def _validate_execution_args(args) -> str | None:
-    direct = _rockwell_direct_requested(args)
-    if args.execution_results is not None and direct:
-        return "--execution-results cannot be combined with direct --rockwell-echo-runner execution"
     if args.execution_results is not None and args.execution_backend_registry is None:
-        return "--execution-results requires --execution-backend-registry"
-    if direct:
-        missing = [
-            name
-            for name, value in (
-                ("--rockwell-echo-runner", args.rockwell_echo_runner),
-                ("--rockwell-runtime-project", args.rockwell_runtime_project),
-                ("--rockwell-runtime-binding", args.rockwell_runtime_binding),
-                ("--execution-backend-registry", args.execution_backend_registry),
-                ("--trust-store", args.trust_store),
-            )
-            if value is None
-        ]
-        if missing:
-            return "direct Rockwell Echo execution requires " + ", ".join(missing)
-        if args.approval is not None:
-            return (
-                "direct Rockwell Echo execution cannot consume --approval in the same run; "
-                "sign approval after the exact execution-results hash is generated, then rerun with --execution-results"
-            )
+        return "--execution-results requires --execution-backend-registry for imported-result provenance"
     if args.release_policy is not None and args.trust_store is None:
-        return "--release-policy requires --trust-store because external production policies must be signed"
+        return "--release-policy requires --trust-store because external policies must be signed"
     return None
-
-
-def _add_rockwell_execution_evidence(result, package: EchoExecutionPackage) -> None:
-    if not any(
-        item.get("purpose") == "RUNTIME_PROJECT_BINDING"
-        and item.get("artifact_sha256") == package.binding.source_sha256
-        for item in result.verified_signatures
-    ):
-        result.verified_signatures.append(package.binding_signature)
-    result.evidence.extend(
-        [
-            EvidenceItem(
-                f"ROCKWELL-RUNTIME-BINDING:{package.binding.source_sha256}",
-                "ROCKWELL_RUNTIME_BINDING",
-                f"Authenticated runtime binding signed by trusted key {package.binding_signature.get('key_id')} between analyzed L5X, runtime project, controller, adapter ID, and exact runner SHA-256.",
-                package.binding.source_path,
-                package.binding.source_sha256,
-                {
-                    **package.binding.jsonable(),
-                    "signature": package.binding_signature,
-                },
-            ),
-            EvidenceItem(
-                f"ROCKWELL-ECHO-RUNNER:{package.descriptor.runner_sha256}",
-                "ROCKWELL_ECHO_RUNNER",
-                f"FactoryTalk Logix Echo execution adapter {package.descriptor.adapter_id} {package.descriptor.adapter_version} declared required V6 capabilities.",
-                package.descriptor.runner_path,
-                package.descriptor.runner_sha256,
-                package.descriptor.jsonable(),
-            ),
-            EvidenceItem(
-                f"ROCKWELL-ECHO-REQUEST:{package.request_sha256}",
-                "ROCKWELL_EXECUTION_REQUEST",
-                "Typed FAT request sent to the qualified Echo adapter with snapshot-per-test isolation and physical-controller writes disabled.",
-                source_sha256=package.request_sha256,
-                payload={
-                    "runtime_project_sha256": package.binding.runtime_project_sha256,
-                    "runtime_binding_sha256": package.binding.source_sha256,
-                    "runner_sha256": package.descriptor.runner_sha256,
-                    "test_count": len(package.request.get("tests", [])),
-                },
-            ),
-        ]
-    )
-    stage = result.stages[13]
-    result.stages[13] = StageRecord(
-        14,
-        stage.name,
-        StageStatus.PASS,
-        f"Assembled {len(result.evidence)} evidence item(s), including signed Rockwell runtime binding, Echo runner identity, execution request, and V5 trust provenance.",
-        stage.evidence_ids,
-    )
-
-
-def _copy_small_input(source: Path, destination: Path, *, max_bytes: int, label: str) -> Path:
-    target = source.expanduser().resolve(strict=True)
-    payload = target.read_bytes()
-    if len(payload) > max_bytes:
-        raise ValueError(f"{label} exceeds {max_bytes} byte direct-execution limit")
-    destination.write_bytes(payload)
-    return destination
-
-
-def _copy_runtime_project(source: Path, directory: Path) -> Path:
-    target = source.expanduser().resolve(strict=True)
-    if not target.is_file():
-        raise ValueError("Rockwell runtime project must be a regular file")
-    if target.stat().st_size > 2 * 1024 * 1024 * 1024:
-        raise ValueError("Rockwell runtime project exceeds 2 GiB production limit")
-    destination = directory / ("runtime-project" + target.suffix)
-    shutil.copyfile(target, destination)
-    try:
-        destination.chmod(0o444)
-    except OSError:
-        pass
-    return destination
-
-
-def _run_direct_echo(args, provider, provider_name, model_name):
-    with tempfile.TemporaryDirectory(prefix="devagent-rockwell-echo-") as directory_name:
-        directory = Path(directory_name)
-        trust_path = _copy_small_input(
-            args.trust_store,
-            directory / "trusted-signers.json",
-            max_bytes=1024 * 1024,
-            label="PLC trust store",
-        )
-        registry_path = _copy_small_input(
-            args.execution_backend_registry,
-            directory / "backend-registry.json",
-            max_bytes=1024 * 1024,
-            label="Execution backend registry",
-        )
-        policy_path = None
-        if args.release_policy is not None:
-            policy_path = _copy_small_input(
-                args.release_policy,
-                directory / "release-policy.json",
-                max_bytes=1024 * 1024,
-                label="PLC release policy",
-            )
-        runtime_path = _copy_runtime_project(args.rockwell_runtime_project, directory)
-
-        trust_store = load_trusted_signer_store(trust_path)
-        if trust_store is None:
-            raise ValueError("Direct Rockwell Echo execution requires a trusted signer store")
-        registry_snapshot = read_json_snapshot(
-            registry_path,
-            max_bytes=1024 * 1024,
-            purpose="EXECUTION_BACKEND_REGISTRY",
-        )
-        verify_snapshot_signature(
-            registry_snapshot,
-            purpose="EXECUTION_BACKEND_REGISTRY",
-            trust_store=trust_store,
-            required=True,
-        )
-        backend_registry = parse_backend_registry_snapshot(registry_snapshot)
-
-        preliminary = run_production_verification_v5(
-            args.project,
-            requirement_paths=args.requirements,
-            baseline_path=args.baseline,
-            execution_results_path=None,
-            execution_backend_registry_path=registry_path,
-            release_policy_path=policy_path,
-            trust_store_path=trust_path,
-            approval_path=None,
-            provider=provider,
-            ai_enabled=args.ai,
-            require_ai=args.require_ai,
-            ai_provider_name=provider_name,
-            ai_model_name=model_name,
-        )
-        rockwell_package = run_echo_execution(
-            preliminary,
-            runner_path=args.rockwell_echo_runner,
-            runtime_project_path=runtime_path,
-            runtime_binding_path=args.rockwell_runtime_binding,
-            backend_registry=backend_registry,
-            trust_store=trust_store,
-            time_quantum_us=args.rockwell_time_quantum_us,
-            timeout_seconds=args.rockwell_execution_timeout_sec,
-        )
-        execution_path = directory / "execution-results.json"
-        execution_path.write_bytes(rockwell_package.execution_results_bytes)
-        result = run_production_verification_v5(
-            args.project,
-            requirement_paths=args.requirements,
-            baseline_path=args.baseline,
-            execution_results_path=execution_path,
-            execution_backend_registry_path=registry_path,
-            release_policy_path=policy_path,
-            trust_store_path=trust_path,
-            approval_path=None,
-            provider=provider,
-            ai_enabled=args.ai,
-            require_ai=args.require_ai,
-            ai_provider_name=provider_name,
-            ai_model_name=model_name,
-        )
-        _add_rockwell_execution_evidence(result, rockwell_package)
-        return result, rockwell_package
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -501,30 +274,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         provider, provider_name, model_name = _provider_from_args(args)
-        rockwell_package: EchoExecutionPackage | None = None
-        if _rockwell_direct_requested(args):
-            result, rockwell_package = _run_direct_echo(
-                args,
-                provider,
-                provider_name,
-                model_name,
-            )
-        else:
-            result = run_production_verification_v5(
-                args.project,
-                requirement_paths=args.requirements,
-                baseline_path=args.baseline,
-                execution_results_path=args.execution_results,
-                execution_backend_registry_path=args.execution_backend_registry,
-                release_policy_path=args.release_policy,
-                trust_store_path=args.trust_store,
-                approval_path=args.approval,
-                provider=provider,
-                ai_enabled=args.ai,
-                require_ai=args.require_ai,
-                ai_provider_name=provider_name,
-                ai_model_name=model_name,
-            )
+        result = run_production_verification_v5(
+            args.project,
+            requirement_paths=args.requirements,
+            baseline_path=args.baseline,
+            execution_results_path=args.execution_results,
+            execution_backend_registry_path=args.execution_backend_registry,
+            release_policy_path=args.release_policy,
+            trust_store_path=args.trust_store,
+            approval_path=args.approval,
+            provider=provider,
+            ai_enabled=args.ai,
+            require_ai=args.require_ai,
+            ai_provider_name=provider_name,
+            ai_model_name=model_name,
+        )
 
         report = render_production_report(result)
         print("DevAgent PLC is working...")
@@ -538,12 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.output_dir
                 else _default_output_dir(args.project)
             )
-            _persist_run(
-                output_dir,
-                result,
-                report,
-                rockwell_package=rockwell_package,
-            )
+            _persist_run(output_dir, result, report)
             print(f"Artifacts: {output_dir}")
         if result.readiness and result.readiness.status in {
             ReadinessStatus.READY_FOR_ENGINEERING_APPROVAL,
