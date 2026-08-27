@@ -120,32 +120,32 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
     if project.metadata.source_sha256 != source_sha256:
         raise RuntimeError("Analyzer source SHA-256 does not match downloaded official artifact")
 
-    # The pinned bytes are a golden regression artifact. Both what is modeled
-    # and what is deliberately withheld are part of the contract: silently
-    # dropping branch support or falsely promoting mixed-action branches must
-    # fail the release-triggering qualification.
+    # The pinned bytes are a golden regression artifact. V16 reconciles branch
+    # coverage with every installed deterministic theorem: one OR/OTE branch is
+    # covered by the boolean theorem and six MOVE branches are covered by the
+    # bounded data/action theorem. The major-fault branch contains GSV/SSV plus
+    # mixed actions and remains deliberately withheld.
     if project.instruction_semantic_count != 49:
         raise RuntimeError(
-            "Official L85E instruction semantic coverage regressed: "
+            "Official L85E directional instruction recognition regressed: "
             f"{project.instruction_semantic_count}/{project.instruction_total}"
         )
-    if project.branch_rung_semantic_count != 1 or project.branch_rung_total != 8:
+    if project.branch_rung_semantic_count != 7 or project.branch_rung_total != 8:
         raise RuntimeError(
-            "Official L85E bounded branch profile drifted: expected 1 modeled / 7 unmodeled of 8, got "
+            "Official L85E bounded branch profile drifted: expected 7 modeled / 1 withheld of 8, got "
             f"{project.branch_rung_semantic_count}/{project.branch_rung_total}"
         )
 
-    # V10 intentionally reclassifies the two stateful timer/counter instruction
-    # occurrences in this pinned project as PARTIAL. Their operand structure is
-    # understood, but timing/edge/retentive behavior requires qualified runtime
-    # evidence and must not be counted as fully static behavior proof.
+    # GSV and SSV are directionally recognized but behaviorally PARTIAL in this
+    # pinned project. Their surrounding mixed major-fault branch therefore stays
+    # fail-closed even though the simpler boolean and MOVE branches are proven.
     expected_static_gaps = {
         "unsupported_routines": 0,
         "protected_routines": 0,
         "protected_aois": 0,
         "unknown_instructions": 0,
         "partial_instructions": 2,
-        "unmodeled_branches": 7,
+        "unmodeled_branches": 1,
         "unmodeled_st_statements": 0,
         "unmodeled_aoi_bodies": 0,
         "unbound_aoi_calls": 0,
@@ -167,12 +167,12 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         )
     if profile["static_contract"] != "PARTIAL_FAIL_CLOSED":
         raise RuntimeError(
-            "Official L85E contains seven unmodeled mixed-action branches and must remain PARTIAL_FAIL_CLOSED; got "
+            "Official L85E retains one mixed major-fault branch plus partial GSV/SSV behavior and must remain PARTIAL_FAIL_CLOSED; got "
             f"{profile['static_contract']}"
         )
     if engineering.outcome.value != "PARTIALLY_VERIFIED":
         raise RuntimeError(
-            "Official L85E unmodeled branches must withhold full static verification; got "
+            "Official L85E partial GSV/SSV and mixed major-fault branch must withhold full static verification; got "
             f"{engineering.outcome.value}"
         )
 
@@ -202,9 +202,10 @@ def _qualify_full_project(path: Path, source_sha256: str) -> dict[str, object]:
         "source_sha256": source_sha256,
         "inventory": actual_inventory,
         "instruction_semantic_coverage": project.instruction_semantic_coverage,
+        "directional_instruction_recognition": project.instruction_semantic_coverage,
         "branch_semantic_coverage": project.branch_semantic_coverage,
         "branch_modeled": project.branch_rung_semantic_count,
-        "branch_unmodeled": 7,
+        "branch_unmodeled": 1,
         "static_gaps": profile["static_gaps"],
         "fat_candidates": len(engineering.fat_tests),
         "static_outcome": engineering.outcome.value,
