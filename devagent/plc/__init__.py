@@ -101,6 +101,12 @@ from devagent.plc.professional_report_install_v14 import install as _install_pro
 # This is presentation-only: it cannot change deterministic verdicts/readiness.
 _install_professional_report_v14()
 
+from devagent.plc.report_clarity_install_v16 import install as _install_report_clarity_v16
+
+# V16 clarifies project-only review and coverage terminology without changing
+# deterministic engineering, risk, FAT, or release-readiness decisions.
+_install_report_clarity_v16()
+
 from devagent.plc.agent_harness_install_v15 import install as _install_agent_harness_v15
 
 # V15 applies modern agent orchestration only to the probabilistic assistance
