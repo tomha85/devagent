@@ -73,6 +73,14 @@ from devagent.plc.rockwell_regression_case_compat_v12 import (
 # spelling changes alone must not force a retest or create a false regression.
 _install_rockwell_regression_case_compat_v12()
 
+from devagent.plc.rockwell_branch_coverage_v16 import install as _install_rockwell_branch_coverage_v16
+
+# V16 reconciles branch coverage with the full deterministic theorem set. A
+# neutral-text branch proven by the bounded data/compute action theorem counts
+# as modeled even when it is not an OTE/OTL/OTU boolean-output branch. Mixed or
+# partially understood branch grammars remain fail-closed and withheld.
+_install_rockwell_branch_coverage_v16()
+
 from devagent.plc.semantic_coverage_report import install as _install_semantic_coverage_report
 
 # Ensure any later CLI import of render_production_report receives the
@@ -92,6 +100,12 @@ from devagent.plc.professional_report_install_v14 import install as _install_pro
 # engineering/evidence section and the established public renderer identity.
 # This is presentation-only: it cannot change deterministic verdicts/readiness.
 _install_professional_report_v14()
+
+from devagent.plc.report_clarity_install_v16 import install as _install_report_clarity_v16
+
+# V16 clarifies project-only review and coverage terminology without changing
+# deterministic engineering, risk, FAT, or release-readiness decisions.
+_install_report_clarity_v16()
 
 from devagent.plc.agent_harness_install_v15 import install as _install_agent_harness_v15
 

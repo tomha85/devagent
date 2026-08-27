@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 
 from devagent.plc.models import PLCSemanticState
+from devagent.plc.rockwell_branch_coverage_v16 import branch_coverage_profile
 from devagent.plc.rockwell_compare import compare_models
 from devagent.plc.rockwell_general_actions import action_models, action_profile
 from devagent.plc.rockwell_l5x import _instruction_semantics
@@ -56,6 +57,12 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     partial_names = {name.upper() for name in project.partially_modeled_instruction_names}
     unknown_names = {name.upper() for name in project.unknown_instruction_names}
     aoi_parameters = {item.name: item.parameters for item in project.aois}
+    branch = branch_coverage_profile(project)
+
+    # Keep compatibility project counters synchronized with the V16 union of
+    # bounded boolean-output and bounded data/compute action branch theorems.
+    project.branch_rung_total = int(branch["branch_rungs"])
+    project.branch_rung_semantic_count = int(branch["modeled_branch_rungs"])
 
     per_instruction: dict[str, Counter[str]] = defaultdict(Counter)
     totals: Counter[str] = Counter()
@@ -128,7 +135,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
     state_machine = state_machine_profile(project)
 
     return {
-        # V11 adds optional fields only. Keep the established v1 schema ID so
+        # V16 adds optional fields only. Keep the established v1 schema ID so
         # existing inspect/report consumers remain compatible.
         "schema": "devagent-plc-semantic-coverage-v1",
         "project": {
@@ -165,6 +172,7 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
             "unmodeled_occurrences": totals["UNMODELED"],
             "unmodeled_pct": pct(totals["UNMODELED"], instruction_total),
             "recognized_occurrences": recognized_total,
+            "recognized_pct": pct(recognized_total, instruction_total),
         },
         "instruction_levels": {level: totals[level] for level in _LEVEL_ORDER},
         "instructions": instruction_rows,
@@ -174,9 +182,12 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
                 "deterministic_boolean_rungs": len(deterministic_rung_keys),
                 "bounded_compare_rungs": len(bounded_compare_ids),
                 "bounded_action_rungs": len(bounded_action_ids),
-                "branch_rungs": project.branch_rung_total,
-                "branch_rungs_modeled": project.branch_rung_semantic_count,
-                "branch_coverage_pct": pct(project.branch_rung_semantic_count, project.branch_rung_total),
+                "branch_rungs": int(branch["branch_rungs"]),
+                "branch_rungs_modeled": int(branch["modeled_branch_rungs"]),
+                "boolean_branch_rungs_modeled": int(branch["boolean_branch_rungs"]),
+                "action_branch_rungs_modeled": int(branch["action_branch_rungs"]),
+                "branch_rungs_withheld": int(branch["withheld_branch_rungs"]),
+                "branch_coverage_pct": pct(int(branch["modeled_branch_rungs"]), int(branch["branch_rungs"])),
             },
             "structured_text": {
                 "statements": project.st_statement_total,
@@ -202,16 +213,20 @@ def build_semantic_coverage_manifest(project) -> dict[str, object]:
         "stateful_runtime_semantics": stateful,
         "motion_runtime_semantics": motion,
         "state_machine_semantics": state_machine,
+        "branch_semantics": branch,
         "project_boundaries": {
             "protected_routines": protected_routines,
             "unsupported_routine_types": dict(sorted(unsupported_routine_types.items())),
             "partially_modeled_instruction_names": sorted(partial_names),
             "unmodeled_instruction_names": sorted(unknown_names),
+            "withheld_instruction_occurrences": totals["UNMODELED"],
+            "withheld_branch_rungs": int(branch["withheld_branch_rungs"]),
             "warnings": list(project.warnings),
         },
         "trust_note": (
             "Deterministic coverage describes bounded reachable software semantics only. "
-            "Program RLL instruction coverage and AOI-definition coverage are separate scopes. "
+            "Instruction-name recognition, structural read/write normalization, and occurrence-level behavior proof are separate metrics. "
+            "A known instruction name may still have an occurrence withheld when its surrounding branch/control grammar is not proven. "
             "Structural coverage means reads/writes/calls are normalized but behavior is not fully proven. "
             "Timer/counter, motion, and runtime-classified state-machine scenarios remain PARTIAL until qualified execution evidence is attached. "
             "Unreachable, partial, or unmodeled behavior is excluded from deterministic verification. "

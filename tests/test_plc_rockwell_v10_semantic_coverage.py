@@ -130,7 +130,7 @@ def test_fat_report_semantic_section_uses_same_project_manifest(tmp_path: Path) 
     assert "Tags: **7**" in section
     assert "Programs: **1**" in section
     assert "Routines: **2**" in section
-    assert "Program RLL deterministic instruction coverage: **60.0%** (3/5)" in section
+    assert "Program RLL bounded deterministic behavior coverage: **60.0%** (3/5 instruction occurrences)" in section
     assert "| MOV | 1 | BOUNDED_DETERMINISTIC=1 |" in section
     assert "| MAJ | 1 | PARTIAL=1 |" in section
     assert "| VENDORMYSTERY | 1 | UNMODELED=1 |" in section
