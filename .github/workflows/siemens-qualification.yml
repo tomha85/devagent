@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   siemens:
-    name: Siemens TIA V5 qualification
+    name: Siemens TIA V7 qualification
     runs-on: ubuntu-latest
 
     steps:
@@ -48,7 +48,9 @@ jobs:
             scripts/qualify_siemens_v3.py \
             scripts/qualify_siemens_v4.py \
             scripts/qualify_siemens_v4_extended.py \
-            scripts/qualify_siemens_v5.py
+            scripts/qualify_siemens_v5.py \
+            scripts/qualify_siemens_v6.py \
+            scripts/qualify_siemens_v7.py
 
       - name: Run complete PLC regression suite
         run: python -m pytest -q tests/test_plc*.py
@@ -83,6 +85,16 @@ jobs:
           python scripts/qualify_siemens_v5.py \
             --report .devagent/siemens-production-qualification-v5.json
 
+      - name: Run Siemens TIA V6 interlock/permissive requirement qualification
+        run: |
+          python scripts/qualify_siemens_v6.py \
+            --report .devagent/siemens-production-qualification-v6.json
+
+      - name: Run Siemens TIA V7 recovery/reset/restart qualification
+        run: |
+          python scripts/qualify_siemens_v7.py \
+            --report .devagent/siemens-production-qualification-v7.json
+
       - name: Record exact qualification revision
         env:
           QUALIFIED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -106,6 +118,8 @@ jobs:
                   "siemens_v4_boolean": "PASS",
                   "siemens_v4_extended": "PASS",
                   "siemens_v5_state_machine": "PASS",
+                  "siemens_v6_interlock_permissive": "PASS",
+                  "siemens_v7_recovery_restart": "PASS",
               },
           }
           path = Path(".devagent/siemens-qualified-head.json")
@@ -123,7 +137,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: siemens-production-qualification-v5
+          name: siemens-production-qualification-v7
           path: |
             .devagent/siemens-production-qualification-v1.json
             .devagent/siemens-production-qualification-v2.json
@@ -131,5 +145,7 @@ jobs:
             .devagent/siemens-production-qualification-v4.json
             .devagent/siemens-production-qualification-v4-extended.json
             .devagent/siemens-production-qualification-v5.json
+            .devagent/siemens-production-qualification-v6.json
+            .devagent/siemens-production-qualification-v7.json
             .devagent/siemens-qualified-head.json
           if-no-files-found: warn
