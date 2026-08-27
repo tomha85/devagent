@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   siemens:
-    name: Siemens TIA V1 qualification
+    name: Siemens TIA V2 qualification
     runs-on: ubuntu-latest
 
     steps:
@@ -38,15 +38,24 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Compile PLC sources
-        run: python -m compileall -q devagent/plc scripts/qualify_siemens_v1.py
+        run: |
+          python -m compileall -q \
+            devagent/plc \
+            scripts/qualify_siemens_v1.py \
+            scripts/qualify_siemens_v2.py
 
       - name: Run complete PLC regression suite
         run: python -m pytest -q tests/test_plc*.py
 
-      - name: Run Siemens TIA engineering-export qualification
+      - name: Run Siemens TIA V1 compatibility qualification
         run: |
           python scripts/qualify_siemens_v1.py \
             --report .devagent/siemens-production-qualification-v1.json
+
+      - name: Run Siemens TIA V2 control-flow qualification
+        run: |
+          python scripts/qualify_siemens_v2.py \
+            --report .devagent/siemens-production-qualification-v2.json
 
       - name: Check patch whitespace
         run: git diff --check
@@ -55,6 +64,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: siemens-production-qualification-v1
-          path: .devagent/siemens-production-qualification-v1.json
+          name: siemens-production-qualification-v2
+          path: |
+            .devagent/siemens-production-qualification-v1.json
+            .devagent/siemens-production-qualification-v2.json
           if-no-files-found: warn
