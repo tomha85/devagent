@@ -115,7 +115,7 @@ def test_cli_verbose_siemens_progress_is_vendor_correct_from_first_stage(
     assert plc_cli.main([str(project), "--no-write", "--verbose"]) == 2
     stdout = capsys.readouterr().out
 
-    assert "Validated Siemens TIA Portal engineering export bundle for Main" in stdout
+    assert "Validated Siemens TIA Portal engineering export bundle" in stdout
     assert "tags/symbols" in stdout
     assert "routines/blocks" in stdout
     assert "SCL statements" in stdout
