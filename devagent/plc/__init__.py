@@ -51,6 +51,13 @@ from devagent.plc.rockwell_core_review_v12 import install as _install_rockwell_c
 # guesses and not runtime PASS claims.
 _install_rockwell_core_review_v12()
 
+from devagent.plc.fat_procedure_v12 import install as _install_fat_procedure_v12
+
+# Every FAT candidate, including tests created later from requirement mapping,
+# must be an engineer-ready manual procedure. DevAgent plans the FAT; it does not
+# connect to or execute the engineer's external simulator/HIL/controller.
+_install_fat_procedure_v12()
+
 from devagent.plc.rockwell_regression_evidence_hardening import (
     install as _install_rockwell_regression_evidence_hardening,
     install_domain_evidence as _install_rockwell_regression_domain_evidence,
