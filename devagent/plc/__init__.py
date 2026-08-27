@@ -97,6 +97,14 @@ from devagent.plc.semantic_coverage_report import install as _install_semantic_c
 # reachability-aware semantic coverage augmentation.
 _install_semantic_coverage_report()
 
+from devagent.plc.rockwell_system_service_report_install_v17 import (
+    install as _install_rockwell_system_service_report_v17,
+)
+
+# Keep the public report renderer identity stable while adding an explicit V17
+# system-service runtime boundary inside the semantic coverage section.
+_install_rockwell_system_service_report_v17()
+
 from devagent.plc.four_contract_v13 import install as _install_four_contract_v13
 
 # V13 makes the commercial four-core contract explicit and testable:
