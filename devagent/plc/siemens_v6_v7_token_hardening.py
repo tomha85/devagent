@@ -151,5 +151,19 @@ def install() -> None:
     _v7._risks = _risks
     _INSTALLED = True
 
+    # V8 runs after the fully-qualified V7 analyzer. It adds project-wide,
+    # scope-aware Siemens symbol/type identity and preflight input bounds without
+    # widening any V1-V7 source theorem.
+    from devagent.plc.siemens_identity_types_v8 import install as _install_siemens_identity_types_v8
+
+    _install_siemens_identity_types_v8()
+
+    # V9 is the commercial closeout layer. It accounts for every imported
+    # executable/protected/call region as FULL/PARTIAL/OPAQUE/PROTECTED and
+    # keeps every non-FULL boundary visible in evidence, risks, and reporting.
+    from devagent.plc.siemens_closeout_v9 import install as _install_siemens_closeout_v9
+
+    _install_siemens_closeout_v9()
+
 
 __all__ = ["install"]
