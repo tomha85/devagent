@@ -132,13 +132,29 @@ from devagent.plc.agent_harness_install_v15 import install as _install_agent_har
 # per-run trace capture. The PLC proof/risk/readiness core stays authoritative.
 _install_agent_harness_v15()
 
+from devagent.plc.siemens_integration_v1 import install as _install_siemens_integration_v1
+
+# Siemens V1 is a vendor branch over the already-qualified production contract.
+# It accepts offline TIA Portal Openness/XML and generated-source exports, proves
+# only bounded top-level SCL semantics, and leaves control-flow/LAD/FBD/GRAPH/STL
+# or protected behavior PARTIAL/OPAQUE. Qualified Rockwell dispatch still enters
+# the exact guarded Rockwell analyzer above.
+_install_siemens_integration_v1()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
+from devagent.plc.plc_dispatch import analyze_plc_project
+from devagent.plc.siemens_cli_install_v1 import install as _install_siemens_cli_v1
 
-# Keep existing imports from ``devagent.plc.analysis`` on the guarded public path.
-# The base module remains reusable by ``safe_analysis`` without recursive calls.
+# CLI parsing is loaded only after production_v5 exists, avoiding circular
+# imports while exposing both vendor input contracts through `devagent plc`.
+_install_siemens_cli_v1()
+
+# Keep existing imports from ``devagent.plc.analysis`` on the guarded Rockwell
+# public path. The base module remains reusable by ``safe_analysis`` without
+# recursive calls; vendor-neutral callers should use analyze_plc_project.
 _analysis.analyze_rockwell_l5x = analyze_rockwell_l5x
 
-__all__ = ["analyze_rockwell_l5x", "run_production_verification_v5"]
+__all__ = ["analyze_plc_project", "analyze_rockwell_l5x", "run_production_verification_v5"]
