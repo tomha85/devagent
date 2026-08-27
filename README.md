@@ -221,6 +221,107 @@ devagent --input ../specs/release.requirement
 
 Binary data, invalid UTF-8, secret-like paths, and files above the input-size bound are refused.
 
+## PLC engineer quick start
+
+DevAgent also provides an **offline PLC engineering review, requirement-verification, regression-analysis, risk-review, and FAT-planning workflow** through `devagent plc`.
+
+The PLC workflow is intended for controls/PLC engineers who want to review exported engineering artifacts before FAT, site travel, commissioning, or release. DevAgent does **not** connect to, upload to, download to, force, start, stop, or control a PLC, TIA Portal, Studio 5000, PLCSIM, Logix Echo, HIL bench, or production machine. Runtime FAT and commissioning execution remain owned by the PLC engineer.
+
+### 1. Export the PLC project
+
+**Rockwell Studio 5000:** export the full controller project as `.L5X`.
+
+```text
+Line1_Controller.L5X
+```
+
+**Siemens TIA Portal:** provide a TIA Openness/XML/generated-source file or export directory. Supported engineering inputs include `.scl`, `.db`, `.udt`, `.xml`, `.stl`, and `.awl`. Proprietary `.ap*` / `.zap*` project archives must be exported from TIA Portal first.
+
+For Siemens, include the related OB/FB/FC logic, DB/UDT/type evidence, generated sources, and Openness XML used by the controller whenever available. A complete export gives DevAgent a stronger project-wide call/data/identity/support-boundary view than isolated snippets.
+
+### 2. Add customer or machine requirements
+
+`--requirements` is repeatable and accepts `.txt`, `.md`, `.csv`, `.json`, `.docx`, and `.pdf` when PDF support is installed.
+
+Example:
+
+```markdown
+- Conveyor shall not run unless the main guard circuit is healthy.
+- A safety fault shall prevent the motor run output.
+- Reset shall not automatically restart the conveyor.
+```
+
+### 3. Run the engineering review
+
+Rockwell:
+
+```bash
+devagent plc ./exports/Line1_Controller.L5X \
+  --requirements ./requirements/line1.md \
+  --ai \
+  --output-dir ./plc-review/line1-current
+```
+
+Siemens:
+
+```bash
+devagent plc ./exports/TIA_Line1/ \
+  --requirements ./requirements/line1.md \
+  --ai \
+  --output-dir ./plc-review/line1-current
+```
+
+`--ai` enables the evidence-constrained AI engineering-review layer. It is optional; the deterministic PLC analysis and FAT-planning path still runs without it.
+
+### 4. Compare a PLC revision
+
+Use `--baseline` with a previous export from the same vendor to identify changed logic, affected requirements, changed risks, and FAT tests that should be repeated.
+
+```bash
+devagent plc ./exports/new/TIA_Line1/ \
+  --baseline ./exports/old/TIA_Line1/ \
+  --requirements ./requirements/line1.md \
+  --ai \
+  --output-dir ./plc-review/line1-revision
+```
+
+The same pattern works for Rockwell using current and previous `.L5X` files.
+
+### 5. Review the evidence package
+
+A written run includes `fat_report.md` plus machine-readable evidence such as canonical IR, dependency graph, static verification, requirement verification, FAT tests/plans, risks, optimizations, regression impact, recommendations, evidence manifest, release readiness, and an exact run manifest.
+
+The engineer should pay special attention to four kinds of results:
+
+- **statically proven behavior** — supported semantics with the required identity, writer ownership, reachability, call binding, and source evidence;
+- **`PARTIAL` / `OPAQUE` / `PROTECTED` support regions** — behavior that DevAgent intentionally refuses to overclaim from available exported source;
+- **`FAT_REQUIRED` behavior** — timing, counting, hardware, external I/O/device, system-service, scheduling, unsupported-logic, or other runtime evidence that must be exercised by an engineer;
+- **revision impact** — requirements, risks, logic areas, and FAT tests whose previous evidence may no longer be valid after a PLC change.
+
+A passing static check does **not** replace FAT when the report requires runtime evidence.
+
+Recommended workflow:
+
+```text
+EXPORT PLC PROJECT
+        ↓
+DEVAGENT PLC ENGINEERING REVIEW
+        ↓
+REQUIREMENT + LOGIC + RISK REVIEW
+        ↓
+GENERATED FAT PROCEDURES
+        ↓
+ENGINEER EXECUTES REQUIRED FAT EXTERNALLY
+        ↓
+CAPTURE / IMPORT TRUSTED EVIDENCE WHEN APPLICABLE
+        ↓
+ENGINEERING APPROVAL
+        ↓
+SITE COMMISSIONING / RELEASE PROCESS
+```
+
+For signed runtime-result, policy, trust-store, and approval workflows, and a complete explanation of Rockwell/Siemens evidence boundaries, see **[PLC Engineer Guide](docs/plc-engineer-guide.md)**.
+
 ## Practical examples
 
 DevAgent is intended for real repository work, not only one-line code generation. Run it from the repository you want to change and describe the engineering outcome you need.
@@ -336,6 +437,7 @@ devagent setup --help
 devagent doctor
 devagent models
 devagent status
+devagent plc --help
 devagent benchmark --help
 ```
 
@@ -507,13 +609,15 @@ Automated provider tests normally use deterministic or mocked clients and do not
 
 ## Project status
 
-DevAgent 0.8.0 is **beta software with a verified core release baseline**. The exact v0.8 merge revision on `main` passed Production CI across Python 3.10/3.11/3.12, clean wheel installation, real Linux bubblewrap sandbox execution, production qualification v4 (**70/70**), and autonomy qualification v5 (**9/9**), for **79/79 cumulative required qualification cases**.
+DevAgent 0.8.6 is **beta software with a verified core release baseline**. The exact v0.8 merge revision on `main` passed Production CI across Python 3.10/3.11/3.12, clean wheel installation, real Linux bubblewrap sandbox execution, production qualification v4 (**70/70**), and autonomy qualification v5 (**9/9**), for **79/79 cumulative required qualification cases**.
 
 The current core includes evidence-backed `VERIFIED` / `PARTIALLY_VERIFIED` / `BLOCKED` outcomes, backup-first editing, isolated worktrees, bounded structural file operations, repository-native verification, independent review, safe branch publication, provider/model choice, Java and .NET engineering discovery/execution, SQLite migration forward/rollback verification, large-monorepo deep-manifest discovery, bounded parallel agents, repository-local skills, foreground automations, Linux OS sandboxing, bounded browser/local-UI verification, and real-provider structured-contract benchmarking.
 
+Current `main` also includes vendor-dispatched PLC engineering review for **Rockwell Studio 5000 full-project `.L5X`** and **Siemens TIA Portal exported engineering artifacts**, with separate production qualification workflows and fail-closed evidence boundaries. The Siemens qualification is cumulative through V9 and covers the bounded supported SCL/LAD/FBD, call/interface, state/interlock/recovery, canonical identity/type, support-accounting, malformed-input, revision, and large-project fixture surfaces. Unsupported, protected, ambiguous, or runtime-dependent behavior is withheld from static proof and routed to explicit limitations and engineer-executed FAT rather than silently reported as verified.
+
 These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI.
 
-Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; and continuous paid real-provider benchmarking across a broader set of model/provider combinations. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
+Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; continuous paid real-provider benchmarking across a broader set of model/provider combinations; and additional real license-safe Siemens/Rockwell customer export qualification beyond deterministic repository fixtures. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
 
 The project intentionally prioritizes trustworthy outcomes, reproducible evidence, and safe engineering behavior over feature count or unsupported "best agent" claims.
 
