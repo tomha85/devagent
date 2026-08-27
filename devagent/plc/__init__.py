@@ -93,6 +93,13 @@ from devagent.plc.professional_report_install_v14 import install as _install_pro
 # This is presentation-only: it cannot change deterministic verdicts/readiness.
 _install_professional_report_v14()
 
+from devagent.plc.agent_harness_install_v15 import install as _install_agent_harness_v15
+
+# V15 applies modern agent orchestration only to the probabilistic assistance
+# layer: bounded propose/critic/revise graphs, deterministic evidence guards, and
+# per-run trace capture. The PLC proof/risk/readiness core stays authoritative.
+_install_agent_harness_v15()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()
