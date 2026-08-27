@@ -94,7 +94,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", help="Override configured AI provider for this PLC run")
     parser.add_argument("--model", help="Override configured AI model for this PLC run")
     parser.add_argument("--base-url", help="Override OpenAI-compatible base URL for this PLC run")
-    parser.add_argument("--output-dir", type=Path, help="Write the complete engineering review/FAT package here")
+    parser.add_argument("--output-dir", type=Path, help="Write the complete FAT planning and engineering review package here")
     parser.add_argument("--no-write", action="store_true", help="Print the report without writing run artifacts")
     return parser
 
@@ -117,6 +117,36 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
     project_sha = result.engineering.project.metadata.source_sha256
     plan_sha = compute_test_plan_sha256(result.engineering.fat_tests)
     requirements_sha = compute_requirements_sha256(result.requirements)
+
+    fat_plan = {
+        "schema": "devagent-plc-fat-plan-v1",
+        "project_sha256": project_sha,
+        "test_plan_sha256": plan_sha,
+        "requirements_sha256": requirements_sha,
+        "baseline_sha256": result.baseline_sha256,
+        "execution_owner": "PLC_ENGINEER",
+        "devagent_connects_to_external_test_software": False,
+        "tests": result.engineering.fat_tests,
+    }
+    # Preserve the established artifact name/schema for existing consumers while
+    # making the ownership boundary explicit. This is a planning artifact only;
+    # DevAgent does not launch, control, or write to external PLC test software.
+    execution_plan = {
+        "schema": "devagent-plc-execution-plan-v3",
+        "project_sha256": project_sha,
+        "test_plan_sha256": plan_sha,
+        "requirements_sha256": requirements_sha,
+        "backend_registry_sha256": result.execution_backend_registry_sha256,
+        "execution_results_sha256": result.execution_results_sha256,
+        "baseline_sha256": result.baseline_sha256,
+        "release_policy_sha256": result.release_policy_sha256,
+        "trust_store_sha256": result.trust_store_sha256,
+        "verification_context_sha256": result.verification_context_sha256,
+        "execution_owner": "PLC_ENGINEER",
+        "devagent_connects_to_external_test_software": False,
+        "tests": result.engineering.fat_tests,
+    }
+
     files: dict[str, object | str] = {
         "canonical_ir.json": result.engineering.project,
         "dependency_graph.json": result.engineering.graph,
@@ -129,16 +159,8 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "requirements.json": result.requirements,
         "requirement_verification.json": result.requirement_verification,
         "fat_tests.json": result.engineering.fat_tests,
-        "fat_plan.json": {
-            "schema": "devagent-plc-fat-plan-v1",
-            "project_sha256": project_sha,
-            "test_plan_sha256": plan_sha,
-            "requirements_sha256": requirements_sha,
-            "baseline_sha256": result.baseline_sha256,
-            "execution_owner": "PLC_ENGINEER",
-            "devagent_connects_to_external_test_software": False,
-            "tests": result.engineering.fat_tests,
-        },
+        "fat_plan.json": fat_plan,
+        "execution_plan.json": execution_plan,
         "test_execution.json": result.executions,
         "risks.json": result.risks,
         "optimizations.json": result.optimizations,
@@ -178,7 +200,10 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         written.append(path)
 
     manifest = {
-        "schema": "devagent-plc-run-v5",
+        # V12 is additive at the artifact level. Keep the run-manifest schema
+        # stable so existing automation does not break when FAT planning fields
+        # are added.
+        "schema": "devagent-plc-run-v4",
         "production_profile": "PLC_ENGINEERING_REVIEW_FAT_PLANNING",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "project_source": result.engineering.project.metadata.source_path,
