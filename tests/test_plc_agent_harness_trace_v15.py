@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from devagent.plc import run_production_verification_v5
+from devagent.plc.cli import _persist_run
+from devagent.plc.production_report import render_production_report
 from devagent.providers import ScriptedFakeProvider
 
 
@@ -76,3 +79,13 @@ def test_v15_production_run_persists_bounded_agent_graph_trace(tmp_path: Path) -
     assert result.ai_harness_trace[0]["node"] == "CONTEXT"
     assert result.ai_harness_trace[-1]["node"] == "ACCEPT"
     assert any(item.id == "AI-TRACE-1" for item in result.engineering_findings)
+
+    output = tmp_path / "run"
+    _persist_run(output, result, render_production_report(result))
+    trace_path = output / "agent_harness_trace.json"
+    assert trace_path.is_file()
+    assert json.loads(trace_path.read_text(encoding="utf-8")) == result.ai_harness_trace
+
+    manifest = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
+    expected_sha = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+    assert manifest["artifacts"]["agent_harness_trace.json"] == expected_sha
