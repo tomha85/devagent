@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+_INSTALLED = False
+
 
 def _ordered_unique(values):
     result = []
@@ -141,4 +143,23 @@ def enrich_fat_procedures(project, tests):
     return enriched
 
 
-__all__ = ["enrich_fat_procedures"]
+def install() -> None:
+    """Ensure tests added later by requirement verification get the same procedure contract."""
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    from devagent.plc import production_verification as _verification
+
+    original = _verification.generate_requirement_tests
+
+    def generate_requirement_tests(requirements, verifications, engineering):
+        tests = original(requirements, verifications, engineering)
+        tests = enrich_fat_procedures(engineering.project, tests)
+        engineering.fat_tests = tests
+        return tests
+
+    _verification.generate_requirement_tests = generate_requirement_tests
+    _INSTALLED = True
+
+
+__all__ = ["enrich_fat_procedures", "install"]
