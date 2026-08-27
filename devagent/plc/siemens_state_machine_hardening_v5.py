@@ -12,6 +12,24 @@ _PREVIOUS_UPGRADE_STATEMENTS = _v5._upgrade_statements
 _ORIGINAL_V1 = _v5._v1
 
 
+def _strip_case_label_prefix(text: str) -> str:
+    """Return the executable body when legacy SCL IR joins a CASE label to it.
+
+    The V1 logical-statement builder intentionally buffers non-control lines,
+    so a bounded CASE label can be represented as ``10: Delay(...);`` in one
+    canonical statement. Reuse the V5 bounded label grammar rather than
+    accepting an arbitrary colon prefix.
+    """
+
+    raw = str(text or "").lstrip()
+    if ":" not in raw:
+        return raw
+    prefix, body = raw.split(":", 1)
+    if _v5._LABEL.match(prefix.strip() + ":") is None:
+        return raw
+    return body.lstrip()
+
+
 class _AssignmentMatcher:
     """V5-only view of the legacy assignment matcher.
 
@@ -26,7 +44,8 @@ class _AssignmentMatcher:
         self._matcher = matcher
 
     def match(self, text: str):
-        if _v5._CALL.match(text):
+        executable = _strip_case_label_prefix(text)
+        if _v5._CALL.match(executable):
             return None
         return self._matcher.match(text)
 
@@ -64,7 +83,8 @@ def _normalize_runtime_call_statements(project, machines) -> bool:
             updated.append(statement)
             continue
 
-        match = _v5._CALL.match(statement.text)
+        executable = _strip_case_label_prefix(statement.text)
+        match = _v5._CALL.match(executable)
         if match is None:
             updated.append(statement)
             continue
@@ -75,6 +95,8 @@ def _normalize_runtime_call_statements(project, machines) -> bool:
 
         normalized = replace(
             statement,
+            reads=_ORIGINAL_V1._extract_refs(executable),
+            writes=(),
             calls=tuple(dict.fromkeys((*statement.calls, instance))),
             semantic_state=_v5.PLCSemanticState.PARTIAL,
         )
