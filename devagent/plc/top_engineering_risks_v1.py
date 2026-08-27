@@ -44,6 +44,17 @@ _RUNTIME_TERMS = (
     "execution evidence",
 )
 
+_CALL_BINDING_TERMS = (
+    "ambiguous_or_unresolved_target",
+    "unresolved target",
+    "unresolved call",
+    "call binding",
+    "call graph",
+    "withheld call proof",
+    "instance binding",
+    "recursive path",
+)
+
 
 def _risk_text(risk: RiskFinding) -> str:
     return " ".join(
@@ -78,28 +89,51 @@ def classify_risk(risk: RiskFinding) -> str:
 
 
 def _risk_family(risk: RiskFinding) -> str:
+    """Return the engineering root-cause family used only for Level 1 grouping.
+
+    Root-cause signals intentionally take precedence over downstream requirement
+    wording. For example, a withheld Siemens call can affect requirement proof,
+    but the engineer should see the call-binding problem as the headline risk.
+    """
+
     text = _risk_text(risk)
-    if "requirement" in text:
-        return "requirement_coverage"
+    category = risk.category.casefold()
+    if "test_failure" in category or "fat test" in text and "failed" in text:
+        return "test_failure"
+    if any(term in text for term in _CALL_BINDING_TERMS):
+        return "call_binding"
     if "multiple writer" in text or "writer conflict" in text or "ownership" in text:
         return "writer_ownership"
-    if any(term in text for term in ("state", "sequence", "transition", "step")):
-        return "sequence_state"
     if any(term in text for term in ("partial", "opaque", "unsupported", "semantic coverage")):
         return "semantic_coverage"
-    if any(term in text for term in ("unreachable", "call binding", "call graph", "fb", "fc")):
+    if any(term in text for term in ("state", "sequence", "transition", "step")):
+        return "sequence_state"
+    if "requirement" in text:
+        return "requirement_coverage"
+    if any(term in text for term in ("unreachable", "reachability", "dead logic")):
         return "execution_reachability"
-    category = re.sub(r"[^a-z0-9]+", "_", risk.category.casefold()).strip("_")
+    category = re.sub(r"[^a-z0-9]+", "_", category).strip("_")
     return category or "other"
 
 
-def select_top_engineering_risks(risks: list[RiskFinding], *, limit: int = 7) -> list[RiskFinding]:
-    """Prioritize severity while keeping the Level 1 view diverse.
+def _family_members(risk: RiskFinding, all_risks: list[RiskFinding]) -> list[RiskFinding]:
+    family = _risk_family(risk)
+    return [item for item in all_risks if _risk_family(item) == family]
 
-    The first pass keeps one representative per engineering family so five
-    requirement IDs cannot crowd out writer/sequence/coverage risks. A second
-    pass fills remaining slots with other distinct findings.
-    """
+
+def _aggregate_classification(members: list[RiskFinding]) -> str:
+    classes = {classify_risk(item) for item in members}
+    if "FIX_AND_FAT" in classes or {"FIX_RECOMMENDED", "FAT_REQUIRED"} <= classes:
+        return "FIX_AND_FAT"
+    if "FIX_RECOMMENDED" in classes:
+        return "FIX_RECOMMENDED"
+    if "FAT_REQUIRED" in classes:
+        return "FAT_REQUIRED"
+    return "REVIEW_REQUIRED"
+
+
+def select_top_engineering_risks(risks: list[RiskFinding], *, limit: int = 7) -> list[RiskFinding]:
+    """Prioritize severity and show each engineering root-cause family once."""
 
     ranked = sorted(
         risks,
@@ -111,7 +145,6 @@ def select_top_engineering_risks(risks: list[RiskFinding], *, limit: int = 7) ->
         ),
     )
     selected: list[RiskFinding] = []
-    used_ids: set[str] = set()
     used_families: set[str] = set()
 
     for risk in ranked:
@@ -119,16 +152,7 @@ def select_top_engineering_risks(risks: list[RiskFinding], *, limit: int = 7) ->
         if family in used_families:
             continue
         selected.append(risk)
-        used_ids.add(risk.id)
         used_families.add(family)
-        if len(selected) >= limit:
-            return selected
-
-    for risk in ranked:
-        if risk.id in used_ids:
-            continue
-        selected.append(risk)
-        used_ids.add(risk.id)
         if len(selected) >= limit:
             break
     return selected
@@ -136,11 +160,69 @@ def select_top_engineering_risks(risks: list[RiskFinding], *, limit: int = 7) ->
 
 def _display_title(risk: RiskFinding, all_risks: list[RiskFinding]) -> str:
     family = _risk_family(risk)
+    members = _family_members(risk, all_risks)
+    count = len(members)
+    text = " ".join(_risk_text(item) for item in members)
+
+    if family == "call_binding":
+        vendor = "Siemens" if "siemens" in text else "PLC"
+        suffix = f" ({count} related findings)" if count > 1 else ""
+        return f"Unresolved/ambiguous {vendor} call bindings{suffix}"
     if family == "requirement_coverage":
-        count = sum(1 for item in all_risks if _risk_family(item) == family)
-        if count > 1:
-            return f"Requirement coverage incomplete ({count} related findings)"
+        suffix = f" ({count} related findings)" if count > 1 else ""
+        return f"Requirement coverage incomplete{suffix}"
+    if family == "writer_ownership" and count > 1:
+        return f"Multiple-writer / ownership risks ({count} related findings)"
+    if family == "sequence_state" and count > 1:
+        return f"Sequence/state behavior requires review ({count} related findings)"
+    if family == "execution_reachability" and count > 1:
+        return f"Execution/reachability gaps ({count} related findings)"
+    if family == "test_failure" and count > 1:
+        return f"FAT execution failures ({count} related findings)"
     return risk.title
+
+
+def _aggregate_details(
+    risk: RiskFinding,
+    all_risks: list[RiskFinding],
+) -> tuple[str, str, str, str]:
+    members = _family_members(risk, all_risks)
+    family = _risk_family(risk)
+    count = len(members)
+    classification = _aggregate_classification(members)
+
+    if family == "call_binding":
+        why = (
+            f"{count} PLC call finding(s) cannot be deterministically bound to an exact target, interface, or instance in the imported engineering evidence. "
+            f"Representative evidence: {risk.summary}"
+        )
+        impact = (
+            "Downstream block behavior, call reachability, and requirement/FAT traceability may depend on unresolved execution context, so these paths cannot be promoted to static verification."
+        )
+        recommendation = (
+            "Resolve or export the exact call/interface/instance evidence where possible. If the binding remains runtime-dependent, execute the linked engineer FAT procedures in the approved simulator/HIL/controller environment before release."
+        )
+        return classification, why, impact, recommendation
+
+    if family == "requirement_coverage" and count > 1:
+        why = f"{count} requirement verification finding(s) still lack sufficient deterministic or authenticated runtime evidence."
+        impact = "The release evidence package cannot claim those customer requirements are verified."
+        recommendation = "Map each affected requirement to concrete source evidence and the appropriate FAT scenario, then import authenticated execution results where runtime proof is required."
+        return classification, why, impact, recommendation
+
+    if family == "writer_ownership" and count > 1:
+        why = f"{count} writer/ownership finding(s) indicate PLC values are assigned from more than one normalized source location or execution path."
+        impact = "Final values may depend on scan order, block/task order, branch conditions, or later assignments."
+        recommendation = "Review authoritative ownership and execution order; consolidate writers where appropriate or document intentional arbitration, then rerun affected FAT procedures."
+        return classification, why, impact, recommendation
+
+    if family == "sequence_state" and count > 1:
+        why = f"{count} sequence/state finding(s) depend on execution paths, transitions, or runtime state that are not completely proven statically."
+        impact = "The machine sequence may stall, skip, repeat, or enter an unintended state under conditions outside the bounded theorem."
+        recommendation = "Review the affected transition logic and execute the generated sequence FAT scenarios in an approved runtime environment."
+        return classification, why, impact, recommendation
+
+    return classification, risk.summary, risk.consequence, risk.recommendation
 
 
 def render_top_engineering_risks(result, *, limit: int = 7) -> str:
@@ -152,20 +234,21 @@ def render_top_engineering_risks(result, *, limit: int = 7) -> str:
         return "\n".join(lines)
 
     for index, risk in enumerate(selected, start=1):
+        classification, why, impact, recommendation = _aggregate_details(risk, risks)
         lines.extend(
             [
                 f"{index}. {risk.severity.value} — {_display_title(risk, risks)}",
                 "",
-                f"   Classification: {classify_risk(risk)}",
+                f"   Classification: {classification}",
                 "",
                 "   Why:",
-                f"   {risk.summary}",
+                f"   {why}",
                 "",
                 "   Impact:",
-                f"   {risk.consequence}",
+                f"   {impact}",
                 "",
                 "   Recommended Action:",
-                f"   {risk.recommendation}",
+                f"   {recommendation}",
                 "",
             ]
         )

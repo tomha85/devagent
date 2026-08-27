@@ -93,17 +93,61 @@ def test_top_risks_keep_engineering_diversity_instead_of_requirement_spam() -> N
         recommendation="Execute the generated sequence FAT scenarios in an approved runtime environment.",
     )
 
-    selected = select_top_engineering_risks([*requirements, writer, sequence], limit=3)
+    selected = select_top_engineering_risks([*requirements, writer, sequence], limit=7)
     selected_ids = {item.id for item in selected}
 
     assert writer.id in selected_ids
     assert sequence.id in selected_ids
     assert len([item for item in selected if item.id.startswith("REQ-")]) == 1
+    assert len(selected) == 3
 
-    rendered = render_top_engineering_risks(SimpleNamespace(risks=[*requirements, writer, sequence]), limit=3)
+    rendered = render_top_engineering_risks(SimpleNamespace(risks=[*requirements, writer, sequence]), limit=7)
     assert "TOP ENGINEERING RISKS" in rendered
     assert "Requirement coverage incomplete (5 related findings)" in rendered
+    assert "5 requirement verification finding(s)" in rendered
     assert "Classification:" in rendered
     assert "Why:" in rendered
     assert "Impact:" in rendered
     assert "Recommended Action:" in rendered
+
+
+def test_unresolved_calls_are_one_root_cause_theme_not_requirement_spam() -> None:
+    calls = [
+        _risk(
+            f"CALL-{index}",
+            category="CALL_BINDING",
+            title=f"Requirement coverage incomplete at call {index}",
+            summary=f"V3 withheld call proof at Siemens Main / Line {7300 + index}: ambiguous_or_unresolved_target.",
+            consequence="Downstream block behavior and requirement/FAT traceability may depend on an unresolved target, instance, interface, control context, or recursive path.",
+            recommendation="Correct/export the exact call/interface/instance evidence or execute the generated engineer FAT procedure; do not promote this call to static verification.",
+        )
+        for index in range(5)
+    ]
+    semantic = _risk(
+        "SEM",
+        category="SEMANTIC_COVERAGE",
+        title="Siemens behavior contains PARTIAL/OPAQUE areas",
+        summary="The deterministic Siemens analyzer cannot prove all exported behavior.",
+        consequence="Dependencies and generated static tests are intentionally incomplete for withheld semantics.",
+        recommendation="Export deeper supported source or execute linked FAT procedures.",
+    )
+    writer = _risk(
+        "WRITER",
+        category="MULTIPLE_WRITERS",
+        title="Multiple Siemens source writers for AxisCommand",
+        summary="AxisCommand is written by 2 normalized Siemens source statements.",
+        consequence="Final value may depend on execution order.",
+        recommendation="Review ownership and FAT-test intentional arbitration.",
+        severity=Severity.MEDIUM,
+    )
+
+    selected = select_top_engineering_risks([*calls, semantic, writer], limit=7)
+    assert len(selected) == 3
+    assert len([item for item in selected if item.id.startswith("CALL-")]) == 1
+
+    rendered = render_top_engineering_risks(SimpleNamespace(risks=[*calls, semantic, writer]), limit=7)
+    assert rendered.count("Unresolved/ambiguous Siemens call bindings (5 related findings)") == 1
+    assert "5 PLC call finding(s) cannot be deterministically bound" in rendered
+    assert "Requirement coverage incomplete (5 related findings)" not in rendered
+    assert "Siemens behavior contains PARTIAL/OPAQUE areas" in rendered
+    assert "Multiple Siemens source writers for AxisCommand" in rendered
