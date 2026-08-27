@@ -9,6 +9,17 @@ from devagent.plc.rockwell_system_service_v17 import (
 )
 
 _INSTALLED = False
+_SYSTEM_SERVICE_EXPLAINED_NONPASS_CHECKS = frozenset(
+    {
+        "LOGIC_SEMANTIC_COVERAGE",
+        "BRANCH_DEPENDENCY_SEMANTICS",
+        "SIMULATOR_EXECUTION",
+        "ROCKWELL_ACTION_PATH_SEMANTICS",
+        "ROCKWELL_STANDARD_INSTRUCTION_CATALOG",
+        "ROCKWELL_PRODUCTION_SUPPORT_CONTRACT",
+        "ROCKWELL_SYSTEM_SERVICE_RUNTIME",
+    }
+)
 
 
 def _replace_check(checks, replacement):
@@ -24,6 +35,14 @@ def _replace_check(checks, replacement):
     if not replaced:
         result.append(replacement)
     return result
+
+
+def _all_remaining_nonpass_checks_are_system_service_explained(engineering) -> bool:
+    return all(
+        check.status is StaticCheckStatus.PASS
+        or check.id in _SYSTEM_SERVICE_EXPLAINED_NONPASS_CHECKS
+        for check in engineering.static_checks
+    )
 
 
 def install() -> None:
@@ -106,10 +125,13 @@ def install() -> None:
         if not specific:
             return risks
 
-        # Replace a vague umbrella risk only when GSV/SSV demonstrably explains
-        # the complete remaining static gap. Otherwise retain both so unrelated
-        # unsupported behavior cannot be hidden by the system-service finding.
-        if system_services_explain_current_semantic_gap(engineering.project):
+        # Replace a vague umbrella risk only when both project-level gap analysis
+        # and every non-PASS static check agree that GSV/SSV explains the entire
+        # remaining semantic gap. Any unrelated warning keeps the umbrella risk.
+        if (
+            system_services_explain_current_semantic_gap(engineering.project)
+            and _all_remaining_nonpass_checks_are_system_service_explained(engineering)
+        ):
             risks = [risk for risk in risks if risk.category != "SEMANTIC_COVERAGE"]
 
         known = {risk.id for risk in risks}
