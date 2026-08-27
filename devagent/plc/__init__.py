@@ -79,6 +79,13 @@ from devagent.plc.semantic_coverage_report import install as _install_semantic_c
 # reachability-aware semantic coverage augmentation.
 _install_semantic_coverage_report()
 
+from devagent.plc.four_contract_v13 import install as _install_four_contract_v13
+
+# V13 makes the commercial four-core contract explicit and testable:
+# engineering analysis, logic/risk review, five-area optimization recommendations,
+# and engineer-ready FAT planning. All optimization output is advisory only.
+_install_four_contract_v13()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()
