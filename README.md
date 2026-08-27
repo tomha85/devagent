@@ -4,10 +4,13 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Status: Beta](https://img.shields.io/badge/status-beta-blue.svg)](#project-status)
 [![Production CI](https://github.com/tomha85/devagent/actions/workflows/ci.yml/badge.svg)](https://github.com/tomha85/devagent/actions/workflows/ci.yml)
+[![Sponsor DevAgent](https://img.shields.io/badge/Sponsor-DevAgent-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tomha85)
 
 **A local, evidence-driven software engineering agent that turns a requirement into a tested, independently reviewed patch, prints a developer-grade engineering report, and only publishes a branch when the result is `VERIFIED`.**
 
 > **From requirement to evidence-backed verified branch.**
+
+> ❤️ **DevAgent is free during public beta.** If DevAgent saves you engineering time, consider [sponsoring continued development](https://github.com/sponsors/tomha85).
 
 DevAgent runs against a developer's local repository. It discovers the application, gathers source evidence, compiles explicit acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, independently reviews the final diff, and decides `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED` from evidence rather than model confidence.
 
@@ -513,6 +516,23 @@ These results are **bounded engineering claims**, not universal-correctness or m
 Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; and continuous paid real-provider benchmarking across a broader set of model/provider combinations. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
 
 The project intentionally prioritizes trustworthy outcomes, reproducible evidence, and safe engineering behavior over feature count or unsupported "best agent" claims.
+
+## ❤️ Support DevAgent
+
+DevAgent is currently free to use during public beta.
+
+If DevAgent saves you engineering time or helps you deliver safer, better-verified software or PLC engineering work, you can support continued development through [GitHub Sponsors](https://github.com/sponsors/tomha85).
+
+Your sponsorship helps fund:
+
+- new engineering and PLC capabilities;
+- Siemens and Rockwell verification;
+- additional AI provider support;
+- regression and production qualification;
+- documentation and examples;
+- continued free public releases.
+
+[![Sponsor DevAgent](https://img.shields.io/badge/Sponsor-DevAgent-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tomha85)
 
 ## Contributing
 
