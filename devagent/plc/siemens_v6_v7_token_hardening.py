@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 
 from devagent.plc import siemens_interlock_permissive_v6 as _v6
@@ -7,6 +8,7 @@ from devagent.plc import siemens_recovery_v7 as _v7
 
 
 _INSTALLED = False
+_PREVIOUS_RISKS = _v7._risks
 
 _PERMISSIVE_TOKENS = {
     "permissive",
@@ -109,16 +111,44 @@ def _is_fault_state(value: str) -> bool:
     return bool(tokens & _FAULT_STATE_TOKENS)
 
 
+def _risks(previous, engineering, verifications, executions, engineering_findings):
+    result = list(
+        _PREVIOUS_RISKS(
+            previous,
+            engineering,
+            verifications,
+            executions,
+            engineering_findings,
+        )
+    )
+    hardened = []
+    for risk in result:
+        if (
+            risk.category == "FAULT_RECOVERY"
+            and "overlapping recovery and non-recovery transitions" in risk.title
+        ):
+            risk = replace(
+                risk,
+                title=risk.title.replace(
+                    "overlapping recovery and non-recovery transitions",
+                    "overlapping recovery and competing transitions",
+                ),
+            )
+        hardened.append(risk)
+    return hardened
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
-    # These are classification hardenings only. They do not alter the V5 source
-    # transition theorem or promote any runtime-dependent behavior to static
-    # proof. Patch the globals consumed by V6/V7 builders before analysis runs.
+    # These are classification/report hardenings only. They do not alter the V5
+    # source transition theorem or promote any runtime-dependent behavior to
+    # static proof. Patch the globals consumed by V6/V7 before analysis runs.
     _v6._role_for_ref = _role_for_ref
     _v7._is_fault_state = _is_fault_state
+    _v7._risks = _risks
     _INSTALLED = True
 
 
