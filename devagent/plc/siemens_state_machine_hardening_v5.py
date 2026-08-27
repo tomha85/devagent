@@ -39,36 +39,28 @@ class _V1SequencingView:
         return getattr(self._module, name)
 
 
-def _line_number(statement) -> int | None:
-    raw = statement.source.line
-    if raw is None:
-        return None
-    try:
-        return int(str(raw))
-    except ValueError:
-        return None
-
-
 def _normalize_runtime_call_statements(project, facts) -> bool:
-    """Attach source-call identity without promoting runtime FB semantics."""
+    """Attach runtime FB call identity without promoting its semantics.
+
+    Runtime dependency identity has already been proven by V5 from the block
+    declaration and CASE source. Use that identity directly instead of relying
+    on a second line-range heuristic when repairing the legacy statement IR.
+    This also correctly normalizes another invocation of the same TON/TOF/TP/
+    CTU/CTD instance in the same Siemens source bundle as runtime-dependent.
+    """
+
+    runtime_names = {
+        dependency.split(":", 1)[0].casefold()
+        for machine in facts.machines
+        for dependency in machine.runtime_dependencies
+    }
+    if not runtime_names:
+        return False
 
     changed = False
     updated = []
     for statement in project.logic_statements:
-        line = _line_number(statement)
-        block = (statement.source.program or statement.owner_name or "").casefold()
-        machine = next(
-            (
-                item
-                for item in facts.machines
-                if item.block.casefold() == block
-                and line is not None
-                and item.case_line < line < item.end_line
-                and item.runtime_dependencies
-            ),
-            None,
-        )
-        if machine is None or statement.language != "SCL":
+        if statement.language != "SCL":
             updated.append(statement)
             continue
 
@@ -77,22 +69,17 @@ def _normalize_runtime_call_statements(project, facts) -> bool:
             updated.append(statement)
             continue
         instance = _ORIGINAL_V1._clean_name(match.group("name"))
-        runtime_names = {
-            dependency.split(":", 1)[0].casefold()
-            for dependency in machine.runtime_dependencies
-        }
         if instance.casefold() not in runtime_names:
             updated.append(statement)
             continue
 
-        updated.append(
-            replace(
-                statement,
-                calls=tuple(dict.fromkeys((*statement.calls, instance))),
-                semantic_state=_v5.PLCSemanticState.PARTIAL,
-            )
+        normalized = replace(
+            statement,
+            calls=tuple(dict.fromkeys((*statement.calls, instance))),
+            semantic_state=_v5.PLCSemanticState.PARTIAL,
         )
-        changed = True
+        updated.append(normalized)
+        changed = changed or normalized != statement
 
     if changed:
         project.logic_statements = updated
