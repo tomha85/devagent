@@ -1,0 +1,60 @@
+name: Siemens Production Qualification
+
+on:
+  push:
+    branches: [main, "feat/siemens-*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: siemens-production-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  siemens:
+    name: Siemens TIA V1 qualification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install development package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile PLC sources
+        run: python -m compileall -q devagent/plc scripts/qualify_siemens_v1.py
+
+      - name: Run complete PLC regression suite
+        run: python -m pytest -q tests/test_plc*.py
+
+      - name: Run Siemens TIA engineering-export qualification
+        run: |
+          python scripts/qualify_siemens_v1.py \
+            --report .devagent/siemens-production-qualification-v1.json
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Upload Siemens qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: siemens-production-qualification-v1
+          path: .devagent/siemens-production-qualification-v1.json
+          if-no-files-found: warn
