@@ -3,14 +3,12 @@ from __future__ import annotations
 from collections import Counter
 import sys
 
-from devagent.plc import production_report as _report
 from devagent.plc import production_review as _review
 from devagent.plc.production_models import OptimizationCandidate, RequirementStatus, Severity
 from devagent.plc.production_utils import stable_id
 from devagent.plc.rockwell_state_machine_v11 import state_transitions
 
 _ORIGINAL_OPTIMIZATION = _review.optimization_candidates
-_ORIGINAL_RENDER = _report.render_production_report
 _INSTALLED = False
 
 
@@ -175,21 +173,11 @@ def render_four_core_contract_section(result) -> str:
     return "\n".join(lines)
 
 
-def render_production_report(result) -> str:
-    base = _ORIGINAL_RENDER(result)
-    section = render_four_core_contract_section(result)
-    marker = "## Production Release Policy"
-    if marker in base:
-        return base.replace(marker, section + "\n" + marker, 1)
-    return base + "\n\n" + section
-
-
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     _review.optimization_candidates = optimization_candidates
-    _report.render_production_report = render_production_report
 
     # If a caller imported a production module before installation, keep its
     # by-value function bindings aligned. Normal package import order installs
@@ -205,5 +193,4 @@ __all__ = [
     "install",
     "optimization_candidates",
     "render_four_core_contract_section",
-    "render_production_report",
 ]
