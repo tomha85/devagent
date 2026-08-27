@@ -193,5 +193,14 @@ def install() -> None:
 
     _install_siemens_recovery_v7()
 
+    # Harden only the metadata/name classifiers after both modules are loaded.
+    # This prevents substring collisions such as Already->ready and
+    # DEFAULT->fault without changing the source-proven V5 transition theorem.
+    from devagent.plc.siemens_v6_v7_token_hardening import (
+        install as _install_siemens_v6_v7_token_hardening,
+    )
+
+    _install_siemens_v6_v7_token_hardening()
+
 
 __all__ = ["install"]
