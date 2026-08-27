@@ -75,7 +75,8 @@ def test_siemens_project_only_scl_builds_bounded_ir_graph_fat_and_report(tmp_pat
     assert "Customer requirements:** **NOT SUPPLIED" in report
     assert "## Semantic Coverage / Proof Boundary" in report
     assert "### Siemens TIA Export Inventory" in report
-    assert "Siemens V1 separates source/interface traceability" in report
+    assert "source/interface traceability" in report
+    assert "Siemens V2" in report
     assert "DevAgent does not open proprietary `.ap*` / `.zap*` projects" in report
     assert "## Engineer FAT Procedures" in report
 
