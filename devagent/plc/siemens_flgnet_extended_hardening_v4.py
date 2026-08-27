@@ -244,5 +244,14 @@ def install() -> None:
 
     _install_siemens_state_machine_v5()
 
+    # A deterministic CASE transition relation is still not whole-machine proof
+    # when a transition depends on timer/counter runtime state. Keep that boundary
+    # fail-closed after V5 installs, without changing any Rockwell/shared analyzer.
+    from devagent.plc.siemens_state_machine_hardening_v5 import (
+        install as _install_siemens_state_machine_hardening_v5,
+    )
+
+    _install_siemens_state_machine_hardening_v5()
+
 
 __all__ = ["install"]
