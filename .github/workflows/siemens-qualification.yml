@@ -16,12 +16,14 @@ concurrency:
 
 jobs:
   siemens:
-    name: Siemens TIA V2 qualification
+    name: Siemens TIA V3 qualification
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout exact qualified revision
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,7 +44,8 @@ jobs:
           python -m compileall -q \
             devagent/plc \
             scripts/qualify_siemens_v1.py \
-            scripts/qualify_siemens_v2.py
+            scripts/qualify_siemens_v2.py \
+            scripts/qualify_siemens_v3.py
 
       - name: Run complete PLC regression suite
         run: python -m pytest -q tests/test_plc*.py
@@ -57,6 +60,41 @@ jobs:
           python scripts/qualify_siemens_v2.py \
             --report .devagent/siemens-production-qualification-v2.json
 
+      - name: Run Siemens TIA V3 call-graph qualification
+        run: |
+          python scripts/qualify_siemens_v3.py \
+            --report .devagent/siemens-production-qualification-v3.json
+
+      - name: Record exact qualification revision
+        env:
+          QUALIFIED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          INTEGRATION_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "schema": "devagent-siemens-qualified-head-v1",
+              "commit_sha": os.environ["QUALIFIED_SHA"],
+              "integration_sha": os.environ["INTEGRATION_SHA"],
+              "qualified": True,
+              "checks": {
+                  "plc_regression_suite": "PASS",
+                  "siemens_v1": "PASS",
+                  "siemens_v2": "PASS",
+                  "siemens_v3": "PASS",
+              },
+          }
+          path = Path(".devagent/siemens-qualified-head.json")
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
       - name: Check patch whitespace
         run: git diff --check
 
@@ -64,8 +102,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: siemens-production-qualification-v2
+          name: siemens-production-qualification-v3
           path: |
             .devagent/siemens-production-qualification-v1.json
             .devagent/siemens-production-qualification-v2.json
+            .devagent/siemens-production-qualification-v3.json
+            .devagent/siemens-qualified-head.json
           if-no-files-found: warn
