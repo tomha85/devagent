@@ -108,6 +108,38 @@ END_CASE;
     )
 
 
+def test_v6_role_classifier_uses_tokens_not_substrings(tmp_path: Path) -> None:
+    source = _write(
+        tmp_path / "token-guard.scl",
+        _numeric_source(
+            """
+CASE State OF
+    0:
+        IF AlreadyDone THEN
+            State := 10;
+        END_IF;
+    10:
+        IF ResetCmd THEN
+            State := 0;
+        END_IF;
+END_CASE;
+""",
+            declarations="    AlreadyDone : Bool;",
+        ),
+    )
+
+    result = analyze_plc_project(source)
+    contract = next(
+        item
+        for item in result.project._siemens_v6_guard_facts.contracts
+        if item.source_state == "0" and item.target_state == "10"
+    )
+    roles = {term.tag: term.role for term in contract.terms}
+
+    assert roles["AlreadyDone"] == "GUARD"
+    assert result.outcome is PLCOutcome.STATICALLY_VERIFIED
+
+
 def test_v6_explicit_requirement_maps_to_exact_transition_and_fat(tmp_path: Path) -> None:
     source = _write(
         tmp_path / "requirement.scl",
@@ -355,3 +387,29 @@ END_CASE;
         and test.execution_status == "NOT_RUN"
         for test in result.engineering.fat_tests
     )
+
+
+def test_v7_fault_state_classifier_uses_tokens_and_ignores_nonfault_labels(tmp_path: Path) -> None:
+    for index, state in enumerate(("DEFAULT", "NO_FAULT", "FAULT_CLEARED")):
+        source = _write(
+            tmp_path / f"nonfault-{index}.scl",
+            _named_source(
+                f"""
+CASE State OF
+    IDLE:
+        IF TripDetected THEN
+            State := {state};
+        END_IF;
+    {state}:
+END_CASE;
+"""
+            ),
+        )
+
+        result = run_production_verification_v5(source)
+        profile = siemens_capability_profile_v7(result.engineering.project)
+
+        assert result.engineering.outcome is PLCOutcome.STATICALLY_VERIFIED
+        assert profile["named_fault_states"] == 0
+        assert profile["fault_recovery_gaps"] == 0
+        assert profile["recovery_contract"] == "COMPLETE"
