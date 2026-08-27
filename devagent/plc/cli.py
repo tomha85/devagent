@@ -6,11 +6,15 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from devagent.config import ProviderConfig, load_config, provider_defaults
 from devagent.plc.models import plc_jsonable
-from devagent.plc.production_models import ReadinessStatus
+from devagent.plc.production_models import (
+    ReadinessStatus,
+    StageRecord,
+    capture_stage_progress,
+)
 from devagent.plc.production_report import render_production_report
 from devagent.plc.production_v5 import run_production_verification_v5
 from devagent.plc.production_verification import (
@@ -29,25 +33,77 @@ _STAGE_NAMES = (
     "REQUIREMENT INGESTION",
     "REQUIREMENT VERIFICATION",
     "TEST GENERATION",
-    "FAT EXECUTION STATUS",
+    "TEST EXECUTION",
     "RISK DETECTION",
     "OPTIMIZATION REVIEW",
     "REGRESSION ANALYSIS",
     "RECOMMENDATIONS",
     "EVIDENCE + FAT REPORT",
-    "ENGINEERING READINESS",
+    "RELEASE READINESS",
 )
+
+
+class _PLCProgressStatus:
+    """Render live PLC pipeline milestones while preserving final stage records."""
+
+    def __init__(
+        self,
+        sink: Callable[[str], None] = print,
+        *,
+        verbose: bool = False,
+    ) -> None:
+        self.sink = sink
+        self.verbose = verbose
+        self._active_stage = 0
+        self._completed: set[int] = set()
+
+    def start(self) -> None:
+        if self._active_stage == 0:
+            self._show_stage(1)
+
+    def _show_stage(self, number: int) -> None:
+        if number < 1 or number > len(_STAGE_NAMES):
+            return
+        if number <= self._active_stage:
+            return
+        self._active_stage = number
+        self.sink(f"[{number:2d}/15] {_STAGE_NAMES[number - 1]}")
+
+    def __call__(self, stage: StageRecord) -> None:
+        if stage.number not in self._completed:
+            self._completed.add(stage.number)
+            if stage.number > self._active_stage:
+                self._show_stage(stage.number)
+            if self.verbose:
+                self.sink(f"      -> {stage.status.value}: {stage.summary}")
+            if stage.number == self._active_stage:
+                self._show_stage(stage.number + 1)
+            return
+
+        # Production V5 intentionally re-finalizes trust/execution/readiness
+        # records after the V4 deterministic core. Keep concise output stable,
+        # but make those refinements visible when the engineer asks for detail.
+        if self.verbose:
+            self.sink(
+                f"      -> FINALIZED {stage.number:2d}/15 {stage.name}: "
+                f"{stage.status.value}: {stage.summary}"
+            )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent plc",
         description=(
-            "Evidence-driven Rockwell PLC engineering review, requirements verification, logic/risk analysis, "
-            "regression impact analysis, and engineer-ready FAT planning. DevAgent does not connect to or execute external PLC software."
+            "Evidence-driven Rockwell Studio 5000 and Siemens TIA PLC engineering review, requirements verification, "
+            "logic/risk analysis, regression impact analysis, and engineer-ready FAT planning. DevAgent does not connect "
+            "to or execute external PLC software."
         ),
     )
-    parser.add_argument("project", type=Path, help="Rockwell Studio 5000 full-project .L5X export")
+    parser.add_argument(
+        "project",
+        type=Path,
+        help="Rockwell full-project .L5X or Siemens TIA exported engineering file/directory",
+    )
     parser.add_argument(
         "--requirements",
         action="append",
@@ -59,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline",
         type=Path,
-        help="Previous full-project L5X for revision impact, regression risk, affected requirements, and FAT retest analysis",
+        help="Previous PLC project export for revision impact, regression risk, affected requirements, and FAT retest analysis",
     )
     parser.add_argument(
         "--execution-results",
@@ -94,6 +150,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", help="Override configured AI provider for this PLC run")
     parser.add_argument("--model", help="Override configured AI model for this PLC run")
     parser.add_argument("--base-url", help="Override OpenAI-compatible base URL for this PLC run")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show live PLC stage completion summaries and V5 finalization details",
+    )
     parser.add_argument("--output-dir", type=Path, help="Write the complete FAT planning and engineering review package here")
     parser.add_argument("--no-write", action="store_true", help="Print the report without writing run artifacts")
     return parser
@@ -264,6 +325,19 @@ def _validate_execution_args(args) -> str | None:
     return None
 
 
+def _print_run_header(args, provider_name: str | None, model_name: str | None) -> None:
+    project = args.project.expanduser().resolve(strict=False)
+    print("DevAgent PLC is working...")
+    print(f"Project: {project}")
+    print(f"Requirements: {len(args.requirements)} artifact(s)")
+    print(f"Baseline: {'YES' if args.baseline is not None else 'NO'}")
+    if args.ai:
+        print(f"AI review: ENABLED ({provider_name or 'configured'}/{model_name or 'configured'})")
+    else:
+        print("AI review: DISABLED")
+    print("")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.require_ai:
@@ -275,24 +349,29 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         provider, provider_name, model_name = _provider_from_args(args)
-        result = run_production_verification_v5(
-            args.project,
-            requirement_paths=args.requirements,
-            baseline_path=args.baseline,
-            execution_results_path=args.execution_results,
-            execution_backend_registry_path=args.execution_backend_registry,
-            release_policy_path=args.release_policy,
-            trust_store_path=args.trust_store,
-            approval_path=args.approval,
-            provider=provider,
-            ai_enabled=args.ai,
-            require_ai=args.require_ai,
-            ai_provider_name=provider_name,
-            ai_model_name=model_name,
-        )
+        _print_run_header(args, provider_name, model_name)
+        progress = _PLCProgressStatus(verbose=args.verbose)
+        progress.start()
+        with capture_stage_progress(progress):
+            result = run_production_verification_v5(
+                args.project,
+                requirement_paths=args.requirements,
+                baseline_path=args.baseline,
+                execution_results_path=args.execution_results,
+                execution_backend_registry_path=args.execution_backend_registry,
+                release_policy_path=args.release_policy,
+                trust_store_path=args.trust_store,
+                approval_path=args.approval,
+                provider=provider,
+                ai_enabled=args.ai,
+                require_ai=args.require_ai,
+                ai_provider_name=provider_name,
+                ai_model_name=model_name,
+            )
 
         report = render_production_report(result)
-        print("DevAgent PLC is working...")
+        print("")
+        print("Final stage results:")
         for stage in result.stages:
             print(f"[{stage.number:2d}/15] {stage.name:<26} {stage.status.value}")
         print("")

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable, Iterator
 
 
 class StageStatus(str, Enum):
@@ -58,6 +60,12 @@ class ReadinessStatus(str, Enum):
     APPROVED_FOR_RELEASE = "APPROVED_FOR_RELEASE"
 
 
+_stage_progress_callback: ContextVar[Callable[[object], None] | None] = ContextVar(
+    "devagent_plc_stage_progress_callback",
+    default=None,
+)
+
+
 @dataclass(frozen=True)
 class StageRecord:
     number: int
@@ -65,6 +73,24 @@ class StageRecord:
     status: StageStatus
     summary: str
     evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        callback = _stage_progress_callback.get()
+        if callback is not None:
+            callback(self)
+
+
+@contextmanager
+def capture_stage_progress(
+    callback: Callable[[StageRecord], None] | None,
+) -> Iterator[None]:
+    """Scope PLC stage observations to one caller without changing library behavior."""
+
+    token = _stage_progress_callback.set(callback)
+    try:
+        yield
+    finally:
+        _stage_progress_callback.reset(token)
 
 
 @dataclass(frozen=True)
