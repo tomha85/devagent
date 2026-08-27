@@ -174,5 +174,24 @@ def install() -> None:
     _dispatch.analyze_siemens_tia = _hardened_analyzer
     _INSTALLED = True
 
+    # V6 consumes only the already-hardened V5 transition facts. It adds
+    # deterministic guard/interlock/permissive traceability and an explicit-only
+    # requirement-to-transition proof layer without widening Siemens source
+    # semantics or touching Rockwell.
+    from devagent.plc.siemens_interlock_permissive_v6 import (
+        install as _install_siemens_interlock_permissive_v6,
+    )
+
+    _install_siemens_interlock_permissive_v6()
+
+    # V7 runs after V6 so reset/recovery intent is derived only from V6 guard
+    # metadata plus V5 source transitions. Restart/retentivity and physical
+    # recovery remain engineer-executed runtime evidence.
+    from devagent.plc.siemens_recovery_v7 import (
+        install as _install_siemens_recovery_v7,
+    )
+
+    _install_siemens_recovery_v7()
+
 
 __all__ = ["install"]
