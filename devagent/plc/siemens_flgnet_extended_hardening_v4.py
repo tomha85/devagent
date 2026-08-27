@@ -234,5 +234,24 @@ def install() -> None:
     _ext._visual_call = _visual_call
     _INSTALLED = True
 
+    # V5 is installed only after every V4 FlgNet normalization/hardening patch is
+    # active. It captures that qualified Siemens analyzer as its baseline and adds
+    # only bounded SCL CASE sequencing/state-machine semantics. Rockwell and the
+    # general software-engineering runtime are not patched by this extension.
+    from devagent.plc.siemens_state_machine_v5 import (
+        install as _install_siemens_state_machine_v5,
+    )
+
+    _install_siemens_state_machine_v5()
+
+    # A deterministic CASE transition relation is still not whole-machine proof
+    # when a transition depends on timer/counter runtime state. Keep that boundary
+    # fail-closed after V5 installs, without changing any Rockwell/shared analyzer.
+    from devagent.plc.siemens_state_machine_hardening_v5 import (
+        install as _install_siemens_state_machine_hardening_v5,
+    )
+
+    _install_siemens_state_machine_hardening_v5()
+
 
 __all__ = ["install"]
