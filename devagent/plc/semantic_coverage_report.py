@@ -30,7 +30,7 @@ def render_semantic_coverage_section(project) -> str:
     lines = [
         "## Semantic Coverage / Proof Boundary",
         "",
-        "> This section separates deterministic behavior proof from structural parsing and FAT-required behavior. Structural recognition is not a behavioral PASS.",
+        "> This section separates instruction recognition, structural normalization, bounded deterministic behavior proof, and behavior that remains withheld. Recognition is not a behavioral PASS.",
         "",
         "### Project Inventory",
         "",
@@ -48,15 +48,20 @@ def render_semantic_coverage_section(project) -> str:
         "",
         "### Coverage",
         "",
-        f"- Program RLL deterministic instruction coverage: **{_pct(summary['deterministic_pct'])}** ({summary['deterministic_occurrences']}/{summary['total_occurrences']})",
-        f"- Program RLL structural-or-better instruction coverage: **{_pct(summary['structural_or_better_pct'])}**",
+        f"- Program RLL bounded deterministic behavior coverage: **{_pct(summary['deterministic_pct'])}** ({summary['deterministic_occurrences']}/{summary['total_occurrences']} instruction occurrences)",
+        f"- Program RLL structural-or-better occurrence coverage: **{_pct(summary['structural_or_better_pct'])}**",
+        f"- Program RLL recognized occurrence coverage (includes PARTIAL): **{_pct(summary.get('recognized_pct'))}** ({summary['recognized_occurrences']}/{summary['total_occurrences']})",
         f"- Program RLL structural-only instruction occurrences: **{summary['structural_only_occurrences']}**",
         f"- Program RLL partial instruction occurrences: **{summary['partial_occurrences']}**",
-        f"- Program RLL unmodeled instruction occurrences: **{summary['unmodeled_occurrences']}** ({_pct(summary['unmodeled_pct'])})",
+        f"- Program RLL behavior-withheld instruction occurrences: **{summary['unmodeled_occurrences']}** ({_pct(summary['unmodeled_pct'])})",
         f"- Deterministic Boolean RLL rungs: **{rll['deterministic_boolean_rungs']}**/{rll['program_rungs']}",
         f"- Bounded typed-compare RLL rungs: **{rll['bounded_compare_rungs']}**",
         f"- Bounded data/compute action RLL rungs: **{rll['bounded_action_rungs']}**",
         f"- Bounded action occurrences: **{action['modeled_actions']}** across **{action['modeled_rungs']}** rung(s)",
+        f"- Neutral-text branch rungs with bounded semantics: **{rll['branch_rungs_modeled']}**/{rll['branch_rungs']} ({_pct(rll['branch_coverage_pct'])})",
+        f"  - Boolean-output branch theorem: **{rll.get('boolean_branch_rungs_modeled', 0)}** rung(s)",
+        f"  - Data/compute action branch theorem: **{rll.get('action_branch_rungs_modeled', 0)}** rung(s)",
+        f"  - Branch rungs withheld: **{rll.get('branch_rungs_withheld', 0)}**",
         f"- Stateful timer/counter runtime models: **{stateful['modeled_occurrences']}**",
         f"- Stateful runtime evidence required: **{'yes' if stateful['requires_qualified_runtime_evidence'] else 'no'}** (engineer-executed FAT; DevAgent does not execute external software)",
         f"- Motion runtime contracts: **{motion.get('modeled_occurrences', 0)}**",
@@ -85,12 +90,14 @@ def render_semantic_coverage_section(project) -> str:
         "",
         "### Explicit Semantic Boundaries",
         "",
-        "- Partially modeled instructions: `"
+        "- Instruction names with explicitly PARTIAL semantics: `"
         + (", ".join(boundaries["partially_modeled_instruction_names"]) or "none")
         + "`",
-        "- Unmodeled instructions: `"
+        "- Completely unknown instruction names: `"
         + (", ".join(boundaries["unmodeled_instruction_names"]) or "none")
         + "`",
+        f"- Known-name instruction occurrences whose behavior is withheld by surrounding grammar/control context: **{boundaries.get('withheld_instruction_occurrences', 0)}**",
+        f"- Neutral-text branch rungs whose complete grammar remains withheld: **{boundaries.get('withheld_branch_rungs', 0)}**",
         "- Unsupported routine types: `"
         + (", ".join(f"{name}={count}" for name, count in boundaries["unsupported_routine_types"].items()) or "none")
         + "`",
