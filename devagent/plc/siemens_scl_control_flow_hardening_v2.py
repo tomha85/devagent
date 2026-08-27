@@ -70,5 +70,12 @@ def install() -> None:
     _v2._upgrade_if_chains = _upgrade_top_level_only
     _INSTALLED = True
 
+    # V3 must capture the already-hardened V2 analyzer. Importing here, rather
+    # than at module import time, preserves the install order while keeping the
+    # Siemens call-graph extension isolated from the qualified Rockwell path.
+    from devagent.plc.siemens_call_graph_v3 import install as _install_siemens_call_graph_v3
+
+    _install_siemens_call_graph_v3()
+
 
 __all__ = ["install"]
