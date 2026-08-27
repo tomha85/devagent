@@ -237,6 +237,72 @@ Line1_Controller.L5X
 
 **Siemens TIA Portal:** provide a TIA Openness/XML/generated-source file or export directory. Supported engineering inputs include `.scl`, `.db`, `.udt`, `.xml`, `.stl`, and `.awl`. Proprietary `.ap*` / `.zap*` project archives must be exported from TIA Portal first.
 
+#### Siemens `.zapXX` archived projects
+
+Files such as `.zap17`, `.zap18`, `.zap19`, and `.zap20` are **TIA Portal archived projects**, not direct DevAgent static-analysis inputs. Do not point `devagent plc` directly at a `.zapXX` archive and assume the internal archive contents are equivalent to a supported engineering export.
+
+Example:
+
+```text
+LearningFactory_4_0_24V_Task07_HighBayWarehouseHBW_V18.zap18
+```
+
+For this example, use **TIA Portal V18** to retrieve/open the `.zap18` archive, then export the engineering information that DevAgent can analyze. Prefer the matching TIA Portal version for the archive whenever practical.
+
+Recommended flow:
+
+```text
+LearningFactory_4_0_24V_Task07_HighBayWarehouseHBW_V18.zap18
+                         ↓
+              TIA Portal V18 Retrieve/Open
+                         ↓
+                Restored TIA project
+                         ↓
+         Export engineering information
+                         ↓
+ OB / FB / FC / DB / UDT / SCL / LAD / FBD XML
+                         ↓
+                One export folder
+                         ↓
+            devagent plc ./HBW_V18_export/
+```
+
+For the strongest review, export as much related controller engineering evidence as available, including OB/FB/FC logic, DBs, UDT/data types, generated SCL/STL/AWL sources, LAD/FBD Openness XML, and relevant symbolic/tag information.
+
+A typical export folder might look like:
+
+```text
+HBW_V18_export/
+├── OB1.xml
+├── Main.scl
+├── FB_Conveyor.xml
+├── FB_HighBayCrane.xml
+├── FC_Positioning.xml
+├── DB_HBW.xml
+├── DB_IO.xml
+├── MotorData.udt
+└── Alarms.xml
+```
+
+Then run:
+
+```bash
+devagent plc ./HBW_V18_export/ \
+  --ai \
+  --output-dir ./HBW_review
+```
+
+Or include machine/customer requirements:
+
+```bash
+devagent plc ./HBW_V18_export/ \
+  --requirements ./HBW_requirements.md \
+  --ai \
+  --output-dir ./HBW_review
+```
+
+**Do not rely on manually renaming or unzipping `.zapXX` archives as the production engineering workflow.** DevAgent's qualified Siemens path is based on exported TIA engineering artifacts and explicit support accounting, not undocumented assumptions about Siemens archive internals.
+
 For Siemens, include the related OB/FB/FC logic, DB/UDT/type evidence, generated sources, and Openness XML used by the controller whenever available. A complete export gives DevAgent a stronger project-wide call/data/identity/support-boundary view than isolated snippets.
 
 ### 2. Add customer or machine requirements
