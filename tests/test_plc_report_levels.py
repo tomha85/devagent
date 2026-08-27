@@ -52,6 +52,12 @@ def test_default_console_is_concise_and_full_detail_is_artifactized(
     assert "FAT assertions generated:" in stdout
     assert "Engineer FAT scenario groups:" in stdout
     assert "Use --full-report" in stdout
+    assert "TOP ENGINEERING RISKS" in stdout
+    assert "TOP FINDINGS" not in stdout
+    assert "Classification:" in stdout
+    assert "Why:" in stdout
+    assert "Impact:" in stdout
+    assert "Recommended Action:" in stdout
     assert "## FAT Test Plan and Execution" not in stdout
     assert "## Risk Detection" not in stdout
 
@@ -81,6 +87,10 @@ def test_default_console_is_concise_and_full_detail_is_artifactized(
     assert "Low-level FAT assertions preserved" in scenarios
     assert "fat_scenario_index.json" in scenarios
     assert "fat_tests.csv" in scenarios
+
+    summary = (output / "report_summary.txt").read_text(encoding="utf-8")
+    assert "TOP ENGINEERING RISKS" in summary
+    assert "Recommended Action:" in summary
 
     manifest = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["report_levels"]["level_1"] == ["report_summary.txt"]
