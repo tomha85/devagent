@@ -21,6 +21,14 @@ from devagent.plc.production_verification import (
     compute_requirements_sha256,
     compute_test_plan_sha256,
 )
+from devagent.plc.report_levels import (
+    build_fat_scenario_index,
+    render_console_summary,
+    render_fat_scenarios_markdown,
+    render_fat_tests_csv,
+    render_optimization_report_markdown,
+    render_risk_register_csv,
+)
 from devagent.plc.rockwell_l5x import L5XError
 from devagent.providers import ProviderError, create_provider
 
@@ -155,6 +163,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show live PLC stage completion summaries and V5 finalization details",
     )
+    parser.add_argument(
+        "--full-report",
+        action="store_true",
+        help="Print the complete Level 2 engineering/FAT Markdown report instead of the concise Level 1 terminal summary",
+    )
     parser.add_argument("--output-dir", type=Path, help="Write the complete FAT planning and engineering review package here")
     parser.add_argument("--no-write", action="store_true", help="Print the report without writing run artifacts")
     return parser
@@ -208,7 +221,18 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "tests": result.engineering.fat_tests,
     }
 
+    scenario_index = build_fat_scenario_index(result)
     files: dict[str, object | str] = {
+        # Level 1: concise customer/engineer decision view.
+        "report_summary.txt": render_console_summary(result, output_dir=output_dir),
+        # Level 2: engineer-facing detail and grouped work packages.
+        "fat_report.md": report,
+        "fat_scenarios.md": render_fat_scenarios_markdown(result),
+        "fat_scenario_index.json": scenario_index,
+        "fat_tests.csv": render_fat_tests_csv(result),
+        "risk_register.csv": render_risk_register_csv(result),
+        "optimization_report.md": render_optimization_report_markdown(result),
+        # Level 3: canonical/raw evidence artifacts retained unchanged.
         "canonical_ir.json": result.engineering.project,
         "dependency_graph.json": result.engineering.graph,
         "static_verification.json": {
@@ -241,7 +265,6 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         },
         "release_readiness.json": result.readiness,
         "pipeline_stages.json": result.stages,
-        "fat_report.md": report,
     }
     if result.execution_backend_registry is not None:
         files["execution_backend_registry_normalized.json"] = result.execution_backend_registry
@@ -263,7 +286,7 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
 
     manifest = {
         # V12 is additive at the artifact level. Keep the run-manifest schema
-        # stable so existing automation does not break when FAT planning fields
+        # stable so existing automation does not break when report-level artifacts
         # are added.
         "schema": "devagent-plc-run-v4",
         "production_profile": "PLC_ENGINEERING_REVIEW_FAT_PLANNING",
@@ -287,6 +310,23 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
         "verification_context_sha256": result.verification_context_sha256,
         "execution_owner": "PLC_ENGINEER",
         "devagent_connects_to_external_test_software": False,
+        "report_levels": {
+            "level_1": ["report_summary.txt"],
+            "level_2": [
+                "fat_report.md",
+                "fat_scenarios.md",
+                "fat_scenario_index.json",
+                "fat_tests.csv",
+                "risk_register.csv",
+                "optimization_report.md",
+            ],
+            "level_3": [
+                "canonical_ir.json",
+                "dependency_graph.json",
+                "static_verification.json",
+                "evidence_manifest.json",
+            ],
+        },
         "artifacts": {path.name: _sha256(path) for path in written},
     }
     _write_json(output_dir / "run_manifest.json", manifest)
@@ -370,18 +410,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         report = render_production_report(result)
-        print("")
-        print("Final stage results:")
-        for stage in result.stages:
-            print(f"[{stage.number:2d}/15] {stage.name:<26} {stage.status.value}")
-        print("")
-        print(report, end="")
+        output_dir = None
         if not args.no_write:
             output_dir = (
                 args.output_dir.expanduser().resolve(strict=False)
                 if args.output_dir
                 else _default_output_dir(args.project)
             )
+
+        print("")
+        print("Final stage results:")
+        for stage in result.stages:
+            print(f"[{stage.number:2d}/15] {stage.name:<26} {stage.status.value}")
+        print("")
+        if args.full_report:
+            print(report, end="")
+        else:
+            print(render_console_summary(result, output_dir=output_dir), end="")
+
+        if output_dir is not None:
             _persist_run(output_dir, result, report)
             print(f"Artifacts: {output_dir}")
         if result.readiness and result.readiness.status in {
