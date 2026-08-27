@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devagent-ai"
-version = "0.8.4"
+version = "0.8.5"
 description = "Evidence-driven local autonomous software engineering agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,6 +44,7 @@ Homepage = "https://github.com/tomha85/devagent"
 Repository = "https://github.com/tomha85/devagent"
 Issues = "https://github.com/tomha85/devagent/issues"
 Changelog = "https://github.com/tomha85/devagent/blob/main/CHANGELOG.md"
+Sponsor = "https://github.com/sponsors/tomha85"
 
 [tool.setuptools.packages.find]
 include = ["devagent*", "agent*"]
