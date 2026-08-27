@@ -165,5 +165,12 @@ def install() -> None:
 
     _install_siemens_closeout_v9()
 
+    # Compatibility hardening deliberately runs last. It preserves the proven
+    # V1-V7 schema provenance and outcome semantics while retaining all V8/V9
+    # identity/support evidence and release risks.
+    from devagent.plc.siemens_v8_v9_compat_hardening import install as _install_siemens_v8_v9_compat_hardening
+
+    _install_siemens_v8_v9_compat_hardening()
+
 
 __all__ = ["install"]
