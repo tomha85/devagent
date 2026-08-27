@@ -8,6 +8,7 @@ from devagent.plc import siemens_state_machine_v5 as _v5
 
 _INSTALLED = False
 _PREVIOUS_ANALYZER = _v5.analyze_siemens_tia_v5
+_PREVIOUS_UPGRADE_STATEMENTS = _v5._upgrade_statements
 _ORIGINAL_V1 = _v5._v1
 
 
@@ -39,19 +40,18 @@ class _V1SequencingView:
         return getattr(self._module, name)
 
 
-def _normalize_runtime_call_statements(project, facts) -> bool:
+def _normalize_runtime_call_statements(project, machines) -> bool:
     """Attach runtime FB call identity without promoting its semantics.
 
     Runtime dependency identity has already been proven by V5 from the block
-    declaration and CASE source. Use that identity directly instead of relying
-    on a second line-range heuristic when repairing the legacy statement IR.
-    This also correctly normalizes another invocation of the same TON/TOF/TP/
-    CTU/CTD instance in the same Siemens source bundle as runtime-dependent.
+    declaration and CASE source. Use that identity directly when repairing the
+    legacy statement IR so TON/TOF/TP/CTU/CTD calls retain provenance while
+    remaining explicitly PARTIAL/runtime-dependent.
     """
 
     runtime_names = {
         dependency.split(":", 1)[0].casefold()
-        for machine in facts.machines
+        for machine in machines
         for dependency in machine.runtime_dependencies
     }
     if not runtime_names:
@@ -87,33 +87,16 @@ def _normalize_runtime_call_statements(project, facts) -> bool:
     return changed
 
 
-def _rebuild_graph(project):
-    graph = _v5.build_dependency_graph(project)
-    v3facts = _v5._v3._facts(project)
-    if v3facts is not None:
-        graph = _v5._v3._augment_graph(graph, v3facts)
-    return graph
+def _hardened_upgrade_statements(project, machines):
+    """Run qualified V5 statement upgrades, then repair runtime-call provenance.
 
+    This hook executes inside the V5 analyzer before dependency graph and static
+    checks are generated. It avoids post-analysis mutation and keeps the V1-V4
+    parsers unchanged.
+    """
 
-def _refresh_base_checks(result, graph):
-    fresh = {
-        item.id: item
-        for item in _ORIGINAL_V1._siemens_checks(
-            result.project,
-            graph,
-            result.fat_tests,
-        )
-    }
-    checks = []
-    seen = set()
-    for item in result.static_checks:
-        current = fresh.get(item.id, item)
-        checks.append(current)
-        seen.add(current.id)
-    for item in fresh.values():
-        if item.id not in seen:
-            checks.append(item)
-    return checks
+    _PREVIOUS_UPGRADE_STATEMENTS(project, machines)
+    _normalize_runtime_call_statements(project, machines)
 
 
 def _hardened_analyzer(path: Path):
@@ -121,10 +104,6 @@ def _hardened_analyzer(path: Path):
     facts = getattr(result.project, "_siemens_v5_state_machine_facts", None)
     if facts is None:
         return result
-
-    normalized_calls = _normalize_runtime_call_statements(result.project, facts)
-    graph = _rebuild_graph(result.project) if normalized_calls else result.graph
-    checks = _refresh_base_checks(result, graph) if normalized_calls else result.static_checks
 
     runtime_dependent = any(
         machine.runtime_dependencies
@@ -152,8 +131,6 @@ def _hardened_analyzer(path: Path):
     return replace(
         result,
         outcome=outcome,
-        graph=graph,
-        static_checks=checks,
         limitations=list(dict.fromkeys(limitations)),
     )
 
@@ -166,9 +143,10 @@ def install() -> None:
     from devagent.plc import plc_dispatch as _dispatch
     from devagent.plc import siemens_tia_v1 as _v1
 
-    # Scope the call-before-assignment precedence correction to V5 only. The
-    # qualified V1-V4 source parser and Rockwell paths keep their exact behavior.
+    # Scope both corrections to the Siemens V5 extension only. V1-V4 and the
+    # Rockwell/general software-engineering paths retain their exact behavior.
     _v5._v1 = _V1SequencingView(_ORIGINAL_V1)
+    _v5._upgrade_statements = _hardened_upgrade_statements
     _v5.analyze_siemens_tia_v5 = _hardened_analyzer
     _v1.analyze_siemens_tia = _hardened_analyzer
     _dispatch.analyze_siemens_tia = _hardened_analyzer
