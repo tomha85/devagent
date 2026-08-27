@@ -115,5 +115,14 @@ def install() -> None:
 
     _install_siemens_flgnet_extended_v4()
 
+    # Keep production semantics strict while correcting only canonical FlgNet
+    # wire direction/staging details discovered by the extended V4 regression
+    # suite. This patch is Siemens-only and never changes shared or Rockwell IR.
+    from devagent.plc.siemens_flgnet_extended_hardening_v4 import (
+        install as _install_siemens_flgnet_extended_hardening_v4,
+    )
+
+    _install_siemens_flgnet_extended_hardening_v4()
+
 
 __all__ = ["install"]
