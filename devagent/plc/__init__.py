@@ -142,6 +142,14 @@ from devagent.plc.siemens_integration_v1 import install as _install_siemens_inte
 _install_siemens_integration_v1()
 
 from devagent.plc.production_v5 import run_production_verification_v5
+from devagent.plc.siemens_v5_bindings_v1 import install as _install_siemens_v5_bindings_v1
+
+# Agent Harness V15 loads Production V5 before Siemens integration. Refresh only
+# V5's by-value shared production/evidence/review bindings after Siemens installs.
+# Siemens then reaches the vendor dispatcher while Rockwell remains behind the
+# exact qualified Rockwell functions selected by those vendor-aware wrappers.
+_install_siemens_v5_bindings_v1()
+
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
