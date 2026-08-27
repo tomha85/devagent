@@ -156,6 +156,7 @@ def _persist_run(output_dir: Path, result, report: str) -> None:
             "limitations": result.engineering.limitations,
         },
         "engineering_review.json": result.engineering_findings,
+        "agent_harness_trace.json": result.ai_harness_trace,
         "requirements.json": result.requirements,
         "requirement_verification.json": result.requirement_verification,
         "fat_tests.json": result.engineering.fat_tests,
