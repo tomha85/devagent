@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
 from typing import Any
 
 from devagent.providers import ModelProvider
@@ -8,6 +9,10 @@ from devagent.providers import ModelProvider
 # deterministic PLC proof engine. It only governs AI review candidates before
 # they are admitted as AI_CANDIDATE observations.
 MAX_REVIEW_ITERATIONS = 2
+_ACTIVE_TRACE: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "devagent_plc_agent_harness_trace",
+    default=None,
+)
 
 REVIEW_CRITIC_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -64,6 +69,15 @@ REQUIREMENT_CRITIC_SCHEMA: dict[str, Any] = {
 }
 
 
+def begin_run_trace() -> tuple[list[dict[str, Any]], Token[list[dict[str, Any]] | None]]:
+    sink: list[dict[str, Any]] = []
+    return sink, _ACTIVE_TRACE.set(sink)
+
+
+def end_run_trace(token: Token[list[dict[str, Any]] | None]) -> None:
+    _ACTIVE_TRACE.reset(token)
+
+
 def trace(
     sink: list[dict[str, Any]] | None,
     *,
@@ -74,7 +88,8 @@ def trace(
     detail: str,
     counts: dict[str, int] | None = None,
 ) -> None:
-    if sink is None:
+    target = sink if sink is not None else _ACTIVE_TRACE.get()
+    if target is None:
         return
     event: dict[str, Any] = {
         "graph": graph,
@@ -85,7 +100,7 @@ def trace(
     }
     if counts:
         event["counts"] = dict(sorted(counts.items()))
-    sink.append(event)
+    target.append(event)
 
 
 def critique_review_candidates(
