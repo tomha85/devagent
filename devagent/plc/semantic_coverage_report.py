@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from devagent.plc import production_report as _report
+from devagent.plc.four_contract_v13 import render_four_core_contract_section
 from devagent.plc.semantic_coverage import build_semantic_coverage_manifest
 
 _ORIGINAL_RENDER = _report.render_production_report
@@ -67,9 +68,9 @@ def render_semantic_coverage_section(project) -> str:
         f"- ST partial/unreachable: **{st['partial_or_unreachable_statements']}**",
         f"- ST opaque: **{st['opaque_statements']}**",
         f"- AOI internal bodies modeled: **{aoi['internal_bodies_modeled']}**/{aoi['internal_bodies_total']}",
-        f"- AOI internal RLL statements FULL: **{aoi['internal_rll_full_statements']}**/{aoi['internal_rll_statements']}",
-        f"- AOI internal ST statements FULL: **{aoi['internal_st_full_statements']}**/{aoi['internal_st_statements']}",
-        f"- AOI calls bound: **{aoi['calls_bound']}**/{aoi['calls_total']}",
+        f"- AOI internal RLL statements FULL: **{aoi['internal_rll_full_statements']}**/{aoi['internal_rll_statements']}**",
+        f"- AOI internal ST statements FULL: **{aoi['internal_st_full_statements']}**/{aoi['internal_st_statements']}**",
+        f"- AOI calls bound: **{aoi['calls_bound']}**/{aoi['calls_total']}**",
         "",
         "### Program RLL Instruction Coverage Breakdown",
         "",
@@ -163,9 +164,10 @@ def render_fat_procedure_section(result) -> str:
 
 def render_production_report(result) -> str:
     base = _ORIGINAL_RENDER(result)
+    contract = render_four_core_contract_section(result)
     semantic = render_semantic_coverage_section(result.engineering.project)
     fat = render_fat_procedure_section(result)
-    section = semantic + "\n" + fat
+    section = contract + "\n" + semantic + "\n" + fat
     marker = "## Production Release Policy"
     if marker in base:
         return base.replace(marker, section + "\n" + marker, 1)
