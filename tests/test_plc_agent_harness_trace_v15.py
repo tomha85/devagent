@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from devagent.plc import run_production_verification_v5
@@ -29,6 +30,8 @@ PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
 def test_v15_production_run_persists_bounded_agent_graph_trace(tmp_path: Path) -> None:
     project = tmp_path / "HarnessTrace.L5X"
     project.write_text(PROJECT, encoding="utf-8")
+    project_sha = hashlib.sha256(project.read_bytes()).hexdigest()
+    evidence_id = f"ROCKWELL-CAPABILITY:{project_sha}"
     provider = ScriptedFakeProvider(
         [
             {
@@ -37,11 +40,11 @@ def test_v15_production_run_persists_bounded_agent_graph_trace(tmp_path: Path) -
                     {
                         "id": "TRACE-1",
                         "category": "ENGINEERING_REVIEW",
-                        "title": "Review command relationship",
+                        "title": "Review Rockwell support boundary",
                         "severity": "LOW",
-                        "summary": "Review the modeled Start-to-Run relationship; runtime behavior is not proven.",
-                        "recommendation": "Confirm intended behavior during engineer-controlled FAT where appropriate.",
-                        "evidence_ids": ["LOGIC:Main/Logic/Rung[0]:Run"],
+                        "summary": "Review the bounded Rockwell capability profile; unsupported or partial semantics remain outside proof.",
+                        "recommendation": "Keep unsupported or partial behavior fail-closed and route it to engineer review/FAT where appropriate.",
+                        "evidence_ids": [evidence_id],
                         "confidence": 0.7,
                     }
                 ],
@@ -52,8 +55,8 @@ def test_v15_production_run_persists_bounded_agent_graph_trace(tmp_path: Path) -
                     {
                         "finding_id": "TRACE-1",
                         "decision": "ACCEPT",
-                        "reason": "The finding remains a bounded review candidate.",
-                        "supported_evidence_ids": ["LOGIC:Main/Logic/Rung[0]:Run"],
+                        "reason": "The finding remains bounded to the supplied Rockwell capability evidence and makes no runtime claim.",
+                        "supported_evidence_ids": [evidence_id],
                     }
                 ],
             },
