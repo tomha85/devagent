@@ -39,7 +39,13 @@ def test_public_bootstrap_reaches_v9_and_keeps_complete_simple_project_full(tmp_
     result = analyze_plc_project(source)
     profile = siemens_capability_profile_v9(result.project)
 
-    assert result.project.metadata.schema_revision == "SIEMENS-TIA-EXPORT-V9"
+    # V8/V9 are additive identity/closeout layers. They must not rewrite the
+    # lower-level theorem provenance recorded by whichever V1-V7 analyzer
+    # actually established the source semantics.
+    assert result.project.metadata.schema_revision not in {
+        "SIEMENS-TIA-EXPORT-V8",
+        "SIEMENS-TIA-EXPORT-V9",
+    }
     assert profile["schema"] == "devagent-siemens-tia-capability-v9"
     assert profile["coverage_accounting_complete"] is True
     assert profile["support_contract"] == "FULL"
@@ -99,7 +105,10 @@ END_FUNCTION_BLOCK
     v8 = siemens_capability_profile_v8(project)
     facts = project._siemens_v8_identity_facts
 
-    assert project.metadata.schema_revision == "SIEMENS-TIA-EXPORT-V9"
+    assert project.metadata.schema_revision not in {
+        "SIEMENS-TIA-EXPORT-V8",
+        "SIEMENS-TIA-EXPORT-V9",
+    }
     assert v8["udt_types"] + v8["struct_types"] >= 1
     assert v8["array_types"] >= 1
     assert v8["enum_types"] >= 1
