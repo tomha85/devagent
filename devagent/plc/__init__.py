@@ -86,6 +86,13 @@ from devagent.plc.four_contract_v13 import install as _install_four_contract_v13
 # and engineer-ready FAT planning. All optimization output is advisory only.
 _install_four_contract_v13()
 
+from devagent.plc.professional_report_install_v14 import install as _install_professional_report_v14
+
+# V14 adds a customer-facing executive layer while preserving every detailed
+# engineering/evidence section and the established public renderer identity.
+# This is presentation-only: it cannot change deterministic verdicts/readiness.
+_install_professional_report_v14()
+
 from devagent.plc.production_v5 import run_production_verification_v5
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()

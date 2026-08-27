@@ -157,3 +157,23 @@ def test_four_core_product_contract_is_complete_and_evidence_backed(tmp_path: Pa
     assert "**Test Actions**" in report
     assert "**Expected Result**" in report
     assert "DevAgent does not connect to" in report
+
+    # 5. PROFESSIONAL REPORT: executive/customer layer plus full engineering detail.
+    assert "## Executive Summary" in report
+    assert "### Document Control" in report
+    assert "### Management Dashboard" in report
+    assert "### Attention Summary" in report
+    assert "### Highest-Priority Logic / Risk Findings" in report
+    assert "### Priority Engineering Actions" in report
+    assert "### FAT Readiness Snapshot" in report
+    assert "### Report Navigation" in report
+    assert "## Technical Verification Identity" in report
+    assert "## Requirement Verification" in report
+    assert "## Risk Detection" in report
+    assert "## Optimization Review" in report
+    assert "## Regression Analysis" in report
+    assert "## Recommendations" in report
+    assert "## Release Readiness" in report
+    assert "## Verification Boundaries" in report
+    assert report.index("## Executive Summary") < report.index("## Technical Verification Identity")
+    assert report.index("## Technical Verification Identity") < report.index("## 15-Stage Pipeline")

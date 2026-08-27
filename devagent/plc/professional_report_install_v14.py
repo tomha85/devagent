@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from devagent.plc import semantic_coverage_report as _semantic_report
+from devagent.plc.professional_report_v14 import render_professional_overview
+
+_INSTALLED = False
+
+
+def install() -> None:
+    """Add the professional executive layer without changing renderer identity.
+
+    Existing compatibility tests intentionally require
+    ``production_report.render_production_report`` to remain the semantic coverage
+    renderer function. V14 therefore wraps only that renderer's captured base
+    report function instead of replacing the public function object.
+    """
+    global _INSTALLED
+    if _INSTALLED:
+        return
+
+    original_base_render = _semantic_report._ORIGINAL_RENDER
+
+    def render_base_with_professional_overview(result):
+        base = original_base_render(result)
+        overview = render_professional_overview(result)
+        marker = "## Executive Summary"
+        if marker in base:
+            # Keep the original run-identity bullets, but move them under the
+            # Technical Verification Identity heading emitted by the overview.
+            return base.replace(marker, overview, 1)
+        return overview + "\n" + base
+
+    _semantic_report._ORIGINAL_RENDER = render_base_with_professional_overview
+    _INSTALLED = True
+
+
+__all__ = ["install"]
