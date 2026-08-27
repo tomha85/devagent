@@ -39,33 +39,135 @@ class _V1SequencingView:
         return getattr(self._module, name)
 
 
+def _line_number(statement) -> int | None:
+    raw = statement.source.line
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except ValueError:
+        return None
+
+
+def _normalize_runtime_call_statements(project, facts) -> bool:
+    """Attach source-call identity without promoting runtime FB semantics."""
+
+    changed = False
+    updated = []
+    for statement in project.logic_statements:
+        line = _line_number(statement)
+        block = (statement.source.program or statement.owner_name or "").casefold()
+        machine = next(
+            (
+                item
+                for item in facts.machines
+                if item.block.casefold() == block
+                and line is not None
+                and item.case_line < line < item.end_line
+                and item.runtime_dependencies
+            ),
+            None,
+        )
+        if machine is None or statement.language != "SCL":
+            updated.append(statement)
+            continue
+
+        match = _v5._CALL.match(statement.text)
+        if match is None:
+            updated.append(statement)
+            continue
+        instance = _ORIGINAL_V1._clean_name(match.group("name"))
+        runtime_names = {
+            dependency.split(":", 1)[0].casefold()
+            for dependency in machine.runtime_dependencies
+        }
+        if instance.casefold() not in runtime_names:
+            updated.append(statement)
+            continue
+
+        updated.append(
+            replace(
+                statement,
+                calls=tuple(dict.fromkeys((*statement.calls, instance))),
+                semantic_state=_v5.PLCSemanticState.PARTIAL,
+            )
+        )
+        changed = True
+
+    if changed:
+        project.logic_statements = updated
+        _v5._v4._refresh_counts(project)
+    return changed
+
+
+def _rebuild_graph(project):
+    graph = _v5.build_dependency_graph(project)
+    v3facts = _v5._v3._facts(project)
+    if v3facts is not None:
+        graph = _v5._v3._augment_graph(graph, v3facts)
+    return graph
+
+
+def _refresh_base_checks(result, graph):
+    fresh = {
+        item.id: item
+        for item in _ORIGINAL_V1._siemens_checks(
+            result.project,
+            graph,
+            result.fat_tests,
+        )
+    }
+    checks = []
+    seen = set()
+    for item in result.static_checks:
+        current = fresh.get(item.id, item)
+        checks.append(current)
+        seen.add(current.id)
+    for item in fresh.values():
+        if item.id not in seen:
+            checks.append(item)
+    return checks
+
+
 def _hardened_analyzer(path: Path):
     result = _PREVIOUS_ANALYZER(path)
     facts = getattr(result.project, "_siemens_v5_state_machine_facts", None)
     if facts is None:
         return result
 
+    normalized_calls = _normalize_runtime_call_statements(result.project, facts)
+    graph = _rebuild_graph(result.project) if normalized_calls else result.graph
+    checks = _refresh_base_checks(result, graph) if normalized_calls else result.static_checks
+
     runtime_dependent = any(
         machine.runtime_dependencies
         for machine in facts.machines
     )
-    if not runtime_dependent or result.outcome is not _v5.PLCOutcome.STATICALLY_VERIFIED:
-        return result
+    profile = _v5.siemens_capability_profile_v5(result.project)
+    state_complete = profile["state_machine_contract"] in {"COMPLETE", "NONE"}
+    if profile["static_contract"] == "NO_EXECUTABLE_LOGIC":
+        outcome = _v5.PLCOutcome.BLOCKED
+    elif (
+        profile["static_contract"] == "COMPLETE"
+        and state_complete
+        and not runtime_dependent
+    ):
+        outcome = _v5.PLCOutcome.STATICALLY_VERIFIED
+    else:
+        outcome = _v5.PLCOutcome.PARTIALLY_VERIFIED
 
-    # A deterministic transition relation is not equivalent to proving the
-    # timer/counter state that enables that transition. Keep the local V5 CASE
-    # theorem and its source evidence, but fail the whole-project outcome closed
-    # until engineer-executed runtime evidence exists.
+    limitations = list(result.limitations)
+    if runtime_dependent:
+        limitations.append(
+            "At least one bounded Siemens V5 state transition depends on TON/TOF/TP/CTU/CTD runtime state. The transition relation is traceable, but whole-project static closure is withheld until engineer runtime evidence verifies timing/counting evolution."
+        )
+
     return replace(
         result,
-        outcome=_v5.PLCOutcome.PARTIALLY_VERIFIED,
-        limitations=list(dict.fromkeys([
-            *result.limitations,
-            (
-                "At least one bounded Siemens V5 state transition depends on TON/TOF/TP/CTU/CTD runtime state. "
-                "The transition relation is traceable, but whole-project static closure is withheld until engineer runtime evidence verifies timing/counting evolution."
-            ),
-        ])),
+        outcome=outcome,
+        graph=graph,
+        static_checks=checks,
+        limitations=list(dict.fromkeys(limitations)),
     )
 
 
