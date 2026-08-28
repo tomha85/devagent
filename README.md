@@ -21,21 +21,28 @@ For a normal verified software run the deterministic harness prints the complete
 ## General Architecture
 
 ```text
-                         DevAgent Core
-                              │
-        ┌─────────────┬───────┴───────┬─────────────┐
-        │             │               │             │
-     Software      Siemens         Rockwell      Schneider
-        │             │               │             │
- Python / etc.    TIA Portal      Studio 5000    Control Expert
-                  exports          / L5X          / XEF
-        │             │               │             │
-        └─────────────┴───────┬───────┴─────────────┘
-                              │
-                    Review → Verify → FAT → Report
+                              DevAgent Core
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+          Software Engineering             PLC Engineering
+                    │                             │
+          Local / GitHub Repo          ┌──────────┼──────────┐
+                    │                  │          │          │
+          Understand / Plan         Siemens    Rockwell   Schneider
+                    │               TIA        Studio     Control
+             Modify Code            exports    5000/L5X   Expert/XEF
+                    │                  │          │          │
+           Build / Test / Review       └──────────┼──────────┘
+                    │                             │
+          Engineering Report              Analyze / Verify
+                    │                             │
+          Commit / Push Branch             FAT Plan / Report
+                    │
+       Developer / Repo Integration
 ```
 
-**One DevAgent core, multiple engineering inputs, one evidence-driven review and reporting workflow.**
+**One DevAgent core, two intentionally different workflows.** Software Engineering works inside a local/GitHub repository and can understand, modify, test, review, report, and publish a verified branch. PLC Engineering works from exported controller engineering artifacts and produces analysis, verification, FAT planning, and engineering reports without editing or controlling the live PLC.
 
 For a slightly expanded version, see [General Architecture](docs/general-architecture.md).
 
