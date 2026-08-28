@@ -135,7 +135,13 @@ class OpcUaSimulator:
         )
 
         await add_variable(system, "ProductionCount", "Warehouse.System.ProductionCount", 0, ua.VariantType.Int32)
-        await add_variable(system, "MachineState", "Warehouse.System.MachineState", "RUNNING", ua.VariantType.String)
+        await add_variable(
+            system,
+            "MachineState",
+            "Warehouse.System.MachineState",
+            "RUNNING" if self.scenario == "normal" else "BLOCKED",
+            ua.VariantType.String,
+        )
         await add_variable(system, "LaneCounts", "Warehouse.System.LaneCounts", [1, 2, 3], ua.VariantType.Int32)
 
         def node_id(key: str) -> str:
