@@ -54,6 +54,13 @@ def install() -> None:
     _install_closeout_v9()
     _install_v9_hardening()
 
+    # Final compatibility hardening preserves historical V4/V5/V6/V7 contracts
+    # while keeping the stricter V8/V9 identity/support boundaries. In particular,
+    # source-path provenance must never become semantic interlock/fault metadata.
+    from devagent.plc.schneider_regression_hardening_v9 import install as _install_regression_hardening_v9
+
+    _install_regression_hardening_v9()
+
     # Production V5 imports shared production functions by value. Refresh those
     # bindings only after the complete Schneider V1-V9 vendor stack is installed.
     _v5.run_v4_verification = _production.run_production_verification

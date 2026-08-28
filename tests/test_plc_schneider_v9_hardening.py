@@ -33,7 +33,9 @@ def test_v9_unknown_source_surface_is_visible_and_closeout_status_fails_closed(t
     assert profile["unknown_executable_source_tags"]
     assert profile["support_contract"] == "PARTIAL_FAIL_CLOSED"
     assert profile["commercial_closeout_status"] == "PARTIAL_FAIL_CLOSED"
-    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+    # There is no supported executable theorem in this artifact. Unknown-only
+    # executable source must stay BLOCKED rather than looking partially proven.
+    assert result.outcome is PLCOutcome.BLOCKED
 
 
 def test_v9_required_real_export_corpus_remains_explicit(tmp_path: Path) -> None:
