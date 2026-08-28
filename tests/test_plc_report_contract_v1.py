@@ -8,6 +8,7 @@ from devagent.plc import run_production_verification_v5
 from devagent.plc.production_models import RiskFinding, Severity
 from devagent.plc.production_report import render_production_report
 from devagent.plc.report_contract_v1 import build_report_contract
+from devagent.plc.report_levels import render_console_summary
 from devagent.plc.top_engineering_risks_v1 import render_top_engineering_risks
 
 
@@ -98,6 +99,7 @@ def test_project_only_report_contract_separates_analysis_from_release_readiness(
     result = run_production_verification_v5(_schneider_project(tmp_path))
     contract = build_report_contract(result)
     report = render_production_report(result)
+    console = render_console_summary(result)
 
     assert contract["schema"] == "devagent-plc-report-contract-v1"
     assert contract["review_mode"] == "PROJECT_ONLY_ENGINEERING_REVIEW"
@@ -111,6 +113,11 @@ def test_project_only_report_contract_separates_analysis_from_release_readiness(
     assert "| Requirement verification | NOT PROVIDED |" in report
     assert "| Report consistency contract | PASS |" in report
     assert "Requirement coverage incomplete" not in render_top_engineering_risks(result)
+
+    assert "DECISION SCORECARD" in console
+    assert "Requirement verification:          NOT PROVIDED" in console
+    assert "Report consistency contract:       PASS" in console
+    assert "Release-readiness score is a policy/evidence gate" in console
 
 
 def test_requirement_report_contract_remains_vendor_neutral_for_rockwell(tmp_path: Path) -> None:
