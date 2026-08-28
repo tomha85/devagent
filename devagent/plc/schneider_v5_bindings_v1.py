@@ -4,7 +4,7 @@ _INSTALLED = False
 
 
 def install() -> None:
-    """Install Schneider V5 sequencing/hardening, then refresh Production V5 bindings."""
+    """Install the current Schneider production theorem stack and refresh V5 bindings."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -24,10 +24,9 @@ def install() -> None:
 
     _install_state_machine_v5()
     # Production hardening is deliberately installed immediately after the V5
-    # theorem and before shared production functions are rebound. It canonicalizes
-    # numeric state identity, range-checks integer states, rejects impossible guards
-    # and timer/counter output bindings, and reconciles CASE-internal writers without
-    # weakening the fail-closed runtime boundary.
+    # theorem. It canonicalizes numeric state identity, range-checks integer
+    # states, rejects impossible guards/runtime output bindings, and reconciles
+    # CASE-internal writers without weakening the fail-closed runtime boundary.
     _install_state_machine_hardening_v5()
 
     # Granular Control Expert exports can repeat variables across .XST/.XSY.
@@ -35,9 +34,19 @@ def install() -> None:
     # invoke the parser so located/address information is never lost to file order.
     _install_tag_merge()
 
+    # Import V6 only after V5 hardening is active. Its immutable previous-profile
+    # binding must capture the hardened V5 capability contract, not the original
+    # pre-hardening function. V6 adds every-path interlock/permissive guard proof
+    # over FULL V1-V5 Boolean output and state-transition theorems only.
+    from devagent.plc.schneider_interlock_permissive_v6 import (
+        install as _install_interlock_permissive_v6,
+    )
+
+    _install_interlock_permissive_v6()
+
     # Production V5 imports shared production functions by value. Refresh those
-    # bindings only after Schneider V5 and its hardening layer have installed their
-    # vendor-specific analyzer, evidence, risk, requirement, and report hooks.
+    # bindings only after the complete Schneider V1-V6 vendor stack has installed
+    # analyzer, evidence, risk, requirement, and report hooks.
     _v5.run_v4_verification = _production.run_production_verification
     _v5.evidence_index = _evidence.evidence_index
     _v5.detect_risks = _review.detect_risks
