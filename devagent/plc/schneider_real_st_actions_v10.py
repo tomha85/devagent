@@ -27,7 +27,7 @@ _SIMPLE_REF = re.compile(
     r"^(?:%[A-Za-z]+[A-Za-z0-9_.]*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$"
 )
 _ARITH_TOKEN = re.compile(
-    r"\s*(?:(?P<number>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)|"
+    r"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)|"
     r"(?P<ref>%[A-Za-z]+[A-Za-z0-9_.]*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)|"
     r"(?P<op>\+|-|\*|/|\(|\)|\bMOD\b))",
     re.IGNORECASE,
@@ -86,10 +86,11 @@ def _arithmetic_refs(expr: str) -> tuple[str, ...] | None:
     """Validate a deliberately small pure arithmetic expression grammar.
 
     Supported operands are fixed references and numeric literals. Operators are
-    +, -, *, /, and MOD with normal parenthesis/precedence. Function calls,
-    indexed access, time literals, comparisons, assignments, and unknown tokens
-    are rejected. This proves only the local assignment effect when the source
-    statement executes; it does not prove the enclosing control path executes.
+    +, -, *, /, and MOD with normal parenthesis/precedence and unary +/-.
+    Function calls, indexed access, time literals, comparisons, assignments, and
+    unknown tokens are rejected. This proves only the local assignment effect
+    when the source statement executes; it does not prove the enclosing control
+    path executes.
     """
 
     tokens = _tokenize_arithmetic(expr)
@@ -103,6 +104,9 @@ def _arithmetic_refs(expr: str) -> tuple[str, ...] | None:
         if index >= len(tokens):
             return False
         kind, value = tokens[index]
+        if kind == "OP" and value in {"+", "-"}:
+            index += 1
+            return primary()
         if kind in {"NUMBER", "REF"}:
             if kind == "REF" and value not in refs:
                 refs.append(value)
@@ -160,28 +164,31 @@ def _assignment_action(statement) -> SchneiderSTLocalAction | None:
     refs: tuple[str, ...]
     expected: str
 
-    # Reuse the exact V1 Boolean parser so diagnostic/local-action semantics can
-    # never silently accept a wider Boolean grammar than the qualified theorem.
-    bool_ast = _v1._parse_bool_ast(rhs)
-    if bool_ast is not None and _v1._dnf(bool_ast) is not None:
-        family = "BOOLEAN_ASSIGNMENT"
-        refs = tuple(_v1._extract_refs(rhs))
-        expected = f"When this ST statement executes, {lhs} receives Boolean expression {rhs}."
-    elif _NUMBER.fullmatch(rhs):
+    if _NUMBER.fullmatch(rhs):
         family = "CONSTANT_ASSIGNMENT"
         refs = ()
         expected = f"When this ST statement executes, {lhs} receives numeric literal {rhs}."
-    elif _SIMPLE_REF.fullmatch(rhs):
+    elif _SIMPLE_REF.fullmatch(rhs) and rhs.upper() not in {"TRUE", "FALSE"}:
+        # A single fixed reference is a data move regardless of whether the
+        # canonical type is BOOL, INT, REAL, or another scalar type.
         family = "DATA_MOVE"
         refs = (rhs,)
         expected = f"When this ST statement executes, {lhs} receives the value of {rhs}."
     else:
-        arithmetic_refs = _arithmetic_refs(rhs)
-        if arithmetic_refs is None:
-            return None
-        family = "ARITHMETIC_ASSIGNMENT"
-        refs = arithmetic_refs
-        expected = f"When this ST statement executes, {lhs} receives arithmetic expression {rhs}."
+        # Reuse the exact V1 Boolean parser so local-action semantics can never
+        # silently accept a wider Boolean grammar than the qualified theorem.
+        bool_ast = _v1._parse_bool_ast(rhs)
+        if bool_ast is not None and _v1._dnf(bool_ast) is not None:
+            family = "BOOLEAN_ASSIGNMENT"
+            refs = tuple(_v1._extract_refs(rhs))
+            expected = f"When this ST statement executes, {lhs} receives Boolean expression {rhs}."
+        else:
+            arithmetic_refs = _arithmetic_refs(rhs)
+            if arithmetic_refs is None:
+                return None
+            family = "ARITHMETIC_ASSIGNMENT"
+            refs = arithmetic_refs
+            expected = f"When this ST statement executes, {lhs} receives arithmetic expression {rhs}."
 
     digest = hashlib.sha1(f"{statement.id}:{family}:{lhs}:{rhs}".encode("utf-8")).hexdigest()[:14]
     return SchneiderSTLocalAction(
