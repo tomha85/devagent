@@ -168,12 +168,17 @@ from devagent.plc.siemens_v5_bindings_v1 import install as _install_siemens_v5_b
 _install_siemens_v5_bindings_v1()
 
 from devagent.plc.schneider_integration_v1 import install as _install_schneider_integration_v1
+from devagent.plc.schneider_st_control_flow_v2 import install as _install_schneider_st_control_flow_v2
 from devagent.plc.schneider_v5_bindings_v1 import install as _install_schneider_v5_bindings_v1
 
 # Schneider Control Expert V1 is intentionally installed after the qualified
 # Rockwell and Siemens paths. It adds a third vendor-dispatched branch for .XEF
 # and granular XML exchange exports without changing either existing analyzer.
 _install_schneider_integration_v1()
+# Schneider V2 is an additive, vendor-local theorem over the immutable V1 IR.
+# Only complete top-level IF/ELSIF/ELSE Boolean final-value chains may upgrade to
+# FULL. Nested/enclosing control flow and ambiguous writers remain fail-closed.
+_install_schneider_st_control_flow_v2()
 # Production V5 captures shared production functions by value; refresh those
 # references after Schneider installs so all three vendors reach the same
 # evidence/readiness pipeline while preserving vendor-specific semantics.
