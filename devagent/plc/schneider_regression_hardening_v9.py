@@ -14,6 +14,7 @@ _INSTALLED = False
 _PREVIOUS_LD_GROUP = _v4._ld_group
 _PREVIOUS_V4_RENDER = _v4._v4_render
 _PREVIOUS_EXPLICIT_BOOL = _v6.explicit_bool
+_PREVIOUS_IS_RESTRICTIVE_REQUIREMENT = _v6._is_restrictive_requirement
 
 
 def _semantic_description(value: object) -> str | None:
@@ -69,6 +70,30 @@ def _explicit_bool(text: str, tag: str) -> bool | None:
     if not match:
         return None
     return match.group(1).casefold() in {"true", "on", "active"}
+
+
+def _is_restrictive_requirement(text: str) -> bool:
+    """Recognize Schneider V6 restrictive invariant wording without overclaiming.
+
+    The original detector recognizes ``only when``/``only if`` and a few
+    requirement verbs, but misses the production test forms ``shall only be``
+    and ``shall only transition when``. This classifier only decides whether V6
+    should attempt its existing bounded output/transition theorem; the theorem
+    itself still has to map uniquely and may return TRACEABLE_NOT_PROVEN.
+    """
+
+    if _PREVIOUS_IS_RESTRICTIVE_REQUIREMENT(text):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:shall|must)\s+only\s+(?:"
+            r"be\s+(?:TRUE|FALSE|ON|OFF|ACTIVE|INACTIVE)\b|"
+            r"transition\b"
+            r")",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _normal_transition_requirement(requirement, engineering, tests, previous, facts):
@@ -171,6 +196,7 @@ def install() -> None:
     # the V1-V9 theorem surface or convert runtime evidence into static proof.
     _v6._tag_metadata = _tag_metadata
     _v6.explicit_bool = _explicit_bool
+    _v6._is_restrictive_requirement = _is_restrictive_requirement
     _v6._normal_transition_requirement = _normal_transition_requirement
     _v8._scope_requirement = _scope_requirement
     _v4._ld_group = _ld_group
