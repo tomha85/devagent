@@ -5,6 +5,7 @@ on:
     branches: [main, "feat/schneider-*"]
     paths:
       - "devagent/plc/schneider_*.py"
+      - "devagent/plc/signature_trust.py"
       - "tests/test_plc_schneider*.py"
       - "scripts/qualify_schneider_v9.py"
       - "scripts/qualify_schneider_production_corpus.py"
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - "devagent/plc/schneider_*.py"
+      - "devagent/plc/signature_trust.py"
       - "tests/test_plc_schneider*.py"
       - "scripts/qualify_schneider_v9.py"
       - "scripts/qualify_schneider_production_corpus.py"
@@ -85,7 +87,7 @@ jobs:
               "commit_sha": os.environ["QUALIFIED_SHA"],
               "integration_sha": os.environ["INTEGRATION_SHA"],
               "qualified": True,
-              "scope": "Schneider V9 commercial/source-support closeout plus real-export production corpus gate engine",
+              "scope": "Schneider V9 commercial/source-support closeout plus signed real-export production corpus gate engine",
               "prerequisite_workflow": "Schneider Production Qualification V1-V8",
               "checks": {
                   "schneider_regression_suite": "PASS",
@@ -110,6 +112,7 @@ jobs:
                   "real_control_expert_export_corpus": "PENDING_EXTERNAL_EVIDENCE",
                   "production_corpus_runner": "scripts/qualify_schneider_production_corpus.py",
                   "production_corpus_schema": "devagent-schneider-production-corpus-v1",
+                  "production_corpus_signature_purpose": "SCHNEIDER_PRODUCTION_CORPUS",
                   "production_target": "9/10_STATIC_PRODUCTION_QUALIFIED",
                   "required_real_export_families": [
                       "M340",
@@ -122,13 +125,20 @@ jobs:
                       "LARGE_INDUSTRIAL",
                   ],
                   "real_export_requirements": {
+                      "trusted_ed25519_manifest_signature": True,
                       "content_hash_pinned": True,
                       "engineer_attested": True,
                       "timezone_aware_export_timestamp": True,
                       "double_analysis_determinism": True,
                       "family_labels_substantiated": True,
+                      "v9_support_contract_full": True,
+                      "engineering_outcome_statically_verified": True,
                       "synthetic_counts_as_real": False,
                       "source_paths_confined_to_corpus_root": True,
+                  },
+                  "large_industrial_floor": {
+                      "source_bytes": 1048576,
+                      "or_support_regions": 500,
                   },
                   "control_expert_simulator": "NOT_EXECUTED",
                   "hil": "NOT_EXECUTED",
@@ -136,8 +146,8 @@ jobs:
               },
               "commercial_claim_boundary": (
                   "The gate engine is implementation-qualified only after this workflow passes. Schneider 9/10 static production readiness "
-                  "requires a separately supplied real-export corpus to return STATIC_CORPUS_QUALIFIED. Simulator/HIL/real PLC and physical "
-                  "evidence remain a separate runtime/10-of-10 gate."
+                  "requires a separately supplied trusted-signed real-export corpus to return STATIC_CORPUS_QUALIFIED. Simulator/HIL/real PLC "
+                  "and physical evidence remain a separate runtime/10-of-10 gate."
               ),
           }
           path = Path(".devagent/schneider-qualified-head-v9.json")

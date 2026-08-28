@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+from devagent.plc.models import PLCOutcome
 from devagent.plc.schneider_closeout_v9 import (
     analyze_schneider_control_expert_v9,
     schneider_capability_profile_v9,
 )
+from devagent.plc.signature_trust import load_trusted_signer_store
+from devagent.plc.trusted_snapshot import read_json_snapshot, verify_snapshot_signature
 
 SCHEMA = "devagent-schneider-production-corpus-v1"
 REPORT_SCHEMA = "devagent-schneider-production-corpus-report-v1"
+SIGNATURE_PURPOSE = "SCHNEIDER_PRODUCTION_CORPUS"
 REQUIRED_REAL_EXPORT_FAMILIES = (
     "M340", "M580", "UNITY_LEGACY", "MIXED_ST_LD_FBD", "DFB_DDT",
     "STATE_MACHINE", "INTERLOCK_FAULT_RECOVERY", "LARGE_INDUSTRIAL",
@@ -21,6 +24,8 @@ REQUIRED_REAL_EXPORT_FAMILIES = (
 _HARDWARE_FAMILIES = {"M340", "M580", "UNITY_LEGACY"}
 _ALLOWED_SOURCE_KINDS = {"REAL_CONTROL_EXPERT_EXPORT", "SYNTHETIC"}
 _ALLOWED_ORIGINS = {"CUSTOMER", "LAB", "VENDOR_SAMPLE", "INTERNAL"}
+_LARGE_SOURCE_BYTES = 1024 * 1024
+_LARGE_SUPPORT_REGIONS = 500
 
 
 class SchneiderProductionCorpusError(ValueError):
@@ -40,6 +45,7 @@ class SchneiderProductionCaseResult:
     observed_bundle_sha256: str | None
     v9_manifest_sha256: str | None
     status: str
+    engineering_outcome: str | None
     support_contract: str | None
     support_regions: int
     support_full: int
@@ -63,6 +69,9 @@ class SchneiderProductionCorpusResult:
     corpus_id: str
     generated_at: str
     manifest_sha256: str
+    manifest_signature_verified: bool
+    manifest_signer_key_id: str | None
+    trust_store_sha256: str | None
     corpus_root: str
     status: str
     target_readiness: str
@@ -75,19 +84,6 @@ class SchneiderProductionCorpusResult:
     distinct_real_bundle_hashes: int
     cases: tuple[SchneiderProductionCaseResult, ...]
     blocking_findings: tuple[str, ...]
-
-
-def _read_json(path: Path, max_bytes: int = 2 * 1024 * 1024) -> tuple[dict[str, Any], str]:
-    payload = path.expanduser().resolve(strict=True).read_bytes()
-    if len(payload) > max_bytes:
-        raise SchneiderProductionCorpusError("Schneider production corpus manifest exceeds 2 MiB")
-    try:
-        value = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SchneiderProductionCorpusError(f"Invalid Schneider production corpus JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise SchneiderProductionCorpusError("Schneider production corpus manifest must be a JSON object")
-    return value, hashlib.sha256(payload).hexdigest()
 
 
 def _family(value: object) -> str:
@@ -145,7 +141,10 @@ def _observed_families(profile: dict[str, Any], controller_family: str | None) -
     )
     if guards > 0 and recovery > 0:
         observed.add("INTERLOCK_FAULT_RECOVERY")
-    if int(profile.get("source_bytes", 0)) >= 256 * 1024 or int(profile.get("support_regions", 0)) >= 200:
+    if (
+        int(profile.get("source_bytes", 0)) >= _LARGE_SOURCE_BYTES
+        or int(profile.get("support_regions", 0)) >= _LARGE_SUPPORT_REGIONS
+    ):
         observed.add("LARGE_INDUSTRIAL")
     return observed
 
@@ -153,6 +152,7 @@ def _observed_families(profile: dict[str, Any], controller_family: str | None) -
 def _snapshot(result) -> tuple[Any, ...]:
     profile = schneider_capability_profile_v9(result.project)
     return (
+        result.outcome.value,
         result.project.metadata.source_sha256,
         profile.get("deterministic_manifest_sha256"), profile.get("support_contract"),
         profile.get("support_regions"), profile.get("support_full"), profile.get("support_partial"),
@@ -161,6 +161,8 @@ def _snapshot(result) -> tuple[Any, ...]:
         bool(profile.get("export_metadata_consistent")), tuple(profile.get("unknown_executable_source_tags", ())),
         tuple(profile.get("missing_source_sections", ())), int(profile.get("source_files", 0)),
         int(profile.get("source_bytes", 0)), tuple(sorted(dict(profile.get("suffix_counts", {})).items())),
+        profile.get("identity_contract"), profile.get("state_machine_contract"), profile.get("guard_contract"),
+        profile.get("recovery_contract"),
     )
 
 
@@ -213,7 +215,7 @@ def _case_result(case: dict[str, Any], root: Path, run_twice: bool) -> Schneider
                 if stamp.tzinfo is None:
                     findings.append("real export exported_at must include a timezone offset")
 
-    observed_hash = v9_manifest = support_contract = None
+    observed_hash = v9_manifest = support_contract = engineering_outcome = None
     observed_family_set: set[str] = set()
     support_regions = support_full = support_partial = support_opaque = support_protected = 0
     source_files = source_bytes = 0
@@ -221,6 +223,7 @@ def _case_result(case: dict[str, Any], root: Path, run_twice: bool) -> Schneider
     try:
         first = analyze_schneider_control_expert_v9(path)
         profile = schneider_capability_profile_v9(first.project)
+        engineering_outcome = first.outcome.value
         observed_hash = str(first.project.metadata.source_sha256 or "").lower() or None
         v9_manifest = str(profile.get("deterministic_manifest_sha256") or "") or None
         support_contract = str(profile.get("support_contract") or "NONE")
@@ -240,7 +243,17 @@ def _case_result(case: dict[str, Any], root: Path, run_twice: bool) -> Schneider
         duplicate_sections = tuple(profile.get("duplicate_section_keys", ()))
         unknown_sources = tuple(profile.get("unknown_executable_source_tags", ()))
         missing_sections = tuple(profile.get("missing_source_sections", ()))
-        audit_clean = accounting_complete and metadata_consistent and not duplicate_sections and not unknown_sources and not missing_sections and support_regions > 0
+        if first.outcome is not PLCOutcome.STATICALLY_VERIFIED:
+            findings.append(f"engineering outcome is {first.outcome.value}, not STATICALLY_VERIFIED")
+        if support_contract != "FULL":
+            findings.append(
+                f"V9 support contract is {support_contract}; production corpus qualification requires FULL with no PARTIAL/OPAQUE/PROTECTED region"
+            )
+        audit_clean = (
+            accounting_complete and metadata_consistent and not duplicate_sections and not unknown_sources
+            and not missing_sections and support_regions > 0 and support_contract == "FULL"
+            and first.outcome is PLCOutcome.STATICALLY_VERIFIED
+        )
         if not accounting_complete:
             findings.append("V9 support accounting is incomplete")
         if not metadata_consistent:
@@ -265,17 +278,30 @@ def _case_result(case: dict[str, Any], root: Path, run_twice: bool) -> Schneider
     status = "PASS" if not findings and audit_clean and deterministic and hash_matches else "FAIL"
     return SchneiderProductionCaseResult(
         case_id, str(case.get("path") or ""), source_kind, origin, families, controller_family,
-        tuple(sorted(observed_family_set)), expected_hash, observed_hash, v9_manifest, status, support_contract,
-        support_regions, support_full, support_partial, support_opaque, support_protected, source_files, source_bytes,
-        deterministic, accounting_complete, metadata_consistent, audit_clean, hash_matches, real, tuple(findings),
+        tuple(sorted(observed_family_set)), expected_hash, observed_hash, v9_manifest, status, engineering_outcome,
+        support_contract, support_regions, support_full, support_partial, support_opaque, support_protected,
+        source_files, source_bytes, deterministic, accounting_complete, metadata_consistent, audit_clean,
+        hash_matches, real, tuple(findings),
     )
 
 
 def qualify_schneider_production_corpus(
-    manifest_path: Path, *, corpus_root: Path | None = None, run_twice: bool = True,
+    manifest_path: Path,
+    *,
+    corpus_root: Path | None = None,
+    trust_store_path: Path | None = None,
+    run_twice: bool = True,
 ) -> SchneiderProductionCorpusResult:
     manifest_path = Path(manifest_path).expanduser().resolve(strict=True)
-    manifest, manifest_hash = _read_json(manifest_path)
+    try:
+        snapshot = read_json_snapshot(
+            manifest_path,
+            max_bytes=2 * 1024 * 1024,
+            purpose=SIGNATURE_PURPOSE,
+        )
+    except ValueError as exc:
+        raise SchneiderProductionCorpusError(str(exc)) from exc
+    manifest = snapshot.data
     if manifest.get("schema") != SCHEMA:
         raise SchneiderProductionCorpusError(f"Unsupported corpus schema; expected {SCHEMA}")
     corpus_id = str(manifest.get("corpus_id") or "").strip()
@@ -286,6 +312,21 @@ def qualify_schneider_production_corpus(
         raise SchneiderProductionCorpusError("Schneider production corpus requires 1-100 cases")
     if not all(isinstance(item, dict) for item in cases_payload):
         raise SchneiderProductionCorpusError("Every corpus case must be a JSON object")
+    has_real = any(
+        str(item.get("source_kind") or "").strip().upper() == "REAL_CONTROL_EXPERT_EXPORT"
+        for item in cases_payload
+    )
+    try:
+        trust_store = load_trusted_signer_store(trust_store_path)
+        signature_record = verify_snapshot_signature(
+            snapshot,
+            purpose=SIGNATURE_PURPOSE,
+            trust_store=trust_store,
+            required=has_real,
+        )
+    except ValueError as exc:
+        raise SchneiderProductionCorpusError(str(exc)) from exc
+
     root = Path(corpus_root).expanduser().resolve(strict=True) if corpus_root else manifest_path.parent.resolve(strict=True)
     ids = [str(item.get("id") or "").strip().casefold() for item in cases_payload]
     if any(not item for item in ids):
@@ -303,6 +344,8 @@ def qualify_schneider_production_corpus(
     failed = [item for item in cases if item.status != "PASS"]
     if failed:
         blockers.append(f"{len(failed)} corpus case(s) failed qualification")
+    if has_real and signature_record is None:
+        blockers.append("real export corpus manifest is not authenticated by a trusted Ed25519 signer")
     if missing:
         blockers.append("missing real-export families: " + ", ".join(missing))
     hardware_hashes: dict[str, set[str]] = {family: set() for family in _HARDWARE_FAMILIES}
@@ -313,12 +356,33 @@ def qualify_schneider_production_corpus(
     represented = [next(iter(values)) for values in hardware_hashes.values() if values]
     if len(represented) == len(_HARDWARE_FAMILIES) and len(set(represented)) != len(_HARDWARE_FAMILIES):
         blockers.append("M340, M580, and UNITY_LEGACY must use distinct real export bundle identities")
-    ready = not blockers
-    status = "FAIL" if failed else "PENDING_REAL_EXPORT_CORPUS" if missing else "STATIC_CORPUS_QUALIFIED" if ready else "FAIL"
+    ready = not blockers and signature_record is not None
+    status = (
+        "FAIL" if failed
+        else "PENDING_REAL_EXPORT_CORPUS" if missing
+        else "STATIC_CORPUS_QUALIFIED" if ready
+        else "FAIL"
+    )
     return SchneiderProductionCorpusResult(
-        REPORT_SCHEMA, corpus_id, datetime.now(timezone.utc).isoformat(), manifest_hash, str(root), status,
-        "9/10_STATIC_PRODUCTION_QUALIFIED", ready, "NOT_EXECUTED", REQUIRED_REAL_EXPORT_FAMILIES,
-        covered, missing, sum(item.real_export_eligible for item in cases), len(real_hashes), cases, tuple(blockers),
+        REPORT_SCHEMA,
+        corpus_id,
+        datetime.now(timezone.utc).isoformat(),
+        snapshot.sha256,
+        signature_record is not None,
+        str(signature_record.get("key_id")) if signature_record else None,
+        str(signature_record.get("trust_store_sha256")) if signature_record else None,
+        str(root),
+        status,
+        "9/10_STATIC_PRODUCTION_QUALIFIED",
+        ready,
+        "NOT_EXECUTED",
+        REQUIRED_REAL_EXPORT_FAMILIES,
+        covered,
+        missing,
+        sum(item.real_export_eligible for item in cases),
+        len(real_hashes),
+        cases,
+        tuple(blockers),
     )
 
 
@@ -331,7 +395,8 @@ def render_markdown(result: SchneiderProductionCorpusResult) -> str:
     for item in result.cases:
         rows.append(
             f"| {item.id} | {item.source_kind} | {', '.join(item.families)} | {', '.join(item.observed_families)} | "
-            f"{item.status} | {item.support_contract or 'NONE'} | P={item.support_partial}, O={item.support_opaque}, X={item.support_protected} | "
+            f"{item.status} | {item.engineering_outcome or 'NONE'} | {item.support_contract or 'NONE'} | "
+            f"P={item.support_partial}, O={item.support_opaque}, X={item.support_protected} | "
             f"{'YES' if item.deterministic else 'NO'} |"
         )
     blockers = "\n".join(f"- {item}" for item in result.blocking_findings) or "- None"
@@ -341,13 +406,16 @@ def render_markdown(result: SchneiderProductionCorpusResult) -> str:
         f"- Commercial static ready: **{'YES' if result.commercial_static_ready else 'NO'}**\n"
         f"- Runtime execution: **{result.runtime_execution_status}**\n"
         f"- Manifest SHA-256: `{result.manifest_sha256}`\n"
+        f"- Manifest signature verified: **{'YES' if result.manifest_signature_verified else 'NO'}**\n"
+        f"- Manifest signer: **{result.manifest_signer_key_id or 'none'}**\n"
+        f"- Trust store SHA-256: `{result.trust_store_sha256 or 'none'}`\n"
         f"- Covered real families: **{', '.join(result.covered_real_families) or 'none'}**\n"
         f"- Missing real families: **{', '.join(result.missing_real_families) or 'none'}**\n\n"
-        "| Case | Source | Declared families | Observed evidence | Status | V9 contract | Explicit gaps | Deterministic |\n"
-        "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-        + ("\n".join(rows) if rows else "| none | - | - | - | - | - | - | - |")
+        "| Case | Source | Declared families | Observed evidence | Status | Engineering | V9 contract | Explicit gaps | Deterministic |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        + ("\n".join(rows) if rows else "| none | - | - | - | - | - | - | - | - |")
         + "\n\n## Blocking findings\n\n" + blockers
-        + "\n\n> `STATIC_CORPUS_QUALIFIED` proves deterministic handling and explicit fail-closed accounting across the registered real export corpus. It does not prove Simulator/HIL/real PLC execution, field wiring, scan timing, process physics, SIL, or PL.\n"
+        + "\n\n> `STATIC_CORPUS_QUALIFIED` proves trusted-manifest identity, deterministic handling, FULL static engineering outcome, and explicit fail-closed accounting across the registered real export corpus. It does not prove Simulator/HIL/real PLC execution, field wiring, scan timing, process physics, SIL, or PL.\n"
     )
 
 
@@ -362,7 +430,7 @@ def write_report(result: SchneiderProductionCorpusResult, *, json_path: Path, ma
 
 
 __all__ = [
-    "REPORT_SCHEMA", "REQUIRED_REAL_EXPORT_FAMILIES", "SCHEMA",
+    "REPORT_SCHEMA", "REQUIRED_REAL_EXPORT_FAMILIES", "SCHEMA", "SIGNATURE_PURPOSE",
     "SchneiderProductionCaseResult", "SchneiderProductionCorpusError", "SchneiderProductionCorpusResult",
     "qualify_schneider_production_corpus", "render_markdown", "result_payload", "write_report",
 ]
