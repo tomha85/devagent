@@ -18,6 +18,7 @@ def _write(path: Path, text: str) -> Path:
 def test_partial_st_classifier_clusters_common_real_control_expert_shapes() -> None:
     assert classify_partial_st("IF Start AND Ready THEN")[0] == "CONTROL_FLOW"
     assert classify_partial_st("Run := Start AND Ready;")[0] == "BOUNDED_BOOLEAN_SHAPE_PARTIAL"
+    assert classify_partial_st("Run := Start XOR Ready;")[0] == "OTHER_ASSIGNMENT"
     assert classify_partial_st("Count := Count + 1;")[0] == "ARITHMETIC_ASSIGNMENT"
     assert classify_partial_st("Timer1(IN := Start, PT := T#1s);")[0] == "CALL_STATEMENT"
     assert classify_partial_st("Buffer[Index] := Value;")[0] == "INDEXED_ASSIGNMENT"
