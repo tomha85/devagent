@@ -38,6 +38,22 @@ BEGIN
 END_ORGANIZATION_BLOCK
 """
 
+SCHNEIDER_PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
+<STExchangeFile>
+  <fileHeader company="Schneider Automation" product="EcoStruxure Control Expert V16" DTDVersion="41" />
+  <contentHeader name="SchneiderProgress" version="1.0" />
+  <program>
+    <identProgram name="Main" type="section" task="MAST" />
+    <STSource>Run := Start AND Guard;</STSource>
+  </program>
+  <dataBlock>
+    <variables name="Start" typeName="BOOL" />
+    <variables name="Guard" typeName="BOOL" />
+    <variables name="Run" typeName="BOOL" />
+  </dataBlock>
+</STExchangeFile>
+"""
+
 
 def _write_project(tmp_path: Path) -> Path:
     path = tmp_path / "Progress.L5X"
@@ -48,6 +64,12 @@ def _write_project(tmp_path: Path) -> Path:
 def _write_siemens_project(tmp_path: Path) -> Path:
     path = tmp_path / "Main.scl"
     path.write_text(SIEMENS_PROJECT.strip() + "\n", encoding="utf-8")
+    return path
+
+
+def _write_schneider_project(tmp_path: Path) -> Path:
+    path = tmp_path / "Main.xst"
+    path.write_text(SCHNEIDER_PROJECT, encoding="utf-8")
     return path
 
 
@@ -121,3 +143,21 @@ def test_cli_verbose_siemens_progress_is_vendor_correct_from_first_stage(
     assert "SCL statements" in stdout
     assert "Validated Rockwell full-project L5X" not in stdout
     assert "RLL rungs" not in stdout
+
+
+def test_cli_verbose_schneider_progress_is_vendor_correct_from_first_stage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = _write_schneider_project(tmp_path)
+
+    assert plc_cli.main([str(project), "--no-write", "--verbose"]) == 2
+    stdout = capsys.readouterr().out
+
+    assert "Validated Schneider EcoStruxure Control Expert XML exchange export" in stdout
+    assert "variables" in stdout
+    assert "sections/routines" in stdout
+    assert "ST statement" in stdout
+    assert "Validated Rockwell full-project L5X" not in stdout
+    assert "RLL rungs" not in stdout
+    assert "Validated Siemens TIA Portal engineering export bundle" not in stdout
