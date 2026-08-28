@@ -21,6 +21,7 @@ from devagent.plc.models import (
 _INSTALLED = False
 _PREVIOUS_ANALYZER = _v9.analyze_schneider_control_expert_v9
 _PREVIOUS_CAPABILITY = _v9.schneider_capability_profile_v9
+_ACTION_SCHEMA = "devagent-schneider-real-st-actions-v1"
 
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$")
 _SIMPLE_REF = re.compile(
@@ -292,7 +293,10 @@ def _action_fat_tests(facts: SchneiderSTActionFacts) -> list[FATTestCase]:
 def schneider_capability_profile_v10(project) -> dict[str, object]:
     profile = dict(_PREVIOUS_CAPABILITY(project))
     facts = _facts(project)
-    profile["schema"] = "devagent-schneider-control-expert-capability-v10"
+    # Preserve the V9 commercial support-contract schema. Real-ST local actions
+    # are an additive sub-capability and must not rewrite existing evidence/API
+    # consumers that key on the V9 capability schema.
+    profile["real_st_action_schema"] = _ACTION_SCHEMA
     if facts is None:
         profile.update(
             {
@@ -300,6 +304,7 @@ def schneider_capability_profile_v10(project) -> dict[str, object]:
                 "real_st_local_action_families": {},
                 "partial_st_with_local_action_semantics": 0,
                 "partial_st_withheld_from_local_action_semantics": 0,
+                "real_st_local_actions_promote_v9_support": False,
             }
         )
         return profile
