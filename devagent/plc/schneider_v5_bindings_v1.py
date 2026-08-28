@@ -9,13 +9,8 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    # Import V5 only here. __init__ invokes this function after the V4 graphical
-    # writer-hardening install, so Schneider V5 captures the exact hardened V4
-    # analyzer/capability chain rather than an earlier vendor layer.
     from devagent.plc.schneider_state_machine_v5 import install as _install_state_machine_v5
-    from devagent.plc.schneider_state_machine_hardening_v5 import (
-        install as _install_state_machine_hardening_v5,
-    )
+    from devagent.plc.schneider_state_machine_hardening_v5 import install as _install_state_machine_hardening_v5
     from devagent.plc import production as _production
     from devagent.plc import production_evidence as _evidence
     from devagent.plc import production_review as _review
@@ -26,28 +21,28 @@ def install() -> None:
     _install_state_machine_hardening_v5()
     _install_tag_merge()
 
-    from devagent.plc.schneider_interlock_permissive_v6 import (
-        install as _install_interlock_permissive_v6,
-    )
+    from devagent.plc.schneider_interlock_permissive_v6 import install as _install_interlock_permissive_v6
     _install_interlock_permissive_v6()
 
-    from devagent.plc.schneider_interlock_permissive_hardening_v6 import (
-        install as _install_interlock_permissive_hardening_v6,
-    )
+    from devagent.plc.schneider_interlock_permissive_hardening_v6 import install as _install_interlock_permissive_hardening_v6
     _install_interlock_permissive_hardening_v6()
 
     from devagent.plc.schneider_fault_recovery_v7 import install as _install_fault_recovery_v7
     _install_fault_recovery_v7()
 
     # V8 owns canonical project-wide symbol/type/I/O identity over the complete
-    # V1-V7 theorem stack. Its hardening pass removes flat pseudo-global symbols
-    # that originate only from DDT/DFB interface `<variables>` containers.
+    # V1-V7 theorem stack. Scope hardening prevents DDT/DFB member `<variables>`
+    # from leaking into controller-root identity; typed Boolean hardening removes
+    # source theorems whose canonical types are not BOOL/EBOOL/BOOLEAN.
     from devagent.plc.schneider_identity_types_v8 import install as _install_identity_types_v8
-    from devagent.plc.schneider_identity_hardening_v8 import (
-        install as _install_identity_hardening_v8,
-    )
+    from devagent.plc.schneider_identity_hardening_v8 import install as _install_identity_hardening_v8
+    from devagent.plc.schneider_v8_compat_hardening import install as _install_v8_compat_hardening
+
     _install_identity_types_v8()
     _install_identity_hardening_v8()
+    # The compatibility closeout rebuilds V8 identity directly over the V7 result
+    # so additive identity metadata does not rewrite the V1-V7 theorem provenance.
+    _install_v8_compat_hardening()
 
     # Production V5 imports shared production functions by value. Refresh those
     # bindings only after the complete Schneider V1-V8 vendor stack is installed.
