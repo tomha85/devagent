@@ -1,27 +1,42 @@
 # DevAgent — General Architecture
 
-This is the high-level view of DevAgent. The same DevAgent core supports both software engineering and PLC engineering through vendor-specific inputs.
+DevAgent has one core, but **software engineering and PLC engineering are two different workflows**. They share evidence, review, and reporting principles, but they do not perform the same kind of work.
 
 ```text
-                         DevAgent Core
-                              │
-        ┌─────────────┬───────┴───────┬─────────────┐
-        │             │               │             │
-     Software      Siemens         Rockwell      Schneider
-        │             │               │             │
- Python / etc.    TIA Portal      Studio 5000    Control Expert
-                  exports          / L5X          / XEF
-        │             │               │             │
-        └─────────────┴───────┬───────┴─────────────┘
-                              │
-                    Review → Verify → FAT → Report
+                              DevAgent Core
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+          Software Engineering             PLC Engineering
+                    │                             │
+          Local / GitHub Repo          ┌──────────┼──────────┐
+                    │                  │          │          │
+          Understand / Plan         Siemens    Rockwell   Schneider
+                    │               TIA        Studio     Control
+             Modify Code            exports    5000/L5X   Expert/XEF
+                    │                  │          │          │
+           Build / Test / Review       └──────────┼──────────┘
+                    │                             │
+          Engineering Report              Analyze / Verify
+                    │                             │
+          Commit / Push Branch             FAT Plan / Report
+                    │
+       Developer / Repo Integration
 ```
 
-In simple terms: **one DevAgent core, multiple engineering inputs, one evidence-driven review and reporting workflow.**
+### Software Engineering
 
-- **Software** — works with normal software repositories such as Python, JavaScript/TypeScript, Java, .NET, C/C++, Go, Rust, and others supported by repository-native tooling.
-- **Siemens** — analyzes supported TIA Portal exported engineering artifacts.
-- **Rockwell** — analyzes Studio 5000 / Logix Designer `.L5X` exports.
-- **Schneider** — analyzes EcoStruxure Control Expert / Unity Pro exports with `.XEF` preferred.
+DevAgent works directly with a software working repository. It can understand the repository, implement a bounded code change, run repository-native tests/builds, independently review the result, produce an engineering report, and publish a verified commit to a safe branch. Pull-request approval and merge remain part of the developer/repository integration workflow rather than the PLC workflow.
 
-DevAgent keeps deterministic evidence, engineering review, FAT planning, and reporting separate from simulator, HIL, or real-controller execution.
+### PLC Engineering
+
+DevAgent works from exported PLC engineering artifacts rather than editing or controlling the live PLC. Siemens, Rockwell, and Schneider each have a vendor-specific import path, but all feed the PLC analysis workflow for logic review, requirement verification, risk detection, FAT planning, regression analysis, evidence, and engineering reporting.
+
+In simple terms:
+
+```text
+Software:  Working Repo → Change → Test → Review → Report → Commit/Push
+PLC:       PLC Export   → Analyze → Verify → FAT Plan → Engineering Report
+```
+
+The two branches share the DevAgent evidence-driven core, but their execution and release workflows intentionally remain separate.
