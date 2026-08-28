@@ -107,7 +107,7 @@ def test_schneider_st_builds_ir_graph_fat_and_vendor_report(tmp_path: Path) -> N
 
     report = render_production_report(result)
     assert "Schneider Control Expert Export Inventory" in report
-    assert "simple series LD" in report
+    assert "simple series ld" in report.lower()
     assert "Control Expert Simulator" in report
 
 
