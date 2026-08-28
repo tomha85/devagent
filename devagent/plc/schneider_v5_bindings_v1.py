@@ -49,8 +49,10 @@ def install() -> None:
     # and DFB call boundary, records deterministic bundle identity, and preserves
     # the external real-export/runtime evidence gates instead of overclaiming.
     from devagent.plc.schneider_closeout_v9 import install as _install_closeout_v9
+    from devagent.plc.schneider_v9_hardening import install as _install_v9_hardening
 
     _install_closeout_v9()
+    _install_v9_hardening()
 
     # Production V5 imports shared production functions by value. Refresh those
     # bindings only after the complete Schneider V1-V9 vendor stack is installed.
