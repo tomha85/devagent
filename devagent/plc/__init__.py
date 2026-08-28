@@ -179,6 +179,16 @@ _install_schneider_integration_v1()
 # Only complete top-level IF/ELSIF/ELSE Boolean final-value chains may upgrade to
 # FULL. Nested/enclosing control flow and ambiguous writers remain fail-closed.
 _install_schneider_st_control_flow_v2()
+
+# Import V3 only after V2 is installed so its immutable previous-analyzer binding
+# is the qualified V2 analyzer rather than the original V1 entry point.
+from devagent.plc.schneider_call_graph_v3 import install as _install_schneider_call_graph_v3
+
+# Schneider V3 adds DFB type/instance/interface and section-rooted call closure.
+# A proven binding is kept separate from arbitrary DFB runtime behavior; Boolean
+# proof crosses the boundary only through a bounded local theorem with exact
+# named bindings, compatible types, acyclic reachability, and unique writers.
+_install_schneider_call_graph_v3()
 # Production V5 captures shared production functions by value; refresh those
 # references after Schneider installs so all three vendors reach the same
 # evidence/readiness pipeline while preserving vendor-specific semantics.
