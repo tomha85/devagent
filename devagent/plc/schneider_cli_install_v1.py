@@ -37,6 +37,12 @@ def install() -> None:
 
     from devagent.plc import cli as _cli
     from devagent.plc.plc_dispatch import detect_plc_vendor
+    from devagent.plc.schneider_report_install_v1 import install as _install_schneider_report
+
+    # Report dispatch is presentation-only and is installed from the same final
+    # package hook so library and CLI consumers receive Schneider-correct
+    # semantic-coverage wording without changing Rockwell/Siemens renderers.
+    _install_schneider_report()
 
     previous_parser = _cli._parser
     previous_header = _cli._print_run_header
