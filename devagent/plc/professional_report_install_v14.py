@@ -38,8 +38,13 @@ def install() -> None:
     # This does not alter the complete report, risk register, proof, FAT, or
     # readiness decisions.
     from devagent.plc.top_engineering_risks_v1 import install as _install_top_engineering_risks_v1
+    from devagent.plc.report_contract_console_v1 import install as _install_report_contract_console_v1
 
     _install_top_engineering_risks_v1()
+    # Install after the risk-summary wrapper so the final Level 1 surface shows
+    # both root-cause risk grouping and the independent analysis/proof/FAT/release
+    # decision separation contract.
+    _install_report_contract_console_v1()
     _INSTALLED = True
 
 

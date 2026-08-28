@@ -72,6 +72,36 @@ def test_v9_fbd_linksource_is_wiring_metadata_not_unknown_executable_source(tmp_
     assert profile["support_contract"] == "PARTIAL_FAIL_CLOSED"
 
 
+def test_v9_non_wiring_linksource_remains_unknown_and_fails_closed(tmp_path: Path) -> None:
+    source = _write(
+        tmp_path / "UnexpectedLinkSource.xst",
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<STExchangeFile>
+  <fileHeader company="Schneider Automation" product="EcoStruxure Control Expert V16" DTDVersion="41" />
+  <contentHeader name="SchneiderV9UnexpectedLink" version="1.0" />
+  <program>
+    <identProgram name="Main" type="section" task="MAST" />
+    <STSource>Run := Start;</STSource>
+    <linkSource extensionKind="unexpectedExecutableSurface" />
+  </program>
+  <dataBlock>
+    <variables name="Start" typeName="BOOL" />
+    <variables name="Run" typeName="BOOL" />
+  </dataBlock>
+</STExchangeFile>
+''',
+    )
+
+    result = analyze_plc_project(source)
+    profile = schneider_capability_profile_v9(result.project)
+
+    assert profile["unknown_executable_source_tags"] == [
+        "UnexpectedLinkSource.xst:Main:linkSource"
+    ]
+    assert profile["commercial_closeout_status"] == "PARTIAL_FAIL_CLOSED"
+    assert result.outcome is PLCOutcome.PARTIALLY_VERIFIED
+
+
 def test_v9_required_real_export_corpus_remains_explicit(tmp_path: Path) -> None:
     source = _write(
         tmp_path / "Main.xst",

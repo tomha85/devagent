@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 
 from devagent.plc.production_models import ExecutionStatus, RequirementStatus, Severity
+from devagent.plc.report_contract_v1 import build_report_contract
 
 
 _SEVERITY_ORDER = {
@@ -29,6 +30,10 @@ def _table(headers: list[str], rows: list[list[object]]) -> list[str]:
         lines.append("| " + " | ".join(_escape(value) for value in row) + " |")
     lines.append("")
     return lines
+
+
+def _score(value: object) -> str:
+    return "N/A" if value is None else f"{float(value):.1f}%"
 
 
 def _release_recommendation(result) -> str:
@@ -81,6 +86,7 @@ def render_professional_overview(result) -> str:
     req = _requirement_counts(result)
     risks = _risk_counts(result)
     fat = _execution_counts(result)
+    contract = build_report_contract(result)
     scenario_counts = Counter(test.scenario for test in result.engineering.fat_tests)
     finding_counts = Counter(item.severity.value for item in result.engineering_findings)
 
@@ -122,8 +128,95 @@ def render_professional_overview(result) -> str:
             ["Baseline SHA-256", f"`{result.baseline_sha256 or 'not supplied'}`"],
             ["Verification context SHA-256", f"`{result.verification_context_sha256 or 'not evaluated'}`"],
             ["Release policy", (result.release_policy or {}).get("policy_id", "not evaluated")],
+            ["Report contract", contract["schema"]],
         ],
     )
+
+    semantic = contract["semantic"]
+    requirement_contract = contract["requirements"]
+    execution_contract = contract["execution"]
+    release_contract = contract["release"]
+    if requirement_contract["scope"] == "NOT_PROVIDED":
+        requirement_value = "NOT PROVIDED"
+        requirement_interpretation = (
+            "Customer/engineering requirements were not supplied. Requirement compliance is not evaluated and no compliance PASS claim is made."
+        )
+    else:
+        requirement_value = (
+            f"{requirement_contract['proven']} proven / {requirement_contract['unresolved']} unresolved "
+            f"of {requirement_contract['total']}"
+        )
+        requirement_interpretation = (
+            "Requirement results are evidence-backed; unresolved/conflicting requirements remain visible and cannot be promoted to PASS by AI."
+        )
+
+    semantic_pct = _score(semantic["full_pct"])
+    semantic_value = (
+        "N/A — no normalized logic objects"
+        if semantic["normalized_logic_objects"] == 0
+        else (
+            f"{semantic['full']}/{semantic['normalized_logic_objects']} FULL ({semantic_pct}); "
+            f"PARTIAL {semantic['partial']} / OPAQUE {semantic['opaque']}"
+        )
+    )
+    execution_pct = _score(execution_contract["executed_pct"])
+    release_value = (
+        f"{release_contract['status']}"
+        if release_contract["score"] is None
+        else f"{release_contract['status']} — {release_contract['score']}/100"
+    )
+
+    lines += [
+        "### Independent Decision Scorecard",
+        "",
+        "> These indicators answer different questions and must not be collapsed into one number. In particular, **release-readiness score is a policy/evidence gate, not a score of DevAgent analysis quality**.",
+        "",
+    ]
+    lines += _table(
+        ["Decision Area", "Result", "Interpretation"],
+        [
+            [
+                "Engineering review coverage",
+                _score(contract["engineering_analysis_score"]),
+                "Completeness of evidence-bearing review stages. PARTIAL semantics reduce this indicator; optional AI, requirements, baseline, and runtime execution are scored separately.",
+            ],
+            [
+                "Normalized semantic proof coverage",
+                semantic_value,
+                "FULL means bounded deterministic behavior proof for that normalized logic object. PARTIAL/OPAQUE remain explicitly withheld.",
+            ],
+            ["Requirement verification", requirement_value, requirement_interpretation],
+            [
+                "FAT plan completeness",
+                _score(contract["fat_plan_completeness_score"]),
+                "Checks whether generated FAT procedures contain objective/expected behavior, setup, actions, watch targets, evidence requirements, and failure implications; it does not mean FAT was executed.",
+            ],
+            [
+                "Runtime FAT execution",
+                f"{execution_contract['executed']}/{execution_contract['total']} executed ({execution_pct})",
+                "Only authenticated imported execution evidence can create runtime PASS/FAIL claims. NOT_RUN is not a failure of static analysis.",
+            ],
+            [
+                "Evidence package",
+                f"{contract['evidence_items']} evidence item(s) / {contract['verified_signatures']} verified signature(s)",
+                "Evidence quantity is reported separately from proof quality; source hashes, provenance, and trust boundaries remain authoritative.",
+            ],
+            [
+                "Release readiness",
+                release_value,
+                "Policy decision over required proof, runtime evidence, trust, blockers, and approval. A low release score must not be interpreted as low engineering-analysis quality.",
+            ],
+            [
+                "Report consistency contract",
+                contract["contract_status"],
+                "PASS means the report-contract invariants found no known contradictory claims such as requirement compliance without supplied requirements or FAT PASS without execution evidence.",
+            ],
+        ],
+    )
+    if contract["violations"]:
+        lines += ["**Report-contract attention items**", ""]
+        lines += [f"- {item}" for item in contract["violations"]]
+        lines.append("")
 
     lines += ["### Management Dashboard", ""]
     lines += _table(
@@ -136,8 +229,16 @@ def render_professional_overview(result) -> str:
             ],
             [
                 "Requirement verification",
-                f"{proven_requirements} proven / {unresolved_requirements} unresolved of {len(result.requirement_verification)} mapped evaluations",
-                "Unresolved or conflicting requirements remain visible and are not promoted to PASS.",
+                (
+                    "NOT EVALUATED — requirements not supplied"
+                    if not result.requirements
+                    else f"{proven_requirements} proven / {unresolved_requirements} unresolved of {len(result.requirement_verification)} mapped evaluations"
+                ),
+                (
+                    "Requirement compliance is outside this project-only review because no requirement artifact was supplied; DevAgent makes no customer-specification compliance claim."
+                    if not result.requirements
+                    else "Unresolved or conflicting requirements remain visible and are not promoted to PASS."
+                ),
             ],
             [
                 "Logic & risk review",
@@ -175,9 +276,9 @@ def render_professional_overview(result) -> str:
             ["High engineering findings", finding_counts["HIGH"]],
             ["Critical risks", risks["CRITICAL"]],
             ["High risks", risks["HIGH"]],
-            ["Requirement conflicts", req[RequirementStatus.CONFLICT]],
-            ["Traceable but not proven requirements", req[RequirementStatus.TRACEABLE_NOT_PROVEN]],
-            ["Unmapped requirements", req[RequirementStatus.NOT_MAPPED]],
+            ["Requirement conflicts", "N/A" if not result.requirements else req[RequirementStatus.CONFLICT]],
+            ["Traceable but not proven requirements", "N/A" if not result.requirements else req[RequirementStatus.TRACEABLE_NOT_PROVEN]],
+            ["Unmapped requirements", "N/A" if not result.requirements else req[RequirementStatus.NOT_MAPPED]],
             ["FAT procedures not yet run", fat["NOT_RUN"]],
             ["FAT failures", fat["FAIL"]],
             ["Release blockers", len(readiness.blockers) if readiness else 0],
@@ -229,7 +330,7 @@ def render_professional_overview(result) -> str:
         "",
         "### Report Navigation",
         "",
-        "1. Executive Summary and management dashboard",
+        "1. Executive Summary and independent decision scorecard",
         "2. Technical verification identity and 15-stage pipeline",
         "3. Four-core PLC review contract",
         "4. Semantic coverage / proof boundary",
