@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from devagent.plc import schneider_identity_types_v8 as _v8
+from devagent.plc import schneider_interlock_permissive_v6 as _v6
 from devagent.plc.models import PLCOutcome, PLCEngineeringResult, PLCSemanticState, StaticCheck, StaticCheckStatus
 from devagent.plc.production_models import RiskFinding, Severity
 from devagent.plc.production_utils import stable_id
@@ -13,6 +14,7 @@ _PREVIOUS_BUILD_SYMBOLS = _v8._build_symbols
 _PREVIOUS_ANALYZER = _v8.analyze_schneider_control_expert_v8
 _PREVIOUS_CAPABILITY = _v8.schneider_capability_profile_v8
 _BOOL_TYPES = {"BOOL", "EBOOL", "BOOLEAN"}
+_BOOLEAN_FAT_SCENARIOS = {"POSITIVE_PATH", "NEGATIVE_PATH"}
 
 
 def _hardened_build_symbols(project, types, files):
@@ -50,8 +52,68 @@ def _typed_boolean_gaps(project, facts):
     return tuple(gaps)
 
 
-def _hardened_analyzer(path) -> PLCEngineeringResult:
-    base = _PREVIOUS_ANALYZER(path)
+def _invalidate_v6_output_contracts(project, invalid_logic_ids: set[str]) -> None:
+    """Propagate V8 type failure into V6 every-path output contracts."""
+    facts = _v6._facts(project)
+    if facts is None or not invalid_logic_ids:
+        return
+    outputs = tuple(
+        replace(
+            contract,
+            all_path_terms=(),
+            semantic_state=PLCSemanticState.PARTIAL,
+            reason="typed_non_boolean_identity_v8",
+        )
+        if contract.output_logic_id in invalid_logic_ids
+        else contract
+        for contract in facts.output_contracts
+    )
+    setattr(project, "_schneider_v6_guard_facts", replace(facts, output_contracts=outputs))
+
+
+def _filter_invalid_boolean_fat(fat_tests, invalid_outputs: set[str]):
+    if not invalid_outputs:
+        return list(fat_tests)
+    return [
+        test
+        for test in fat_tests
+        if not (
+            test.output_tag.casefold() in invalid_outputs
+            and (
+                test.scenario in _BOOLEAN_FAT_SCENARIOS
+                or test.scenario.startswith("SCHNEIDER_OUTPUT_GUARD_")
+            )
+        )
+    ]
+
+
+def _typed_checks(base_checks, project, gaps):
+    checks = [
+        item
+        for item in base_checks
+        if item.id != "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM"
+        and not (gaps and item.id.startswith("SCHNEIDER_V6_"))
+    ]
+    if gaps:
+        v6facts = _v6._facts(project)
+        if v6facts is not None:
+            checks.extend(_v6._v6_checks(v6facts))
+    checks.append(
+        StaticCheck(
+            "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM",
+            StaticCheckStatus.NOT_PROVEN if gaps else StaticCheckStatus.PASS,
+            (
+                f"Withheld {len(gaps)} FULL Boolean theorem(s) because canonical V8 type identity is non-Boolean or unresolved."
+                if gaps
+                else "Every FULL Schneider Boolean output theorem resolves to BOOL/EBOOL/BOOLEAN output and path-term identities."
+            ),
+            tuple(item[0] for item in gaps),
+        )
+    )
+    return checks
+
+
+def _apply_typed_boolean_hardening(base: PLCEngineeringResult) -> PLCEngineeringResult:
     project = base.project
     facts = _v8._facts(project)
     if facts is None:
@@ -75,32 +137,34 @@ def _hardened_analyzer(path) -> PLCEngineeringResult:
             for statement in project.logic_statements
         ]
         base.graph.edges = [
-            edge for edge in base.graph.edges
+            edge
+            for edge in base.graph.edges
             if not (edge.kind == "DEPENDS_ON" and edge.evidence_id in invalid_ids)
         ]
+        _invalidate_v6_output_contracts(project, invalid_ids)
 
-    checks = [item for item in base.static_checks if item.id != "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM"]
-    checks.append(
-        StaticCheck(
-            "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM",
-            StaticCheckStatus.NOT_PROVEN if gaps else StaticCheckStatus.PASS,
-            (
-                f"Withheld {len(gaps)} FULL Boolean theorem(s) because canonical V8 type identity is non-Boolean or unresolved."
-                if gaps
-                else "Every FULL Schneider Boolean output theorem resolves to BOOL/EBOOL/BOOLEAN output and path-term identities."
-            ),
-            tuple(item[0] for item in gaps),
-        )
-    )
+    checks = _typed_checks(base.static_checks, project, gaps)
+    fat_tests = _filter_invalid_boolean_fat(base.fat_tests, invalid_outputs)
     outcome = base.outcome
     if gaps and outcome is PLCOutcome.STATICALLY_VERIFIED:
         outcome = PLCOutcome.PARTIALLY_VERIFIED
     limitations = list(base.limitations)
     if gaps:
         limitations.append(
-            "Schneider V8 removed Boolean proof from output theorem(s) whose canonical output or dependency types are not BOOL/EBOOL/BOOLEAN; typed DDT/DFB/ARRAY values are never treated as Boolean merely because V1 syntax was parseable."
+            "Schneider V8 removed Boolean proof and Boolean-derived FAT from output theorem(s) whose canonical output or dependency types are not BOOL/EBOOL/BOOLEAN; typed DDT/DFB/ARRAY values are never treated as Boolean merely because V1 syntax was parseable."
         )
-    return PLCEngineeringResult(outcome, project, base.graph, base.fat_tests, checks, list(dict.fromkeys(limitations)))
+    return PLCEngineeringResult(
+        outcome,
+        project,
+        base.graph,
+        fat_tests,
+        checks,
+        list(dict.fromkeys(limitations)),
+    )
+
+
+def _hardened_analyzer(path) -> PLCEngineeringResult:
+    return _apply_typed_boolean_hardening(_PREVIOUS_ANALYZER(path))
 
 
 def _hardened_capability(project):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from devagent.plc import schneider_identity_hardening_v8 as _hard
@@ -127,67 +126,7 @@ def _canonicalize_v8(path) -> PLCEngineeringResult:
         checks,
         list(dict.fromkeys(limitations)),
     )
-    return _apply_typed_boolean_hardening(identity_result)
-
-
-def _apply_typed_boolean_hardening(base: PLCEngineeringResult) -> PLCEngineeringResult:
-    project = base.project
-    facts = _v8._facts(project)
-    if facts is None:
-        return base
-    gaps = _hard._typed_boolean_gaps(project, facts)
-    setattr(project, "_schneider_v8_typed_boolean_gaps", gaps)
-    invalid_ids = {item[0] for item in gaps}
-    invalid_outputs = {item[1].casefold() for item in gaps}
-
-    if invalid_ids:
-        project.output_logic = [
-            replace(logic, semantic_state=PLCSemanticState.PARTIAL)
-            if logic.id in invalid_ids else logic
-            for logic in project.output_logic
-        ]
-        project.logic_statements = [
-            replace(statement, semantic_state=PLCSemanticState.PARTIAL)
-            if statement.semantic_state is PLCSemanticState.FULL
-            and any(ref.casefold() in invalid_outputs for ref in statement.writes)
-            else statement
-            for statement in project.logic_statements
-        ]
-        base.graph.edges = [
-            edge
-            for edge in base.graph.edges
-            if not (edge.kind == "DEPENDS_ON" and edge.evidence_id in invalid_ids)
-        ]
-
-    checks = [item for item in base.static_checks if item.id != "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM"]
-    checks.append(
-        StaticCheck(
-            "SCHNEIDER_V8_TYPED_BOOLEAN_THEOREM",
-            StaticCheckStatus.NOT_PROVEN if gaps else StaticCheckStatus.PASS,
-            (
-                f"Withheld {len(gaps)} FULL Boolean theorem(s) because canonical V8 type identity is non-Boolean or unresolved."
-                if gaps
-                else "Every FULL Schneider Boolean output theorem resolves to BOOL/EBOOL/BOOLEAN output and path-term identities."
-            ),
-            tuple(item[0] for item in gaps),
-        )
-    )
-    outcome = base.outcome
-    if gaps and outcome is PLCOutcome.STATICALLY_VERIFIED:
-        outcome = PLCOutcome.PARTIALLY_VERIFIED
-    limitations = list(base.limitations)
-    if gaps:
-        limitations.append(
-            "Schneider V8 removed Boolean proof from output theorem(s) whose canonical output or dependency types are not BOOL/EBOOL/BOOLEAN; typed DDT/DFB/ARRAY values are never treated as Boolean merely because V1 syntax was parseable."
-        )
-    return PLCEngineeringResult(
-        outcome,
-        project,
-        base.graph,
-        base.fat_tests,
-        checks,
-        list(dict.fromkeys(limitations)),
-    )
+    return _hard._apply_typed_boolean_hardening(identity_result)
 
 
 def install() -> None:
