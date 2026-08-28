@@ -92,15 +92,15 @@ def _risk_family(risk: RiskFinding) -> str:
     """Return the engineering root-cause family used only for Level 1 grouping.
 
     Root-cause signals intentionally take precedence over downstream prose. An
-    explicit REQUIREMENT risk is a requirement risk, but a call/writer/semantic
-    risk must not become "requirement coverage" merely because its consequence
-    mentions downstream requirement traceability.
+    explicit requirement-category risk is a requirement risk, but a call/writer/
+    semantic risk must not become ``requirement_coverage`` merely because its
+    consequence mentions downstream requirement traceability.
     """
 
     text = _risk_text(risk)
     category = risk.category.casefold()
     risk_id = risk.id.casefold()
-    if category in {"requirement", "requirement_coverage"} or risk_id.startswith("risk-req"):
+    if category == "requirement" or category.startswith("requirement_") or risk_id.startswith("risk-req"):
         return "requirement_coverage"
     if "test_failure" in category or "fat test" in text and "failed" in text:
         return "test_failure"
