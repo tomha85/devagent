@@ -44,6 +44,15 @@ def install() -> None:
 
     _install_interlock_permissive_v6()
 
+    # Final V6 uniqueness hardening prevents a FULL output theorem from being
+    # treated as the only path when another PARTIAL theorem for the same output
+    # also exists in the normalized project inventory.
+    from devagent.plc.schneider_interlock_permissive_hardening_v6 import (
+        install as _install_interlock_permissive_hardening_v6,
+    )
+
+    _install_interlock_permissive_hardening_v6()
+
     # Production V5 imports shared production functions by value. Refresh those
     # bindings only after the complete Schneider V1-V6 vendor stack has installed
     # analyzer, evidence, risk, requirement, and report hooks.
