@@ -44,8 +44,16 @@ def install() -> None:
     # so additive identity metadata does not rewrite the V1-V7 theorem provenance.
     _install_v8_compat_hardening()
 
+    # V9 is the commercial/source-support closeout layer. It accounts for every
+    # normalized executable statement, discovered source section, protected DFB
+    # and DFB call boundary, records deterministic bundle identity, and preserves
+    # the external real-export/runtime evidence gates instead of overclaiming.
+    from devagent.plc.schneider_closeout_v9 import install as _install_closeout_v9
+
+    _install_closeout_v9()
+
     # Production V5 imports shared production functions by value. Refresh those
-    # bindings only after the complete Schneider V1-V8 vendor stack is installed.
+    # bindings only after the complete Schneider V1-V9 vendor stack is installed.
     _v5.run_v4_verification = _production.run_production_verification
     _v5.evidence_index = _evidence.evidence_index
     _v5.detect_risks = _review.detect_risks
