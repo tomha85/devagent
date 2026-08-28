@@ -53,8 +53,17 @@ def install() -> None:
 
     _install_interlock_permissive_hardening_v6()
 
+    # V7 builds only on the fully installed/hardened V6 transition contracts.
+    # It identifies explicit fault-entry topology, requires strong reset/recover/
+    # ack/clear intent to dominate every modeled exit from a fault-associated
+    # state, and surfaces recovery gaps, bypass paths, stale-command restart
+    # hazards, competing recovery targets, and restart/retention FAT boundaries.
+    from devagent.plc.schneider_fault_recovery_v7 import install as _install_fault_recovery_v7
+
+    _install_fault_recovery_v7()
+
     # Production V5 imports shared production functions by value. Refresh those
-    # bindings only after the complete Schneider V1-V6 vendor stack has installed
+    # bindings only after the complete Schneider V1-V7 vendor stack has installed
     # analyzer, evidence, risk, requirement, and report hooks.
     _v5.run_v4_verification = _production.run_production_verification
     _v5.evidence_index = _evidence.evidence_index
