@@ -1,0 +1,99 @@
+name: Schneider Production Qualification
+
+on:
+  push:
+    branches: [main, "feat/schneider-*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schneider-production-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  schneider:
+    name: Schneider Control Expert V1 production qualification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout exact qualified revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install development package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile PLC sources
+        run: |
+          python -m compileall -q \
+            devagent/plc \
+            scripts/qualify_schneider_v1.py
+
+      - name: Run complete PLC regression suite
+        run: python -m pytest -q tests/test_plc*.py
+
+      - name: Run Schneider Control Expert V1 qualification
+        run: python scripts/qualify_schneider_v1.py
+
+      - name: Record exact qualification revision
+        env:
+          QUALIFIED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          INTEGRATION_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "schema": "devagent-schneider-qualified-head-v1",
+              "commit_sha": os.environ["QUALIFIED_SHA"],
+              "integration_sha": os.environ["INTEGRATION_SHA"],
+              "qualified": True,
+              "checks": {
+                  "plc_regression_suite": "PASS",
+                  "schneider_control_expert_v1": "PASS",
+              },
+              "supported_input_contract": {
+                  "primary": ".XEF",
+                  "granular": [".XSY", ".XST", ".XLD", ".XBD", ".XSF", ".XIL", ".XDD", ".XDB", ".XHW", ".XCM"],
+                  "work_archive_requires_export": [".STU", ".STA", ".ZEF"],
+              },
+              "external_evidence_gates": {
+                  "real_control_expert_export_corpus": "REQUIRED_FOR_COMMERCIAL_CLOSEOUT",
+                  "control_expert_simulator_hil_real_plc_execution": "NOT_EXECUTED",
+              },
+          }
+          path = Path(".devagent/schneider-qualified-head.json")
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Upload Schneider qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schneider-production-qualification-v1
+          path: |
+            .devagent/schneider-production-qualification-v1.json
+            .devagent/schneider-qualified-head.json
+          if-no-files-found: warn
