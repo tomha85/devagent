@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import replace
+import re
 
 from devagent.plc import schneider_graphical_v4 as _v4
 from devagent.plc import schneider_identity_types_v8 as _v8
@@ -12,6 +13,7 @@ from devagent.plc.production_models import RequirementStatus, RequirementVerific
 _INSTALLED = False
 _PREVIOUS_LD_GROUP = _v4._ld_group
 _PREVIOUS_V4_RENDER = _v4._v4_render
+_PREVIOUS_EXPLICIT_BOOL = _v6.explicit_bool
 
 
 def _semantic_description(value: object) -> str | None:
@@ -42,6 +44,31 @@ def _tag_metadata(project) -> dict[str, tuple[str, str | None]]:
             (tag.name, _semantic_description(tag.description)),
         )
     return result
+
+
+def _explicit_bool(text: str, tag: str) -> bool | None:
+    """Recognize restrictive ``shall/must only be`` Boolean clauses.
+
+    The shared production parser intentionally handles generic forms such as
+    ``Tag = TRUE`` and ``Tag shall be TRUE``. Schneider V6 requirements also use
+    the natural restrictive form ``MotorRun shall only be TRUE when ...``. Keep
+    this extension vendor-local so it cannot change Siemens/Rockwell semantics.
+    """
+
+    value = _PREVIOUS_EXPLICIT_BOOL(text, tag)
+    if value is not None:
+        return value
+    escaped = re.escape(tag)
+    match = re.search(
+        rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])\s+"
+        rf"(?:shall|must)\s+only\s+be\s+"
+        rf"(TRUE|FALSE|ON|OFF|ACTIVE|INACTIVE)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).casefold() in {"true", "on", "active"}
 
 
 def _normal_transition_requirement(requirement, engineering, tests, previous, facts):
@@ -143,6 +170,7 @@ def install() -> None:
     # These are compatibility/fail-closed corrections only. They do not widen
     # the V1-V9 theorem surface or convert runtime evidence into static proof.
     _v6._tag_metadata = _tag_metadata
+    _v6.explicit_bool = _explicit_bool
     _v6._normal_transition_requirement = _normal_transition_requirement
     _v8._scope_requirement = _scope_requirement
     _v4._ld_group = _ld_group
