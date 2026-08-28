@@ -91,13 +91,17 @@ def classify_risk(risk: RiskFinding) -> str:
 def _risk_family(risk: RiskFinding) -> str:
     """Return the engineering root-cause family used only for Level 1 grouping.
 
-    Root-cause signals intentionally take precedence over downstream requirement
-    wording. For example, a withheld Siemens call can affect requirement proof,
-    but the engineer should see the call-binding problem as the headline risk.
+    Root-cause signals intentionally take precedence over downstream prose. An
+    explicit REQUIREMENT risk is a requirement risk, but a call/writer/semantic
+    risk must not become "requirement coverage" merely because its consequence
+    mentions downstream requirement traceability.
     """
 
     text = _risk_text(risk)
     category = risk.category.casefold()
+    risk_id = risk.id.casefold()
+    if category in {"requirement", "requirement_coverage"} or risk_id.startswith("risk-req"):
+        return "requirement_coverage"
     if "test_failure" in category or "fat test" in text and "failed" in text:
         return "test_failure"
     if any(term in text for term in _CALL_BINDING_TERMS):
@@ -108,8 +112,6 @@ def _risk_family(risk: RiskFinding) -> str:
         return "semantic_coverage"
     if any(term in text for term in ("state", "sequence", "transition", "step")):
         return "sequence_state"
-    if "requirement" in text:
-        return "requirement_coverage"
     if any(term in text for term in ("unreachable", "reachability", "dead logic")):
         return "execution_reachability"
     category = re.sub(r"[^a-z0-9]+", "_", category).strip("_")
@@ -165,7 +167,14 @@ def _display_title(risk: RiskFinding, all_risks: list[RiskFinding]) -> str:
     text = " ".join(_risk_text(item) for item in members)
 
     if family == "call_binding":
-        vendor = "Siemens" if "siemens" in text else "PLC"
+        if "schneider" in text or "control expert" in text or "unity pro" in text:
+            vendor = "Schneider"
+        elif "siemens" in text or "tia" in text:
+            vendor = "Siemens"
+        elif "rockwell" in text or "studio 5000" in text or "logix" in text:
+            vendor = "Rockwell"
+        else:
+            vendor = "PLC"
         suffix = f" ({count} related findings)" if count > 1 else ""
         return f"Unresolved/ambiguous {vendor} call bindings{suffix}"
     if family == "requirement_coverage":
