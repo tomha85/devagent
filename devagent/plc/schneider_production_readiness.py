@@ -340,25 +340,37 @@ def qualify_schneider_production_corpus(
     covered = tuple(sorted({family for item in real_passes for family in item.families}))
     missing = tuple(family for family in REQUIRED_REAL_EXPORT_FAMILIES if family not in set(covered))
     real_hashes = {item.observed_bundle_sha256 for item in real_passes if item.observed_bundle_sha256}
-    blockers: list[str] = []
+
+    fatal_blockers: list[str] = []
     failed = [item for item in cases if item.status != "PASS"]
     if failed:
-        blockers.append(f"{len(failed)} corpus case(s) failed qualification")
+        fatal_blockers.append(f"{len(failed)} corpus case(s) failed qualification")
     if has_real and signature_record is None:
-        blockers.append("real export corpus manifest is not authenticated by a trusted Ed25519 signer")
-    if missing:
-        blockers.append("missing real-export families: " + ", ".join(missing))
+        fatal_blockers.append("real export corpus manifest is not authenticated by a trusted Ed25519 signer")
+
     hardware_hashes: dict[str, set[str]] = {family: set() for family in _HARDWARE_FAMILIES}
     for item in real_passes:
         for family in set(item.families) & _HARDWARE_FAMILIES:
             if item.observed_bundle_sha256:
                 hardware_hashes[family].add(item.observed_bundle_sha256)
-    represented = [next(iter(values)) for values in hardware_hashes.values() if values]
-    if len(represented) == len(_HARDWARE_FAMILIES) and len(set(represented)) != len(_HARDWARE_FAMILIES):
-        blockers.append("M340, M580, and UNITY_LEGACY must use distinct real export bundle identities")
-    ready = not blockers and signature_record is not None
+    hardware_overlap: list[str] = []
+    ordered_hardware = sorted(_HARDWARE_FAMILIES)
+    for index, left in enumerate(ordered_hardware):
+        for right in ordered_hardware[index + 1:]:
+            shared = sorted(hardware_hashes[left] & hardware_hashes[right])
+            if shared:
+                hardware_overlap.append(f"{left}/{right}:{','.join(shared)}")
+    if hardware_overlap:
+        fatal_blockers.append(
+            "hardware families reuse the same real export bundle identity: " + "; ".join(hardware_overlap)
+        )
+
+    blockers = list(fatal_blockers)
+    if missing:
+        blockers.append("missing real-export families: " + ", ".join(missing))
+    ready = not fatal_blockers and not missing and signature_record is not None
     status = (
-        "FAIL" if failed
+        "FAIL" if fatal_blockers
         else "PENDING_REAL_EXPORT_CORPUS" if missing
         else "STATIC_CORPUS_QUALIFIED" if ready
         else "FAIL"
