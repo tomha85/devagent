@@ -24,7 +24,7 @@ def test_v10_models_partial_real_st_assignments_without_promoting_control_flow(t
     <STSource>
 IF Gate THEN
 Run := Start AND Ready;
-Count := Count + 1;
+Count := Count+1;
 Zero := 0;
 Mirror := SourceValue;
 END_IF;
@@ -55,6 +55,11 @@ END_IF;
         "CONSTANT_ASSIGNMENT",
         "DATA_MOVE",
     }
+    by_output = {item.output_tag: item for item in facts.actions}
+    assert by_output["Count"].family == "ARITHMETIC_ASSIGNMENT"
+    assert by_output["Count"].input_refs == ("Count",)
+    assert by_output["Mirror"].family == "DATA_MOVE"
+    assert by_output["Mirror"].input_refs == ("SourceValue",)
     assert all(item.execution_condition_proven is False for item in facts.actions)
 
     modeled_ids = {item.statement_id for item in facts.actions}
