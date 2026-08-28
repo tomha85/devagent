@@ -32,6 +32,32 @@ def _render(project) -> str:
     action_schema = profile.get("real_st_action_schema")
     local_actions = int(profile.get("real_st_local_actions", 0))
     local_action_families = profile.get("real_st_local_action_families", {})
+    # Preserve the exact historical V2 theorem metric when the current layered
+    # capability profile exposes it. Fall back to theorem provenance in canonical
+    # output logic so later capability wrappers cannot accidentally erase the
+    # customer-visible modeled-chain count.
+    if_chain_models = int(
+        profile.get(
+            "if_chain_models",
+            len(
+                {
+                    logic.origin
+                    for logic in project.output_logic
+                    if str(logic.origin).startswith("SCHNEIDER_ST_IF_CHAIN:")
+                }
+            ),
+        )
+    )
+    if_chain_output_logic = int(
+        profile.get(
+            "if_chain_output_logic",
+            sum(
+                1
+                for logic in project.output_logic
+                if str(logic.origin).startswith("SCHNEIDER_ST_IF_CHAIN:")
+            ),
+        )
+    )
 
     lines = [
         "## Semantic Coverage / Proof Boundary",
@@ -80,6 +106,8 @@ def _render(project) -> str:
         "",
         "### Schneider V2 Bounded Control-Flow Theorem",
         "",
+        f"- Modeled complete IF/ELSIF/ELSE chains: **{if_chain_models}**",
+        f"- Bounded output-logic objects produced by those chains: **{if_chain_output_logic}**",
         "- V2 provenance denotes the bounded theorem for complete top-level IF/ELSIF/ELSE Boolean final-value chains. This heading identifies that specific theorem; it does **not** imply the overall Schneider analyzer is limited to V2.",
         "- Nested/enclosing control flow, incomplete branch assignments, unsupported expressions, unsafe writer ownership, or other conditions outside that theorem remain governed by the later/current capability contract and are not silently promoted to FULL.",
         "",
