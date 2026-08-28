@@ -312,5 +312,8 @@ def test_v7_report_and_evidence_expose_runtime_boundary(tmp_path: Path) -> None:
     assert "SCHNEIDER_FAULT_ENTRY_V7" in kinds
     assert "SCHNEIDER_FAULT_RECOVERY_V7" in kinds
     capability = next(item for item in result.evidence if item.kind == "SCHNEIDER_CONTROL_EXPERT_CAPABILITY_PROFILE")
-    assert capability.payload["schema"] == "devagent-schneider-control-expert-capability-v7"
-    assert "Schneider V7" in capability.summary
+    # The evidence item is the current-stack capability profile. V7-specific
+    # evidence kinds above remain present, while the aggregate schema advances
+    # through the merged V8/V9 production stack.
+    assert capability.payload["schema"] == "devagent-schneider-control-expert-capability-v9"
+    assert "Schneider V9" in capability.summary

@@ -88,7 +88,10 @@ def test_schneider_multiple_writers_create_ownership_risk(tmp_path: Path) -> Non
     writer_risks = [risk for risk in result.risks if risk.category == "MULTIPLE_WRITERS"]
     assert len(writer_risks) == 1
     assert "Run" in writer_risks[0].title
-    assert result.engineering.outcome is PLCOutcome.STATICALLY_VERIFIED
+    # Current V8/V9 writer-ownership hardening deliberately fails closed: the
+    # local Boolean statements remain traceable, but competing writers prevent a
+    # project-wide full static outcome.
+    assert result.engineering.outcome is PLCOutcome.PARTIALLY_VERIFIED
 
 
 def test_schneider_work_archive_formats_fail_closed(tmp_path: Path) -> None:
