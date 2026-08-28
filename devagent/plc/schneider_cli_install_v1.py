@@ -39,9 +39,6 @@ def install() -> None:
     from devagent.plc.plc_dispatch import detect_plc_vendor
     from devagent.plc.schneider_report_install_v1 import install as _install_schneider_report
 
-    # Report dispatch is presentation-only and is installed from the same final
-    # package hook so library and CLI consumers receive Schneider-correct
-    # semantic-coverage wording without changing Rockwell/Siemens renderers.
     _install_schneider_report()
 
     previous_parser = _cli._parser
@@ -50,10 +47,13 @@ def install() -> None:
 
     def _parser():
         parser = previous_parser()
+        # Keep this safety sentence first and intact: established CLI contract
+        # tests and engineers should never lose the external-execution boundary
+        # as more vendors are added to the following description.
         parser.description = (
+            "DevAgent does not connect to or execute external PLC software. "
             "Evidence-driven PLC engineering review, requirements verification, logic/risk analysis, regression impact analysis, "
-            "and engineer-ready FAT planning for qualified Rockwell Studio 5000 L5X, Siemens TIA Portal exports, and Schneider EcoStruxure Control Expert XML exchange exports. "
-            "DevAgent does not connect to or execute external PLC software."
+            "and engineer-ready FAT planning for qualified Rockwell Studio 5000 L5X, Siemens TIA Portal exports, and Schneider EcoStruxure Control Expert XML exchange exports."
         )
         for action in parser._actions:
             if getattr(action, "dest", None) == "project":
