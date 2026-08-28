@@ -38,6 +38,40 @@ def test_v9_unknown_source_surface_is_visible_and_closeout_status_fails_closed(t
     assert result.outcome is PLCOutcome.BLOCKED
 
 
+def test_v9_fbd_linksource_is_wiring_metadata_not_unknown_executable_source(tmp_path: Path) -> None:
+    source = _write(
+        tmp_path / "Wiring.xbd",
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<FBDExchangeFile>
+  <fileHeader company="Schneider Automation" product="EcoStruxure Control Expert V16" DTDVersion="41" />
+  <contentHeader name="SchneiderV9FBD" version="1.0" />
+  <program>
+    <identProgram name="Mixer" type="section" task="MAST" />
+    <FBDSource nbRows="24" nbColumns="36">
+      <networkFBD>
+        <FFBBlock instanceName="Delay" typeName="TON" />
+        <linkFB>
+          <linkSource parentObjectName="Delay" pinName="Q" />
+          <linkDestination parentObjectName="Delay" pinName="IN" />
+        </linkFB>
+      </networkFBD>
+    </FBDSource>
+  </program>
+  <dataBlock>
+    <variables name="Delay" typeName="TON" />
+  </dataBlock>
+</FBDExchangeFile>
+''',
+    )
+
+    result = analyze_plc_project(source)
+    profile = schneider_capability_profile_v9(result.project)
+
+    assert profile["unknown_executable_source_tags"] == []
+    assert profile["export_metadata_consistent"] is True
+    assert profile["support_contract"] == "PARTIAL_FAIL_CLOSED"
+
+
 def test_v9_required_real_export_corpus_remains_explicit(tmp_path: Path) -> None:
     source = _write(
         tmp_path / "Main.xst",

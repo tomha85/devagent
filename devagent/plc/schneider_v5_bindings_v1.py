@@ -50,9 +50,11 @@ def install() -> None:
     # the external real-export/runtime evidence gates instead of overclaiming.
     from devagent.plc.schneider_closeout_v9 import install as _install_closeout_v9
     from devagent.plc.schneider_v9_hardening import install as _install_v9_hardening
+    from devagent.plc.schneider_real_export_audit_hardening_v9 import install as _install_real_export_audit_hardening_v9
 
     _install_closeout_v9()
     _install_v9_hardening()
+    _install_real_export_audit_hardening_v9()
 
     # Final compatibility hardening preserves historical V4/V5/V6/V7 contracts
     # while keeping the stricter V8/V9 identity/support boundaries. In particular,
