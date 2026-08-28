@@ -62,8 +62,17 @@ def install() -> None:
 
     _install_fault_recovery_v7()
 
+    # V8 is identity/ownership infrastructure over the complete V1-V7 theorem
+    # stack. It canonicalizes controller variables, DDT/ARRAY members, DFB
+    # instance/interface identities, located/topological I/O addresses, and every
+    # source read/write binding. Identity ambiguity, physical aliasing, and
+    # whole/member ownership overlap fail closed instead of being guessed.
+    from devagent.plc.schneider_identity_types_v8 import install as _install_identity_types_v8
+
+    _install_identity_types_v8()
+
     # Production V5 imports shared production functions by value. Refresh those
-    # bindings only after the complete Schneider V1-V7 vendor stack has installed
+    # bindings only after the complete Schneider V1-V8 vendor stack has installed
     # analyzer, evidence, risk, requirement, and report hooks.
     _v5.run_v4_verification = _production.run_production_verification
     _v5.evidence_index = _evidence.evidence_index
