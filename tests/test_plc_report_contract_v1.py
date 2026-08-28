@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,62 @@ END_IF;
     return path
 
 
+def _rockwell_project(tmp_path: Path) -> Path:
+    path = tmp_path / "ReportContract.L5X"
+    path.write_text(
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="ReportContract" TargetType="Controller">
+  <Controller Name="ReportContract" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+    <DataTypes />
+    <AddOnInstructionDefinitions />
+    <Tags>
+      <Tag Name="Start" TagType="Base" DataType="BOOL" />
+      <Tag Name="Run" TagType="Base" DataType="BOOL" />
+    </Tags>
+    <Programs>
+      <Program Name="MainProgram" MainRoutineName="Main">
+        <Routines>
+          <Routine Name="Main" Type="RLL">
+            <RLLContent>
+              <Rung Number="0"><Text><![CDATA[XIC(Start)OTE(Run);]]></Text></Rung>
+            </RLLContent>
+          </Routine>
+        </Routines>
+      </Program>
+    </Programs>
+    <Tasks>
+      <Task Name="MainTask" Type="CONTINUOUS">
+        <ScheduledPrograms><ScheduledProgram Name="MainProgram" /></ScheduledPrograms>
+      </Task>
+    </Tasks>
+  </Controller>
+</RSLogix5000Content>
+''',
+        encoding="utf-8",
+    )
+    return path
+
+
+def _requirements(tmp_path: Path) -> Path:
+    path = tmp_path / "requirements.json"
+    path.write_text(
+        json.dumps(
+            {
+                "requirements": [
+                    {
+                        "id": "REQ-RUN",
+                        "text": "When Start=TRUE, Run shall be TRUE.",
+                        "verification_mode": "STATIC",
+                        "criticality": "HIGH",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_project_only_report_contract_separates_analysis_from_release_readiness(tmp_path: Path) -> None:
     result = run_production_verification_v5(_schneider_project(tmp_path))
     contract = build_report_contract(result)
@@ -54,6 +111,23 @@ def test_project_only_report_contract_separates_analysis_from_release_readiness(
     assert "| Requirement verification | NOT PROVIDED |" in report
     assert "| Report consistency contract | PASS |" in report
     assert "Requirement coverage incomplete" not in render_top_engineering_risks(result)
+
+
+def test_requirement_report_contract_remains_vendor_neutral_for_rockwell(tmp_path: Path) -> None:
+    result = run_production_verification_v5(
+        _rockwell_project(tmp_path),
+        requirement_paths=[_requirements(tmp_path)],
+    )
+    contract = build_report_contract(result)
+    report = render_production_report(result)
+
+    assert contract["review_mode"] == "REQUIREMENT_VERIFICATION_REVIEW"
+    assert contract["requirements"]["scope"] == "EVALUATED"
+    assert contract["requirements"]["total"] == 1
+    assert contract["contract_status"] == "PASS"
+    assert "### Independent Decision Scorecard" in report
+    assert "| Requirement verification | NOT PROVIDED |" not in report
+    assert "release-readiness score is a policy/evidence gate, not a score of DevAgent analysis quality" in report
 
 
 def test_schneider_report_uses_current_capability_contract_not_stale_v1_v2_wording(tmp_path: Path) -> None:
