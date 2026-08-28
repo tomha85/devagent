@@ -16,7 +16,7 @@ _ASSIGNMENT = re.compile(r"^\s*(?P<lhs>.+?)\s*:=\s*(?P<rhs>.+?)\s*;?\s*$", re.DO
 _CALL = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_.]*)\s*\(", re.IGNORECASE)
 _CONTROL = re.compile(r"^\s*(IF|ELSIF|ELSE|CASE|FOR|WHILE|REPEAT)\b", re.IGNORECASE)
 _BOOL_TOKEN = re.compile(
-    r"\s*(\(|\)|\bAND\b|\bOR\b|\bXOR\b|\bNOT\b|\bTRUE\b|\bFALSE\b|"
+    r"\s*(\(|\)|\bAND\b|\bOR\b|\bNOT\b|\bTRUE\b|\bFALSE\b|"
     r"%[A-Za-z]+[A-Za-z0-9_.]*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)",
     re.IGNORECASE,
 )
