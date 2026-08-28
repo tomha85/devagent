@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   schneider:
-    name: Schneider Control Expert V1-V5 production qualification
+    name: Schneider Control Expert V1-V6 production qualification
     runs-on: ubuntu-latest
 
     steps:
@@ -47,7 +47,8 @@ jobs:
             scripts/qualify_schneider_v2.py \
             scripts/qualify_schneider_v3.py \
             scripts/qualify_schneider_v4.py \
-            scripts/qualify_schneider_v5.py
+            scripts/qualify_schneider_v5.py \
+            scripts/qualify_schneider_v6.py
 
       - name: Run complete PLC regression suite
         run: python -m pytest -q tests/test_plc*.py
@@ -67,6 +68,9 @@ jobs:
       - name: Run Schneider Control Expert V5 qualification
         run: python scripts/qualify_schneider_v5.py
 
+      - name: Run Schneider Control Expert V6 qualification
+        run: python scripts/qualify_schneider_v6.py
+
       - name: Record exact qualification revision
         env:
           QUALIFIED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -78,7 +82,7 @@ jobs:
           from pathlib import Path
 
           payload = {
-              "schema": "devagent-schneider-qualified-head-v5",
+              "schema": "devagent-schneider-qualified-head-v6",
               "commit_sha": os.environ["QUALIFIED_SHA"],
               "integration_sha": os.environ["INTEGRATION_SHA"],
               "qualified": True,
@@ -89,6 +93,7 @@ jobs:
                   "schneider_control_expert_v3": "PASS",
                   "schneider_control_expert_v4": "PASS",
                   "schneider_control_expert_v5": "PASS",
+                  "schneider_control_expert_v6": "PASS",
               },
               "supported_input_contract": {
                   "primary": ".XEF",
@@ -150,7 +155,7 @@ jobs:
               },
               "v5_state_machine": {
                   "surface": "XST/XEF Control Expert ST CASE",
-                  "proof": "bounded source transition relation for one exported integer state tag with simple state labels/targets and direct or Boolean guarded state writes",
+                  "proof": "bounded source transition relation for one exported integer state tag with canonical numeric states and direct/Boolean guarded writes",
                   "runtime_sequence_pass_claimed": False,
                   "fail_closed": [
                       "nested CASE",
@@ -158,10 +163,13 @@ jobs:
                       "CASE ELSE behavior",
                       "FOR/WHILE/REPEAT control",
                       "non-integer or unresolved state tag",
+                      "named/enum/typed state identity before V8",
+                      "out-of-range state value",
                       "complex state target expression",
                       "unsupported or state-writing call",
+                      "timer/counter output binding",
                       "guard depending on in-scan non-state write",
-                      "unsupported/non-Boolean guard",
+                      "unsupported/non-Boolean/impossible guard",
                       "dangling transition target",
                       "overlapping different-target guards",
                       "competing state writer",
@@ -174,6 +182,30 @@ jobs:
                       "scan/order timing",
                       "I/O timing",
                       "process physics",
+                  ],
+              },
+              "v6_interlock_permissive": {
+                  "surface": "FULL V1-V5 Boolean output theorems and V5 CASE transition guard DNF",
+                  "proof": "exact every-path Boolean guard dominance for one output TRUE theorem or grouped same-state/source/target transition relation",
+                  "same_source_target_transitions_grouped": True,
+                  "role_classification": "token-based exported tag name/description only",
+                  "safe_polarity_inferred_from_role": False,
+                  "restrictive_requirement_requires_explicit_boolean_values": True,
+                  "fail_closed": [
+                      "PARTIAL parent theorem",
+                      "duplicate output theorem",
+                      "non-unique requirement target",
+                      "guard absent from any required path",
+                      "guard polarity contradicts source",
+                      "runtime timer/counter transition dependency",
+                      "unclassified engineering intent",
+                  ],
+                  "not_claimed": [
+                      "SIL or performance-level certification",
+                      "physical de-energization",
+                      "process safety",
+                      "scan or I/O timing",
+                      "timer/counter evolution",
                   ],
               },
               "external_evidence_gates": {
@@ -193,12 +225,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: schneider-production-qualification-v5
+          name: schneider-production-qualification-v6
           path: |
             .devagent/schneider-production-qualification-v1.json
             .devagent/schneider-production-qualification-v2.json
             .devagent/schneider-production-qualification-v3.json
             .devagent/schneider-production-qualification-v4.json
             .devagent/schneider-production-qualification-v5.json
+            .devagent/schneider-production-qualification-v6.json
             .devagent/schneider-qualified-head.json
           if-no-files-found: warn
