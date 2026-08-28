@@ -73,6 +73,16 @@ def _render(project) -> str:
 
     lines += [
         "",
+        "### Provenance of Bounded Schneider Theorems",
+        "",
+        "- The current capability stack preserves the original bounded top-level ST Boolean theorem and the **simple series LD** contact-to-coil theorem as explicitly scoped proof surfaces; later layers add stronger semantics without erasing those proof identities.",
+        "- Whole-network LD/FBD, call/interface closure, state-machine, interlock/permissive, fault/recovery, canonical identity/type/I/O, and support-closeout evidence are reported according to the currently installed stack and remain fail-closed outside their exact theorem boundaries.",
+        "",
+        "### Schneider V2 Bounded Control-Flow Theorem",
+        "",
+        "- V2 provenance denotes the bounded theorem for complete top-level IF/ELSIF/ELSE Boolean final-value chains. This heading identifies that specific theorem; it does **not** imply the overall Schneider analyzer is limited to V2.",
+        "- Nested/enclosing control flow, incomplete branch assignments, unsupported expressions, unsafe writer ownership, or other conditions outside that theorem remain governed by the later/current capability contract and are not silently promoted to FULL.",
+        "",
         "### Proof-State Meaning",
         "",
         "- **FULL** — the current installed Schneider theorem stack has bounded deterministic semantics for the normalized logic object/support region and all required local proof conditions passed.",
