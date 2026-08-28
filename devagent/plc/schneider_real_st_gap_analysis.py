@@ -59,8 +59,7 @@ def _bool_expression_shape(expr: str) -> bool:
     """Return True only for the same bounded lexical Boolean surface as V1.
 
     This is diagnostic classification, not a theorem. It deliberately does not
-    promote a statement to FULL; it only helps explain why an already-PARTIAL ST
-    statement may be a Boolean assignment inside unmodeled control flow.
+    promote a statement to FULL or infer why a later layer kept it PARTIAL.
     """
 
     position = 0
@@ -77,14 +76,20 @@ def _bool_expression_shape(expr: str) -> bool:
 
 
 def classify_partial_st(text: str) -> tuple[str, tuple[str, ...]]:
-    """Classify one already-PARTIAL Control Expert ST statement deterministically."""
+    """Classify one already-PARTIAL Control Expert ST statement deterministically.
+
+    Categories describe syntax only. They intentionally do not claim the cause of
+    PARTIAL because V5-V9 may withhold a statement for control-flow, type, scope,
+    writer-ownership, call-closure, or other fail-closed reasons.
+    """
 
     clean = str(text or "").strip()
     features: set[str] = set()
     upper = clean.upper()
 
-    if _CONTROL.match(clean):
-        keyword = _CONTROL.match(clean).group(1).upper()  # type: ignore[union-attr]
+    control = _CONTROL.match(clean)
+    if control:
+        keyword = control.group(1).upper()
         features.add(keyword)
         if _COMPARISON.search(clean):
             features.add("COMPARISON")
@@ -121,7 +126,7 @@ def classify_partial_st(text: str) -> tuple[str, tuple[str, ...]]:
         )
         if lhs_is_simple and _bool_expression_shape(rhs):
             features.add("BOUNDED_BOOLEAN_SHAPE")
-            return "BOOLEAN_ASSIGNMENT_IN_UNMODELED_CONTEXT", tuple(sorted(features))
+            return "BOUNDED_BOOLEAN_SHAPE_PARTIAL", tuple(sorted(features))
         if "INDEXED_ACCESS" in features:
             return "INDEXED_ASSIGNMENT", tuple(sorted(features))
         if "FUNCTION_EXPRESSION" in features:
@@ -209,6 +214,8 @@ def render_markdown(result: SchneiderSTGapAnalysis) -> str:
         f"- V9 support contract: `{result.support_contract}`",
         f"- ST statements: **{result.total_st_statements}**",
         f"- PARTIAL ST statements: **{result.partial_st_statements}**",
+        "",
+        "The clusters below describe source syntax only; they do not change or explain away the fail-closed V9 semantic verdict.",
         "",
         "## Clusters",
         "",
