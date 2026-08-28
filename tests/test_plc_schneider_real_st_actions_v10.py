@@ -67,7 +67,8 @@ END_IF;
     assert modeled_statements
     assert all(item.semantic_state is PLCSemanticState.PARTIAL for item in modeled_statements)
 
-    assert profile["schema"] == "devagent-schneider-control-expert-capability-v10"
+    assert profile["schema"] == "devagent-schneider-control-expert-capability-v9"
+    assert profile["real_st_action_schema"] == "devagent-schneider-real-st-actions-v1"
     assert profile["real_st_local_actions"] == 4
     assert profile["partial_st_with_local_action_semantics"] == 4
     assert profile["real_st_local_actions_promote_v9_support"] is False
