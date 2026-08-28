@@ -63,8 +63,16 @@ def install() -> None:
 
     _install_regression_hardening_v9()
 
+    # V10 is driven by real Control Expert ST exports. It adds deterministic local
+    # effect/dependency models and engineer FAT procedures for pure fixed-target
+    # assignments that are still PARTIAL because enclosing control flow is not yet
+    # proven. It deliberately does not promote any V9 PARTIAL region to FULL.
+    from devagent.plc.schneider_real_st_actions_v10 import install as _install_real_st_actions_v10
+
+    _install_real_st_actions_v10()
+
     # Production V5 imports shared production functions by value. Refresh those
-    # bindings only after the complete Schneider V1-V9 vendor stack is installed.
+    # bindings only after the complete Schneider vendor stack is installed.
     _v5.run_v4_verification = _production.run_production_verification
     _v5.evidence_index = _evidence.evidence_index
     _v5.detect_risks = _review.detect_risks
