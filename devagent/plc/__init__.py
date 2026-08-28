@@ -199,6 +199,15 @@ from devagent.plc.schneider_graphical_v4 import install as _install_schneider_gr
 # edge, control, compare/operate, call, ambiguous, and cyclic behavior stays
 # fail-closed and engineer-FAT gated.
 _install_schneider_graphical_v4()
+
+from devagent.plc.schneider_graphical_writer_hardening_v4 import (
+    install as _install_schneider_graphical_writer_hardening_v4,
+)
+
+# Keep the evidence/profile contract aligned with the writer theorem. If another
+# normalized source statement writes a V4 graphical output, the local Boolean
+# theorem is withheld, the region is PARTIAL, and engineer FAT is generated.
+_install_schneider_graphical_writer_hardening_v4()
 # Production V5 captures shared production functions by value; refresh those
 # references after Schneider installs so all three vendors reach the same
 # evidence/readiness pipeline while preserving vendor-specific semantics.
