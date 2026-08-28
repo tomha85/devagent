@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import xml.etree.ElementTree as ET
 
 from devagent.plc import schneider_closeout_v9 as _v9
 
@@ -22,7 +23,20 @@ def _is_nested_wiring_source(entry: str) -> bool:
 
 
 def _source_manifest(path):
-    files, audit = _PREVIOUS_SOURCE_MANIFEST(path)
+    """Filter nested FBD wiring metadata while preserving V9 input errors.
+
+    This hardening can be imported before or after the original V9 malformed-XML
+    wrapper depending on module import order. Normalize ElementTree ParseError at
+    this boundary as well so the public SchneiderInputError contract is stable.
+    """
+
+    try:
+        files, audit = _PREVIOUS_SOURCE_MANIFEST(path)
+    except ET.ParseError as exc:
+        raise _v9._v1.SchneiderInputError(
+            f"Invalid Control Expert XML exchange artifact: {exc}"
+        ) from exc
+
     filtered = tuple(
         item
         for item in audit.unknown_executable_source_tags
