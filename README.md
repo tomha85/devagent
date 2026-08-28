@@ -18,43 +18,26 @@ For PLC engineering, DevAgent provides a vendor-dispatched offline review workfl
 
 For a normal verified software run the deterministic harness prints the complete engineering report first, then commits reviewed paths and fast-forward pushes the developer's current non-protected branch. If the developer starts on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead. Runtime DevAgent never creates a pull request, merges, rebases, force-pushes, or deploys.
 
-## PLC Engineering & Verification
-
-DevAgent currently has three vendor-specific PLC engineering paths behind one evidence-driven workflow:
-
-| Vendor | Engineering environment | Preferred DevAgent input |
-| --- | --- | --- |
-| **Siemens** | TIA Portal | Exported TIA engineering artifacts such as Openness XML and generated `.scl`, `.db`, `.udt`, `.stl`, `.awl` sources/directories |
-| **Rockwell Automation** | Studio 5000 / Logix Designer | Full-controller `.L5X` export |
-| **Schneider Electric** | EcoStruxure Control Expert / Unity Pro | `.XEF` project exchange preferred; supported granular Control Expert XML exports are also accepted |
-
-The three vendor adapters feed the same higher-level engineering contract:
+## General Architecture
 
 ```text
-VENDOR PLC EXPORT
-        ↓
-VENDOR-SPECIFIC ADAPTER
-        ↓
-CANONICAL PLC IR
-        ↓
-DETERMINISTIC LOGIC + DEPENDENCY ANALYSIS
-        ↓
-REQUIREMENT VERIFICATION
-        ↓
-RISK DETECTION
-        ↓
-FAT TEST GENERATION
-        ↓
-REGRESSION + OPTIMIZATION REVIEW
-        ↓
-RECOMMENDATIONS + EVIDENCE
-        ↓
-ENGINEERING / FAT REPORT
-        ↓
-RELEASE READINESS
+                         DevAgent Core
+                              │
+        ┌─────────────┬───────┴───────┬─────────────┐
+        │             │               │             │
+     Software      Siemens         Rockwell      Schneider
+        │             │               │             │
+ Python / etc.    TIA Portal      Studio 5000    Control Expert
+                  exports          / L5X          / XEF
+        │             │               │             │
+        └─────────────┴───────┬───────┴─────────────┘
+                              │
+                    Review → Verify → FAT → Report
 ```
 
-DevAgent separates **recognized source**, **deterministically proven behavior**, **partially modeled or opaque behavior**, and **runtime evidence**. Unsupported, protected, ambiguous, stateful, timing-dependent, hardware-dependent, or otherwise unproven behavior remains fail-closed and is routed to explicit FAT/runtime evidence instead of being silently promoted to `VERIFIED`. AI can explain, organize, and recommend; it does not upgrade missing deterministic or runtime proof.
+**One DevAgent core, multiple engineering inputs, one evidence-driven review and reporting workflow.**
+
+For a slightly expanded version, see [General Architecture](docs/general-architecture.md).
 
 ## Why DevAgent?
 
