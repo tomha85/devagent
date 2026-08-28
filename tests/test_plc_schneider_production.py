@@ -9,8 +9,23 @@ from devagent.plc.models import PLCOutcome
 from devagent.plc.plc_dispatch import detect_plc_vendor
 from devagent.plc.production_models import RequirementStatus
 from devagent.plc.schneider_control_expert_v1 import SchneiderInputError
-from tests.test_plc_schneider_core import ST_PROJECT
 
+
+ST_PROJECT = """<?xml version="1.0" encoding="UTF-8"?>
+<STExchangeFile>
+  <fileHeader company="Schneider Automation" product="EcoStruxure Control Expert V16" DTDVersion="41" />
+  <contentHeader name="SchneiderDemo" version="1.0" />
+  <program>
+    <identProgram name="Main" type="section" task="MAST" />
+    <STSource>Run := Start AND NOT Stop;</STSource>
+  </program>
+  <dataBlock>
+    <variables name="Start" typeName="BOOL" />
+    <variables name="Stop" typeName="BOOL" />
+    <variables name="Run" typeName="BOOL" />
+  </dataBlock>
+</STExchangeFile>
+"""
 
 VARIABLES = """<?xml version="1.0" encoding="UTF-8"?>
 <VariablesExchangeFile>
