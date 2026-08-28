@@ -6,21 +6,61 @@
 [![Production CI](https://github.com/tomha85/devagent/actions/workflows/ci.yml/badge.svg)](https://github.com/tomha85/devagent/actions/workflows/ci.yml)
 [![Sponsor DevAgent](https://img.shields.io/badge/Sponsor-DevAgent-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tomha85)
 
-**A local, evidence-driven software engineering agent that turns a requirement into a tested, independently reviewed patch, prints a developer-grade engineering report, and only publishes a branch when the result is `VERIFIED`.**
+**A local, evidence-driven engineering agent for software and industrial automation that turns requirements and exported PLC engineering artifacts into bounded analysis, verification evidence, FAT plans, engineering reports, and reviewable changes without treating model confidence as proof.**
 
-> **From requirement to evidence-backed verified branch.**
+> **From requirement to evidence-backed engineering decisions.**
 
 > ❤️ **DevAgent is free during public beta.** If DevAgent saves you engineering time, consider [sponsoring continued development](https://github.com/sponsors/tomha85).
 
-DevAgent runs against a developer's local repository. It discovers the application, gathers source evidence, compiles explicit acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, independently reviews the final diff, and decides `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED` from evidence rather than model confidence.
+DevAgent runs against a developer's local repository or supported exported PLC engineering artifacts. For software work, it discovers the application, gathers source evidence, compiles explicit acceptance criteria, plans a bounded change, creates backups, implements the minimum necessary patch, runs repository-supported verification, independently reviews the final diff, and decides `VERIFIED`, `PARTIALLY_VERIFIED`, or `BLOCKED` from evidence rather than model confidence.
 
-For a normal verified run the deterministic harness prints the complete engineering report first, then commits reviewed paths and fast-forward pushes the developer's current non-protected branch. If the developer starts on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead. Runtime DevAgent never creates a pull request, merges, rebases, force-pushes, or deploys.
+For PLC engineering, DevAgent provides a vendor-dispatched offline review workflow for **Siemens TIA Portal**, **Rockwell Studio 5000 / Logix Designer**, and **Schneider Electric EcoStruxure Control Expert / Unity Pro**. It normalizes supported exports into a canonical PLC model, analyzes logic and dependencies, verifies requirements where evidence permits, detects engineering risks, generates FAT procedures, evaluates regression impact, produces recommendations and evidence, and reports release readiness without pretending that static analysis replaces simulator, HIL, or real-PLC execution.
+
+For a normal verified software run the deterministic harness prints the complete engineering report first, then commits reviewed paths and fast-forward pushes the developer's current non-protected branch. If the developer starts on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead. Runtime DevAgent never creates a pull request, merges, rebases, force-pushes, or deploys.
+
+## PLC Engineering & Verification
+
+DevAgent currently has three vendor-specific PLC engineering paths behind one evidence-driven workflow:
+
+| Vendor | Engineering environment | Preferred DevAgent input |
+| --- | --- | --- |
+| **Siemens** | TIA Portal | Exported TIA engineering artifacts such as Openness XML and generated `.scl`, `.db`, `.udt`, `.stl`, `.awl` sources/directories |
+| **Rockwell Automation** | Studio 5000 / Logix Designer | Full-controller `.L5X` export |
+| **Schneider Electric** | EcoStruxure Control Expert / Unity Pro | `.XEF` project exchange preferred; supported granular Control Expert XML exports are also accepted |
+
+The three vendor adapters feed the same higher-level engineering contract:
+
+```text
+VENDOR PLC EXPORT
+        ↓
+VENDOR-SPECIFIC ADAPTER
+        ↓
+CANONICAL PLC IR
+        ↓
+DETERMINISTIC LOGIC + DEPENDENCY ANALYSIS
+        ↓
+REQUIREMENT VERIFICATION
+        ↓
+RISK DETECTION
+        ↓
+FAT TEST GENERATION
+        ↓
+REGRESSION + OPTIMIZATION REVIEW
+        ↓
+RECOMMENDATIONS + EVIDENCE
+        ↓
+ENGINEERING / FAT REPORT
+        ↓
+RELEASE READINESS
+```
+
+DevAgent separates **recognized source**, **deterministically proven behavior**, **partially modeled or opaque behavior**, and **runtime evidence**. Unsupported, protected, ambiguous, stateful, timing-dependent, hardware-dependent, or otherwise unproven behavior remains fail-closed and is routed to explicit FAT/runtime evidence instead of being silently promoted to `VERIFIED`. AI can explain, organize, and recommend; it does not upgrade missing deterministic or runtime proof.
 
 ## Why DevAgent?
 
 Many coding agents optimize first for code generation. DevAgent is built around a different question:
 
-**Can this change be supported by repository evidence and verified on the current revision?**
+**Can this change or engineering claim be supported by evidence on the exact analyzed revision/export?**
 
 Core principles:
 
@@ -223,19 +263,25 @@ Binary data, invalid UTF-8, secret-like paths, and files above the input-size bo
 
 ## PLC engineer quick start
 
-DevAgent also provides an **offline PLC engineering review, requirement-verification, regression-analysis, risk-review, and FAT-planning workflow** through `devagent plc`.
+DevAgent also provides an **offline PLC engineering review, requirement-verification, regression-analysis, risk-review, and FAT-planning workflow** through `devagent plc` for Siemens, Rockwell, and Schneider engineering exports.
 
-The PLC workflow is intended for controls/PLC engineers who want to review exported engineering artifacts before FAT, site travel, commissioning, or release. DevAgent does **not** connect to, upload to, download to, force, start, stop, or control a PLC, TIA Portal, Studio 5000, PLCSIM, Logix Echo, HIL bench, or production machine. Runtime FAT and commissioning execution remain owned by the PLC engineer.
+The PLC workflow is intended for controls/PLC engineers who want to review exported engineering artifacts before FAT, site travel, commissioning, or release. DevAgent does **not** connect to, upload to, download to, force, start, stop, or control a PLC, TIA Portal, Studio 5000, Control Expert, PLCSIM, Logix Echo, HIL bench, or production machine. Runtime FAT and commissioning execution remain owned by the PLC engineer.
 
 ### 1. Export the PLC project
 
-**Rockwell Studio 5000:** export the full controller project as `.L5X`.
+**Rockwell Studio 5000 / Logix Designer:** export the full controller project as `.L5X`.
 
 ```text
 Line1_Controller.L5X
 ```
 
 **Siemens TIA Portal:** provide a TIA Openness/XML/generated-source file or export directory. Supported engineering inputs include `.scl`, `.db`, `.udt`, `.xml`, `.stl`, and `.awl`. Proprietary `.ap*` / `.zap*` project archives must be exported from TIA Portal first.
+
+**Schneider Electric EcoStruxure Control Expert / Unity Pro:** export `.XEF` when possible. DevAgent also accepts supported granular Control Expert XML exchange files such as `.XSY`, `.XST`, `.XLD`, `.XBD`, `.XSF`, `.XIL`, `.XDD`, `.XDB`, `.XHW`, and `.XCM`. `.STU` and `.STA` work/archive formats are not direct static-analysis inputs; export the project to `.XEF`. A `.ZEF` may contain broader project exchange data, but use an extracted/supported engineering export for DevAgent analysis rather than assuming the archive itself is directly analyzable.
+
+```text
+Machine_Controller.XEF
+```
 
 #### Siemens `.zapXX` archived projects
 
@@ -337,6 +383,15 @@ devagent plc ./exports/TIA_Line1/ \
   --output-dir ./plc-review/line1-current
 ```
 
+Schneider:
+
+```bash
+devagent plc ./exports/Machine_Controller.XEF \
+  --requirements ./requirements/line1.md \
+  --ai \
+  --output-dir ./plc-review/line1-current
+```
+
 `--ai` enables the evidence-constrained AI engineering-review layer. It is optional; the deterministic PLC analysis and FAT-planning path still runs without it.
 
 ### 4. Compare a PLC revision
@@ -351,7 +406,7 @@ devagent plc ./exports/new/TIA_Line1/ \
   --output-dir ./plc-review/line1-revision
 ```
 
-The same pattern works for Rockwell using current and previous `.L5X` files.
+The same pattern works for Rockwell using current and previous `.L5X` files and for Schneider using current and previous supported Control Expert exports such as `.XEF`.
 
 ### 5. Review the evidence package
 
@@ -386,7 +441,7 @@ ENGINEERING APPROVAL
 SITE COMMISSIONING / RELEASE PROCESS
 ```
 
-For signed runtime-result, policy, trust-store, and approval workflows, and a complete explanation of Rockwell/Siemens evidence boundaries, see **[PLC Engineer Guide](docs/plc-engineer-guide.md)**.
+For signed runtime-result, policy, trust-store, and approval workflows, and a complete explanation of Rockwell/Siemens/Schneider evidence boundaries, see **[PLC Engineer Guide](docs/plc-engineer-guide.md)**.
 
 ## Practical examples
 
@@ -679,11 +734,11 @@ DevAgent 0.8.6 is **beta software with a verified core release baseline**. The e
 
 The current core includes evidence-backed `VERIFIED` / `PARTIALLY_VERIFIED` / `BLOCKED` outcomes, backup-first editing, isolated worktrees, bounded structural file operations, repository-native verification, independent review, safe branch publication, provider/model choice, Java and .NET engineering discovery/execution, SQLite migration forward/rollback verification, large-monorepo deep-manifest discovery, bounded parallel agents, repository-local skills, foreground automations, Linux OS sandboxing, bounded browser/local-UI verification, and real-provider structured-contract benchmarking.
 
-Current `main` also includes vendor-dispatched PLC engineering review for **Rockwell Studio 5000 full-project `.L5X`** and **Siemens TIA Portal exported engineering artifacts**, with separate production qualification workflows and fail-closed evidence boundaries. The Siemens qualification is cumulative through V9 and covers the bounded supported SCL/LAD/FBD, call/interface, state/interlock/recovery, canonical identity/type, support-accounting, malformed-input, revision, and large-project fixture surfaces. Unsupported, protected, ambiguous, or runtime-dependent behavior is withheld from static proof and routed to explicit limitations and engineer-executed FAT rather than silently reported as verified.
+Current `main` also includes vendor-dispatched PLC engineering review for **Rockwell Studio 5000 full-project `.L5X`**, **Siemens TIA Portal exported engineering artifacts**, and **Schneider Electric EcoStruxure Control Expert / Unity Pro XML engineering exports with `.XEF` preferred**. All three feed the canonical PLC engineering/review/FAT/report pipeline while preserving vendor-specific proof boundaries. Siemens qualification is cumulative through its V9 support-accounting stack. Schneider includes V9 support closeout plus additive V10 real-ST local-action modeling and the PLC Report Contract V1, while unsupported or stateful/runtime-dependent regions remain explicitly `PARTIAL`, `OPAQUE`, `PROTECTED`, or FAT-gated. Rockwell remains the mature Studio 5000 path. These are bounded static engineering capabilities; they do not claim simulator, HIL, field wiring, process physics, or real-controller execution unless corresponding runtime evidence is supplied.
 
-These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI.
+These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI or documented local qualification.
 
-Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; continuous paid real-provider benchmarking across a broader set of model/provider combinations; and additional real license-safe Siemens/Rockwell customer export qualification beyond deterministic repository fixtures. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
+Remaining work is primarily **breadth and external validation**, not missing core architecture: a larger public corpus of pinned upstream repositories and tasks; broader browser/UI coverage across dynamic applications and multiple browser environments; a wider Java/Gradle, .NET test-framework, and PostgreSQL/MySQL migration matrix beyond the current qualified fixtures; larger and more diverse monorepo stress cases beyond the current >12,000-file deep-manifest case; more real-world multi-agent workload studies; continuous paid real-provider benchmarking across a broader set of model/provider combinations; and additional real license-safe Siemens/Rockwell/Schneider PLC export qualification beyond deterministic repository fixtures and official/demo interoperability samples. GitHub branch protection/rulesets are external repository settings and must be configured separately; DevAgent does not claim to configure them itself.
 
 The project intentionally prioritizes trustworthy outcomes, reproducible evidence, and safe engineering behavior over feature count or unsupported "best agent" claims.
 
@@ -696,7 +751,7 @@ If DevAgent saves you engineering time or helps you deliver safer, better-verifi
 Your sponsorship helps fund:
 
 - new engineering and PLC capabilities;
-- Siemens and Rockwell verification;
+- Siemens, Rockwell, and Schneider verification;
 - additional AI provider support;
 - regression and production qualification;
 - documentation and examples;
