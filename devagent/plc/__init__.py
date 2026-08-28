@@ -167,15 +167,29 @@ from devagent.plc.siemens_v5_bindings_v1 import install as _install_siemens_v5_b
 # exact qualified Rockwell functions selected by those vendor-aware wrappers.
 _install_siemens_v5_bindings_v1()
 
+from devagent.plc.schneider_integration_v1 import install as _install_schneider_integration_v1
+from devagent.plc.schneider_v5_bindings_v1 import install as _install_schneider_v5_bindings_v1
+
+# Schneider Control Expert V1 is intentionally installed after the qualified
+# Rockwell and Siemens paths. It adds a third vendor-dispatched branch for .XEF
+# and granular XML exchange exports without changing either existing analyzer.
+_install_schneider_integration_v1()
+# Production V5 captures shared production functions by value; refresh those
+# references after Schneider installs so all three vendors reach the same
+# evidence/readiness pipeline while preserving vendor-specific semantics.
+_install_schneider_v5_bindings_v1()
+
 # Production is now loaded; bind the stage-14 baseline evidence augmentation.
 _install_rockwell_regression_domain_evidence()
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
 from devagent.plc.plc_dispatch import analyze_plc_project
 from devagent.plc.siemens_cli_install_v1 import install as _install_siemens_cli_v1
+from devagent.plc.schneider_cli_install_v1 import install as _install_schneider_cli_v1
 
 # CLI parsing is loaded only after production_v5 exists, avoiding circular
-# imports while exposing both vendor input contracts through `devagent plc`.
+# imports while exposing qualified vendor input contracts through `devagent plc`.
 _install_siemens_cli_v1()
+_install_schneider_cli_v1()
 
 # Keep existing imports from ``devagent.plc.analysis`` on the guarded Rockwell
 # public path. The base module remains reusable by ``safe_analysis`` without
