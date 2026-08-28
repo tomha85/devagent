@@ -114,16 +114,18 @@ def _execution_summary(result) -> dict[str, object]:
     }
 
 
+def _is_requirement_risk(item) -> bool:
+    category = str(item.category or "").casefold()
+    risk_id = str(item.id or "").casefold()
+    return category == "requirement" or category.startswith("requirement_") or risk_id.startswith("risk-req")
+
+
 def report_contract_violations(result) -> tuple[str, ...]:
     """Detect report contradictions without changing engineering verdicts."""
 
     violations: list[str] = []
     if not result.requirements:
-        requirement_risks = [
-            item.id
-            for item in result.risks
-            if item.category.casefold() in {"requirement", "requirement_coverage"}
-        ]
+        requirement_risks = [item.id for item in result.risks if _is_requirement_risk(item)]
         if requirement_risks:
             violations.append(
                 "Customer requirements were not supplied, but requirement-coverage risk records exist: "
