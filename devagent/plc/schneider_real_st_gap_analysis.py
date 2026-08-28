@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 
+from devagent.plc import schneider_control_expert_v1 as _v1
 from devagent.plc.models import PLCSemanticState
 from devagent.plc.schneider_closeout_v9 import analyze_schneider_control_expert_v9
 
@@ -15,11 +16,6 @@ SCHEMA = "devagent-schneider-real-st-gap-analysis-v1"
 _ASSIGNMENT = re.compile(r"^\s*(?P<lhs>.+?)\s*:=\s*(?P<rhs>.+?)\s*;?\s*$", re.DOTALL)
 _CALL = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_.]*)\s*\(", re.IGNORECASE)
 _CONTROL = re.compile(r"^\s*(IF|ELSIF|ELSE|CASE|FOR|WHILE|REPEAT)\b", re.IGNORECASE)
-_BOOL_TOKEN = re.compile(
-    r"\s*(\(|\)|\bAND\b|\bOR\b|\bNOT\b|\bTRUE\b|\bFALSE\b|"
-    r"%[A-Za-z]+[A-Za-z0-9_.]*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)",
-    re.IGNORECASE,
-)
 _COMPARISON = re.compile(r"(?:<>|<=|>=|(?<!:)=|<|>)")
 _ARITHMETIC = re.compile(r"(?:\+|-|\*|/|\bMOD\b|\bDIV\b)", re.IGNORECASE)
 _FUNCTION_EXPR = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*\s*\(")
@@ -56,23 +52,16 @@ class SchneiderSTGapAnalysis:
 
 
 def _bool_expression_shape(expr: str) -> bool:
-    """Return True only for the same bounded lexical Boolean surface as V1.
+    """Return True only when the current V1 bounded Boolean parser accepts it.
 
-    This is diagnostic classification, not a theorem. It deliberately does not
-    promote a statement to FULL or infer why a later layer kept it PARTIAL.
+    This is diagnostic classification, not a theorem. Reusing V1's parser keeps
+    this cluster label synchronized with the actual bounded Boolean surface and
+    prevents unsupported operators such as XOR from being misread as tag names.
+    It deliberately does not promote a statement to FULL or infer why a later
+    V5-V9 layer kept it PARTIAL.
     """
 
-    position = 0
-    seen = False
-    while position < len(expr):
-        if expr[position:].strip() == "":
-            break
-        match = _BOOL_TOKEN.match(expr, position)
-        if match is None:
-            return False
-        seen = True
-        position = match.end()
-    return seen
+    return _v1._bool_paths(expr) is not None
 
 
 def classify_partial_st(text: str) -> tuple[str, tuple[str, ...]]:
