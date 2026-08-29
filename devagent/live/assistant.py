@@ -67,6 +67,27 @@ _OVERVIEW_PHRASES = (
     "summarise this system",
     "what controller",
     "what plc",
+    "what do you know about this system",
+    "what do you know about the system",
+    "tell me about this system",
+    "tell me about the system",
+    "describe this system",
+    "describe the system",
+    "what does this system do",
+    "what outputs are available",
+    "what are the outputs",
+    "what signals are available",
+    "what are the signals",
+    "what tags are available",
+    "what are the tags",
+    "what are you monitoring",
+    "what can you diagnose",
+    "system details",
+    "controller overview",
+    "he thong nay la gi",
+    "cho toi biet ve he thong",
+    "hệ thống này là gì",
+    "cho tôi biết về hệ thống",
 )
 _FOLLOWUP_PHRASES = (
     "which interlock",
@@ -169,25 +190,66 @@ class LiveCommissioningAssistant:
         status = self.manager.status(self.connection.plc_id)
         context = self.context
         limitations = len(context.limitations)
-        text = "\n".join(
+        outputs = context.output_names()
+        accepted_mappings = (
+            self.reconciliation.accepted_mappings()
+            if self.reconciliation is not None
+            else ()
+        )
+        unresolved_mappings = (
+            self.reconciliation.unresolved_mappings()
+            if self.reconciliation is not None
+            else ()
+        )
+        mapped_names = tuple(mapping.tag_name for mapping in accepted_mappings)
+        unresolved_names = tuple(mapping.tag_name for mapping in unresolved_mappings)
+
+        lines = [
+            "DEVAGENT LIVE SYSTEM MASTER",
+            f"Controller: {context.controller_name or self.connection.display_name}",
+            f"Vendor: {context.vendor or 'UNKNOWN'}",
+            f"Engineering tool: {context.engineering_tool or 'UNKNOWN'}",
+            f"Engineering source: {context.source_path or 'UNKNOWN'}",
+            f"Full project model: {'YES' if context.full_project else 'NO'}",
+            f"Engineering tags: {len(context.tags)}",
+            f"Deterministic output rules: {len(context.rules)}",
+            f"Logic statements: {len(context.statements)}",
+            f"Known deterministic outputs: {len(outputs)}",
+            f"OPC UA state: {status.state.value}",
+            f"Mapped live tags: {accepted}",
+            f"Unresolved live tags: {unresolved}",
+            f"Engineering limitations: {limitations}",
+            "Mode: READ ONLY",
+        ]
+
+        if outputs:
+            lines.append("Known outputs:")
+            lines.extend(f"- {item}" for item in outputs[:16])
+            if len(outputs) > 16:
+                lines.append(f"- ... {len(outputs) - 16} more")
+
+        if mapped_names:
+            lines.append("Mapped engineering/live signals:")
+            lines.extend(f"- {item}" for item in mapped_names[:20])
+            if len(mapped_names) > 20:
+                lines.append(f"- ... {len(mapped_names) - 20} more")
+
+        if unresolved_names:
+            lines.append("Unresolved engineering signals:")
+            lines.extend(f"- {item}" for item in unresolved_names[:12])
+            if len(unresolved_names) > 12:
+                lines.append(f"- ... {len(unresolved_names) - 12} more")
+
+        lines.extend(
             [
-                f"Controller: {context.controller_name or self.connection.display_name}",
-                f"Vendor: {context.vendor or 'UNKNOWN'}",
-                f"Engineering tool: {context.engineering_tool or 'UNKNOWN'}",
-                f"Engineering tags: {len(context.tags)}",
-                f"Deterministic output rules: {len(context.rules)}",
-                f"Logic statements: {len(context.statements)}",
-                f"OPC UA state: {status.state.value}",
-                f"Mapped live tags: {accepted}",
-                f"Unresolved live tags: {unresolved}",
-                f"Engineering limitations: {limitations}",
-                "Mode: READ ONLY",
+                "Knowledge boundary: imported PLC engineering semantics plus safely reconciled OPC UA evidence. DevAgent does not infer unmodeled physical/process facts.",
+                "Ask from general to specific: 'Does the system have any faults?', 'What is wrong with the system?', 'Why is <output> false?', or 'Why is <signal> false?'.",
             ]
         )
         return LiveAssistantReply(
             question="system overview",
             kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
-            text=text,
+            text="\n".join(lines),
         )
 
     def _is_overview_question(self, question: str) -> bool:
