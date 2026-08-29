@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Mapping
 
@@ -177,11 +176,25 @@ def required_advanced_tag_ids(
 
 
 def advanced_observation_map(
+    context: LiveEngineeringContext,
     reconciled: ReconciledLiveAgentEvidence,
 ) -> dict[str, LiveObservedTag]:
+    """Index trusted/rejected observations by every canonical identity form.
+
+    Reconciliation is tag-id based. Program-scoped PLC references may therefore be
+    longer than the short canonical tag name returned in a runtime observation. This
+    map uses the canonical tag id to bind all valid identity forms without fuzzy
+    suffix matching.
+    """
     result: dict[str, LiveObservedTag] = {}
+    tags = context.tag_by_id()
     for item in observations_from_reconciled(reconciled):
         result[normalize_engineering_identifier(item.tag_name)] = item
+        tag = tags.get(item.tag_id)
+        if tag is None:
+            continue
+        for identity in tag.identity_forms():
+            result[identity] = item
     return result
 
 
@@ -255,7 +268,12 @@ def diagnose_numeric_comparison(
         )
 
     expected = _compare(left, item.operator, right)
-    if result_observed is not None and result_observed.definitive_current:
+    direct_assignment = item.origin == "STATEMENT_ASSIGNMENT"
+    if item.origin == "RUNG_COMPARISON":
+        limitations.append(
+            "This RLL comparator is one rung condition; its truth value alone does not prove the final rung output because other contacts/branches may also gate the writer."
+        )
+    if direct_assignment and result_observed is not None and result_observed.definitive_current:
         if not isinstance(result_observed.value, bool):
             limitations.append(f"Result tag {result_observed.tag_name} is not Boolean; comparison/result consistency cannot be proven.")
         elif result_observed.value is not expected:
@@ -265,11 +283,11 @@ def diagnose_numeric_comparison(
                 status=LiveAdvancedDiagnosisStatus.LOGIC_CONFLICT,
                 summary=(
                     f"Trusted operands evaluate {item.left.display} {item.operator} {item.right.display} as {expected}, "
-                    f"but observed result {result_observed.tag_name}={result_observed.value}."
+                    f"but observed direct-assignment result {result_observed.tag_name}={result_observed.value}."
                 ),
                 current_values=tuple(current),
                 source_locators=(item.source_locator,) if item.source_locator else (),
-                limitations=("Check scan timing, multiple writers, stale mapping, or additional logic not represented by this simple FULL comparison.",),
+                limitations=("Check scan timing, multiple writers, stale mapping, or additional source logic affecting the direct assignment result.",),
                 next_checks=("Inspect the result tag writers and scan-order context at the PLC source location.",),
             )
 
@@ -327,11 +345,11 @@ def _diagnose_handshake(
     history: LiveTimelineStore | None,
 ) -> LiveAdvancedDiagnosis:
     roles = dict(model.metadata.get("roles", {}))
-    values: dict[str, Any] = {}
+    values: dict[str, bool] = {}
     missing: list[str] = []
     for role, reference in roles.items():
         item = _observed(observations, reference)
-        if item is None or not item.definitive_current:
+        if item is None or not item.definitive_current or not isinstance(item.value, bool):
             missing.append(reference)
             continue
         values[role] = item.value
@@ -345,12 +363,12 @@ def _diagnose_handshake(
     if error_active:
         status = LiveAdvancedDiagnosisStatus.ACTIVE_FAULT
         summary = "Handshake exposes an active ERROR/TIMEOUT signal."
-    elif request is True and (ack is True or busy is True):
-        status = LiveAdvancedDiagnosisStatus.IN_PROGRESS
-        summary = "Request is active and a response/busy state is observed."
     elif request is True and done is True:
         status = LiveAdvancedDiagnosisStatus.OBSERVED
         summary = "Request and completion are both active; inspect reset/acknowledge semantics for this handshake."
+    elif request is True and (ack is True or busy is True):
+        status = LiveAdvancedDiagnosisStatus.IN_PROGRESS
+        summary = "Request is active and a response/busy state is observed."
     elif request is True:
         status = LiveAdvancedDiagnosisStatus.WAITING_RESPONSE
         summary = "Request is active but no ACK/BUSY/DONE response is currently observed."
@@ -362,14 +380,14 @@ def _diagnose_handshake(
         summary = "Handshake request is inactive."
     else:
         status = LiveAdvancedDiagnosisStatus.INDETERMINATE
-        summary = "Handshake request state is missing or untrusted."
+        summary = "Handshake request state is missing, untrusted, or non-Boolean."
 
     history_lines = _last_transition_text(context, model, history)
     limitations = [
         "Handshake grouping is inferred from canonical tag names; it is not promoted to PROVEN protocol semantics without explicit PLC logic.",
     ]
     if missing:
-        limitations.append("Missing/untrusted handshake signals: " + ", ".join(missing))
+        limitations.append("Missing/untrusted/non-Boolean handshake signals: " + ", ".join(missing))
     if history_lines:
         limitations.append("Recent trusted transitions: " + " | ".join(history_lines))
     return LiveAdvancedDiagnosis(
