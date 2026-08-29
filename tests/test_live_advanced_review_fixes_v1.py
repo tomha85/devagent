@@ -95,7 +95,6 @@ def test_handshake_wait_requires_all_modeled_response_status_values_trusted():
         {
             "transferreq": _obs("R", "TransferReq", True),
             "transferack": _obs("A", "TransferAck", False),
-            # Done is unavailable; declaring WAITING_RESPONSE would be an overclaim.
             "transferfault": _obs("F", "TransferFault", False),
         },
     )
@@ -118,3 +117,21 @@ def test_motion_classifier_uses_exact_rockwell_mnemonics_and_namespaced_mc_calls
     assert "MC_MoveAbsolute" in motion_names
     assert "MASTER_CONTROL" not in motion_names
     assert "MACHINE_JOG" not in motion_names
+
+
+def test_pid_and_sequencer_classifiers_do_not_accept_arbitrary_aoi_prefixes():
+    source = SimpleNamespace(locator="PLC1/Main/Rung 2")
+    instructions = tuple(
+        SimpleNamespace(name=name, arguments=("X",))
+        for name in ("PIDE", "SQO", "PID_CustomAOI", "SQO_CustomAOI")
+    )
+    rung = SimpleNamespace(id="R2", text="", writes=(), instructions=instructions, source=source)
+    context = _context(tags=(_tag("X", "X"),))
+    coverage = build_live_advanced_coverage(_project(rungs=(rung,)), context)
+
+    pid_names = {item.instruction for item in coverage.models if item.kind is LiveAdvancedKind.PID}
+    seq_names = {item.instruction for item in coverage.models if item.kind is LiveAdvancedKind.SEQUENCER}
+    assert "PIDE" in pid_names
+    assert "SQO" in seq_names
+    assert "PID_CustomAOI" not in pid_names
+    assert "SQO_CustomAOI" not in seq_names
