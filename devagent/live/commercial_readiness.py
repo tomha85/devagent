@@ -78,7 +78,10 @@ _EXPECTED_RUNTIME_CASE_IDS = tuple(f"LQ-{index:03d}" for index in range(1, 15))
 _EXPECTED_DOCTOR_CHECK_IDS = tuple(f"DR-{index:03d}" for index in range(1, 9))
 
 
-def _load_artifact(path: Path | None, schema: str) -> tuple[dict[str, Any] | None, str | None]:
+def _load_artifact(
+    path: Path | None,
+    schema: str,
+) -> tuple[dict[str, Any] | None, str | None]:
     if path is None:
         return None, "artifact not supplied"
     target = Path(path).expanduser().resolve(strict=False)
@@ -100,8 +103,23 @@ def _load_artifact(path: Path | None, schema: str) -> tuple[dict[str, Any] | Non
     return data, None
 
 
+def _nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _positive_int(value: Any) -> bool:
+    return _nonnegative_int(value) and value > 0
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
-    data, error = _load_artifact(path, "devagent-live-release-qualification-v1")
+    data, error = _load_artifact(
+        path,
+        "devagent-live-release-qualification-v1",
+    )
     if error:
         return LiveCommercialGateResult(
             "CV1-001",
@@ -112,11 +130,15 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
     assert data is not None
     counts = data.get("counts")
     cases = data.get("cases")
-    ids = tuple(
-        str(item.get("case_id"))
-        for item in cases
-        if isinstance(item, dict)
-    ) if isinstance(cases, list) else ()
+    ids = (
+        tuple(
+            str(item.get("case_id"))
+            for item in cases
+            if isinstance(item, dict)
+        )
+        if isinstance(cases, list)
+        else ()
+    )
     valid = (
         data.get("status") == "PASS"
         and isinstance(counts, dict)
@@ -126,7 +148,11 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
         and isinstance(cases, list)
         and len(cases) == 14
         and ids == _EXPECTED_RUNTIME_CASE_IDS
-        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in cases)
+        and all(
+            isinstance(item, dict)
+            and item.get("status") == "PASS"
+            for item in cases
+        )
     )
     return LiveCommercialGateResult(
         "CV1-001",
@@ -140,8 +166,36 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
     )
 
 
+def _vendor_row_valid(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    plc_ids = item.get("plc_ids")
+    complete = item.get("complete_plcs")
+    current = item.get("definitive_current_evidence")
+    accepted = item.get("accepted_mappings")
+    unresolved = item.get("unresolved_mappings")
+    return (
+        item.get("status") == "PASS"
+        and isinstance(item.get("vendor"), str)
+        and isinstance(plc_ids, list)
+        and len(plc_ids) >= 1
+        and all(isinstance(plc_id, str) and plc_id.strip() for plc_id in plc_ids)
+        and _nonnegative_int(complete)
+        and complete == len(plc_ids)
+        and _nonnegative_int(current)
+        and current >= len(plc_ids)
+        and _nonnegative_int(accepted)
+        and accepted >= current
+        and _nonnegative_int(unresolved)
+        and unresolved == 0
+    )
+
+
 def _vendor_gate(path: Path | None) -> LiveCommercialGateResult:
-    data, error = _load_artifact(path, "devagent-live-vendor-qualification-v1")
+    data, error = _load_artifact(
+        path,
+        "devagent-live-vendor-qualification-v1",
+    )
     if error:
         return LiveCommercialGateResult(
             "CV1-002",
@@ -151,23 +205,20 @@ def _vendor_gate(path: Path | None) -> LiveCommercialGateResult:
         )
     assert data is not None
     vendors = data.get("vendors")
-    valid_rows = isinstance(vendors, list) and len(vendors) == len(REQUIRED_VENDOR_FAMILIES)
-    rows = [item for item in vendors if isinstance(item, dict)] if isinstance(vendors, list) else []
-    names = {str(item.get("vendor")) for item in rows}
-    rows_proven = valid_rows and all(
-        item.get("status") == "PASS"
-        and isinstance(item.get("plc_ids"), list)
-        and len(item["plc_ids"]) >= 1
-        and int(item.get("complete_plcs", -1)) == len(item["plc_ids"])
-        and int(item.get("definitive_current_evidence", 0)) >= len(item["plc_ids"])
+    rows = vendors if isinstance(vendors, list) else []
+    names = [
+        item.get("vendor")
         for item in rows
-    )
+        if isinstance(item, dict)
+    ]
     valid = (
         data.get("status") == "PASS"
         and data.get("all_required_vendors_pass") is True
         and data.get("required_vendors") == list(REQUIRED_VENDOR_FAMILIES)
-        and names == set(REQUIRED_VENDOR_FAMILIES)
-        and rows_proven
+        and len(rows) == len(REQUIRED_VENDOR_FAMILIES)
+        and len(names) == len(set(names))
+        and set(names) == set(REQUIRED_VENDOR_FAMILIES)
+        and all(_vendor_row_valid(item) for item in rows)
     )
     return LiveCommercialGateResult(
         "CV1-002",
@@ -176,7 +227,7 @@ def _vendor_gate(path: Path | None) -> LiveCommercialGateResult:
         (
             "All three required vendor families passed project parse + real OPC UA + exact mapping + trusted CURRENT capture."
             if valid
-            else "Vendor artifact does not prove complete real endpoint qualification for exactly Rockwell, Siemens, and Schneider."
+            else "Vendor artifact is malformed or does not prove complete real endpoint qualification for exactly Rockwell, Siemens, and Schneider."
         ),
     )
 
@@ -192,7 +243,10 @@ def _stateful_self_check() -> LiveCommercialGateResult:
         source_locator="self:timer",
         guard_paths=((('StartPermissive', True),),),
     )
-    timer_result = diagnose_live_stateful_model(timer, {"StartPermissive": False})
+    timer_result = diagnose_live_stateful_model(
+        timer,
+        {"StartPermissive": False},
+    )
     transition = LiveStatefulTransition(
         source_state="1",
         target_state="2",
@@ -264,12 +318,27 @@ def _history_self_check() -> LiveCommercialGateResult:
         statements=(),
         limitations=(),
     )
-    store = LiveTimelineStore(retention_seconds=120.0)
+    store = LiveTimelineStore(
+        retention_seconds=120.0,
+        continuity_seconds=5.0,
+    )
     samples = (
-        LiveHistoricalSample(now - timedelta(seconds=6), "p", "TAG-PE", "JamPhotoeye", "n1", False, True, "GOOD", "CURRENT"),
-        LiveHistoricalSample(now - timedelta(seconds=4), "p", "TAG-OUT", "ConveyorRun", "n2", True, True, "GOOD", "CURRENT"),
-        LiveHistoricalSample(now - timedelta(seconds=3), "p", "TAG-PE", "JamPhotoeye", "n1", True, True, "GOOD", "CURRENT"),
-        LiveHistoricalSample(now - timedelta(seconds=2), "p", "TAG-OUT", "ConveyorRun", "n2", False, True, "GOOD", "CURRENT"),
+        LiveHistoricalSample(
+            now - timedelta(seconds=6), "p", "TAG-PE", "JamPhotoeye", "n1",
+            False, True, "GOOD", "CURRENT",
+        ),
+        LiveHistoricalSample(
+            now - timedelta(seconds=4), "p", "TAG-OUT", "ConveyorRun", "n2",
+            True, True, "GOOD", "CURRENT",
+        ),
+        LiveHistoricalSample(
+            now - timedelta(seconds=3), "p", "TAG-PE", "JamPhotoeye", "n1",
+            True, True, "GOOD", "CURRENT",
+        ),
+        LiveHistoricalSample(
+            now - timedelta(seconds=2), "p", "TAG-OUT", "ConveyorRun", "n2",
+            False, True, "GOOD", "CURRENT",
+        ),
     )
     store.append_many(samples)
     diagnosis = store.diagnose_recent_transition(
@@ -278,6 +347,7 @@ def _history_self_check() -> LiveCommercialGateResult:
         dependency_tag_ids=("TAG-PE",),
         lookback_seconds=30,
         now=now,
+        direction="STOP",
     )
     valid = (
         diagnosis.transition is not None
@@ -290,10 +360,51 @@ def _history_self_check() -> LiveCommercialGateResult:
         "Historical fault timeline",
         LiveCommercialGateStatus.PASS if valid else LiveCommercialGateStatus.FAIL,
         (
-            "Trusted ring-buffer timeline identifies a dependency transition before a target stop while explicitly withholding physical-causation proof."
+            "Trusted continuous timeline identifies a dependency transition before a target stop while explicitly withholding physical-causation proof."
             if valid
             else "Historical transition/candidate self-check failed."
         ),
+    )
+
+
+def _doctor_valid(doctor: dict[str, Any]) -> bool:
+    checks = doctor.get("checks")
+    if not isinstance(checks, list) or len(checks) != 8:
+        return False
+    ids = tuple(
+        str(item.get("check_id"))
+        for item in checks
+        if isinstance(item, dict)
+    )
+    return (
+        doctor.get("status") == "PASS"
+        and len(ids) == 8
+        and ids == _EXPECTED_DOCTOR_CHECK_IDS
+        and all(
+            isinstance(item, dict)
+            and item.get("status") == "PASS"
+            for item in checks
+        )
+    )
+
+
+def _soak_plc_row_valid(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    ratio = item.get("current_ratio")
+    return (
+        item.get("status") == "PASS"
+        and item.get("final_state") == "CONNECTED"
+        and _positive_int(item.get("cycles"))
+        and _positive_int(item.get("total_values"))
+        and _nonnegative_int(item.get("current_values"))
+        and _nonnegative_int(item.get("noncurrent_values"))
+        and item.get("current_values") + item.get("noncurrent_values")
+        == item.get("total_values")
+        and _nonnegative_int(item.get("read_error_cycles"))
+        and _nonnegative_int(item.get("max_consecutive_error_cycles"))
+        and _number(ratio)
+        and 0.0 <= float(ratio) <= 1.0
     )
 
 
@@ -303,8 +414,14 @@ def _ops_gate(
     *,
     min_soak_hours: float,
 ) -> LiveCommercialGateResult:
-    doctor, doctor_error = _load_artifact(doctor_path, "devagent-live-doctor-v1")
-    soak, soak_error = _load_artifact(soak_path, "devagent-live-soak-v1")
+    doctor, doctor_error = _load_artifact(
+        doctor_path,
+        "devagent-live-doctor-v1",
+    )
+    soak, soak_error = _load_artifact(
+        soak_path,
+        "devagent-live-soak-v1",
+    )
     missing = [item for item in (doctor_error, soak_error) if item]
     if missing:
         return LiveCommercialGateResult(
@@ -314,39 +431,32 @@ def _ops_gate(
             "; ".join(missing),
         )
     assert doctor is not None and soak is not None
-    duration = float(soak.get("actual_duration_seconds", 0.0) or 0.0)
+
+    duration_raw = soak.get("read_loop_duration_seconds")
+    duration = float(duration_raw) if _number(duration_raw) else -1.0
+    requested_raw = soak.get("requested_duration_seconds")
+    requested = float(requested_raw) if _number(requested_raw) else -1.0
     required = min_soak_hours * 3600.0
-
-    checks = doctor.get("checks")
-    doctor_ids = tuple(
-        str(item.get("check_id"))
-        for item in checks
-        if isinstance(item, dict)
-    ) if isinstance(checks, list) else ()
-    doctor_valid = (
-        doctor.get("status") == "PASS"
-        and isinstance(checks, list)
-        and len(checks) == 8
-        and doctor_ids == _EXPECTED_DOCTOR_CHECK_IDS
-        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in checks)
-    )
-
     plc_rows = soak.get("plcs")
     soak_valid = (
         soak.get("status") == "PASS"
         and soak.get("setup_error") in (None, "")
+        and duration >= required
+        and requested >= required
         and isinstance(plc_rows, list)
         and len(plc_rows) >= 1
-        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in plc_rows)
-        and duration >= required
+        and all(_soak_plc_row_valid(item) for item in plc_rows)
     )
+    doctor_valid = _doctor_valid(doctor)
     valid = doctor_valid and soak_valid
     detail = (
-        f"Doctor DR-001..DR-008 PASS and soak PASS for {duration / 3600.0:.2f}h (required >= {min_soak_hours:.2f}h)."
+        f"Doctor DR-001..DR-008 PASS and qualified read loop PASS for "
+        f"{duration / 3600.0:.2f}h (required >= {min_soak_hours:.2f}h)."
         if valid
         else (
-            f"Operations evidence is insufficient: doctor_valid={doctor_valid} soak_valid={soak_valid} "
-            f"duration={duration / 3600.0:.2f}h required={min_soak_hours:.2f}h."
+            f"Operations evidence is insufficient: doctor_valid={doctor_valid} "
+            f"soak_valid={soak_valid} read_loop={max(duration, 0.0) / 3600.0:.2f}h "
+            f"required={min_soak_hours:.2f}h."
         )
     )
     return LiveCommercialGateResult(
@@ -375,7 +485,11 @@ def evaluate_live_commercial_readiness(
             _vendor_gate(vendor_qualification_path),
             _stateful_self_check(),
             _history_self_check(),
-            _ops_gate(doctor_path, soak_path, min_soak_hours=min_soak_hours),
+            _ops_gate(
+                doctor_path,
+                soak_path,
+                min_soak_hours=min_soak_hours,
+            ),
         ),
     )
 
@@ -402,7 +516,12 @@ def write_live_commercial_readiness_artifacts(
                 "mode": "READ_ONLY",
                 "status": report.status.value,
                 "commercial_v1_ready": report.commercial_v1_ready,
-                "artifacts": {report_path.name: {"sha256": sha, "bytes": size}},
+                "artifacts": {
+                    report_path.name: {
+                        "sha256": sha,
+                        "bytes": size,
+                    }
+                },
             },
         )
         return target
