@@ -179,13 +179,7 @@ def advanced_observation_map(
     context: LiveEngineeringContext,
     reconciled: ReconciledLiveAgentEvidence,
 ) -> dict[str, LiveObservedTag]:
-    """Index trusted/rejected observations by every canonical identity form.
-
-    Reconciliation is tag-id based. Program-scoped PLC references may therefore be
-    longer than the short canonical tag name returned in a runtime observation. This
-    map uses the canonical tag id to bind all valid identity forms without fuzzy
-    suffix matching.
-    """
+    """Index observations by every exact canonical identity form."""
     result: dict[str, LiveObservedTag] = {}
     tags = context.tag_by_id()
     for item in observations_from_reconciled(reconciled):
@@ -271,7 +265,11 @@ def diagnose_numeric_comparison(
     direct_assignment = item.origin == "STATEMENT_ASSIGNMENT"
     if item.origin == "RUNG_COMPARISON":
         limitations.append(
-            "This RLL comparator is one rung condition; its truth value alone does not prove the final rung output because other contacts/branches may also gate the writer."
+            "This RLL comparator is one rung condition; its truth value alone does not prove a rung output because other contacts/branches may gate execution."
+        )
+    if item.origin == "STATEMENT_COMPARISON_CONTEXT":
+        limitations.append(
+            "This comparison is a sub-expression/context only; Live does not bind it to a result tag because the complete statement contains additional logic."
         )
     if direct_assignment and result_observed is not None and result_observed.definitive_current:
         if not isinstance(result_observed.value, bool):
@@ -346,11 +344,13 @@ def _diagnose_handshake(
 ) -> LiveAdvancedDiagnosis:
     roles = dict(model.metadata.get("roles", {}))
     values: dict[str, bool] = {}
-    missing: list[str] = []
+    missing_roles: list[str] = []
+    missing_refs: list[str] = []
     for role, reference in roles.items():
         item = _observed(observations, reference)
         if item is None or not item.definitive_current or not isinstance(item.value, bool):
-            missing.append(reference)
+            missing_roles.append(role)
+            missing_refs.append(reference)
             continue
         values[role] = item.value
     current = tuple((roles[role], values[role]) for role in roles if role in values)
@@ -360,34 +360,51 @@ def _diagnose_handshake(
     ack = values.get("ACK")
     busy = values.get("BUSY")
     done = values.get("DONE")
+    positive_response = done is True or ack is True or busy is True
+    response_roles = tuple(role for role in ("ACK", "BUSY", "DONE") if role in roles)
+    status_roles = tuple(role for role in ("ERROR", "TIMEOUT") if role in roles)
+    missing_for_negative_conclusion = tuple(
+        role for role in (*response_roles, *status_roles) if role in missing_roles
+    )
+
     if error_active:
         status = LiveAdvancedDiagnosisStatus.ACTIVE_FAULT
         summary = "Handshake exposes an active ERROR/TIMEOUT signal."
     elif request is True and done is True:
         status = LiveAdvancedDiagnosisStatus.OBSERVED
         summary = "Request and completion are both active; inspect reset/acknowledge semantics for this handshake."
-    elif request is True and (ack is True or busy is True):
+    elif request is True and positive_response:
         status = LiveAdvancedDiagnosisStatus.IN_PROGRESS
-        summary = "Request is active and a response/busy state is observed."
+        summary = "Request is active and a trusted response/busy state is observed."
+    elif request is True and missing_for_negative_conclusion:
+        status = LiveAdvancedDiagnosisStatus.INDETERMINATE
+        summary = (
+            "Request is active, but Live cannot prove a waiting-response state because one or more modeled response/status signals are missing or untrusted."
+        )
     elif request is True:
         status = LiveAdvancedDiagnosisStatus.WAITING_RESPONSE
-        summary = "Request is active but no ACK/BUSY/DONE response is currently observed."
-    elif request is False and any(value is True for role, value in values.items() if role in {"ACK", "BUSY", "DONE"}):
+        summary = "Request is active and all modeled trusted response/status signals are inactive."
+    elif request is False and positive_response:
         status = LiveAdvancedDiagnosisStatus.OBSERVED
-        summary = "A response state remains active while Request is false; this can be normal cleanup or a stuck handshake depending on PLC logic."
+        summary = "A trusted response state remains active while Request is false; this may be cleanup or a stuck handshake depending on PLC logic."
+    elif request is False and missing_for_negative_conclusion:
+        status = LiveAdvancedDiagnosisStatus.INDETERMINATE
+        summary = (
+            "Request is inactive, but Live cannot prove the handshake is idle because one or more modeled response/status signals are missing or untrusted."
+        )
     elif request is False:
         status = LiveAdvancedDiagnosisStatus.IDLE
-        summary = "Handshake request is inactive."
+        summary = "Request and all modeled trusted response/status signals are inactive."
     else:
         status = LiveAdvancedDiagnosisStatus.INDETERMINATE
-        summary = "Handshake request state is missing, untrusted, or non-Boolean."
+        summary = "Handshake Request is missing, untrusted, or non-Boolean."
 
     history_lines = _last_transition_text(context, model, history)
     limitations = [
         "Handshake grouping is inferred from canonical tag names; it is not promoted to PROVEN protocol semantics without explicit PLC logic.",
     ]
-    if missing:
-        limitations.append("Missing/untrusted/non-Boolean handshake signals: " + ", ".join(missing))
+    if missing_refs:
+        limitations.append("Missing/untrusted/non-Boolean handshake signals: " + ", ".join(missing_refs))
     if history_lines:
         limitations.append("Recent trusted transitions: " + " | ".join(history_lines))
     return LiveAdvancedDiagnosis(
