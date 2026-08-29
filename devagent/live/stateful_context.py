@@ -377,6 +377,21 @@ def diagnose_live_stateful_model(
             ),
         )
 
+    if str(model.semantic_state or "").strip().upper() != "FULL":
+        return LiveStatefulDiagnosis(
+            model_id=model.id,
+            name=model.name,
+            status=LiveStatefulDiagnosisStatus.INDETERMINATE,
+            current_state=None,
+            candidate_targets=(),
+            blocking_conditions=(),
+            unknown_conditions=(),
+            source_locators=(model.source_locator,),
+            detail=(
+                f"State-machine semantic_state={model.semantic_state or 'UNKNOWN'} is not FULL; Live refuses to prove transition readiness/blocking from a partial canonical model."
+            ),
+        )
+
     present, raw_state = _lookup(observations, model.name)
     if not present:
         return LiveStatefulDiagnosis(
