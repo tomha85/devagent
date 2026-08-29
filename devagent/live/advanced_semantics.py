@@ -83,14 +83,13 @@ class LiveAdvancedCoverage:
 _SIMPLE_REF = r'[A-Za-z_#%][A-Za-z0-9_#%\.\[\]:]*'
 _SIMPLE_NUM = r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)'
 _OPERAND = rf'(?:{_SIMPLE_REF}|{_SIMPLE_NUM})'
-_ASSIGN_COMPARE_RE = re.compile(
-    rf'(?P<result>{_SIMPLE_REF})\s*:=\s*(?P<left>{_OPERAND})\s*'
-    rf'(?P<op>>=|<=|<>|!=|==|=|>|<)\s*(?P<right>{_OPERAND})',
+_ASSIGN_COMPARE_EXACT_RE = re.compile(
+    rf'^\s*(?P<result>{_SIMPLE_REF})\s*:=\s*(?P<left>{_OPERAND})\s*'
+    rf'(?P<op>>=|<=|<>|!=|==|=|>|<)\s*(?P<right>{_OPERAND})\s*;?\s*$',
     re.IGNORECASE,
 )
-_CONDITION_COMPARE_RE = re.compile(
-    rf'\b(?:IF|ELSIF|WHILE|UNTIL)\s+(?P<left>{_OPERAND})\s*'
-    rf'(?P<op>>=|<=|<>|!=|==|=|>|<)\s*(?P<right>{_OPERAND})',
+_BARE_COMPARE_RE = re.compile(
+    rf'(?P<left>{_OPERAND})\s*(?P<op>>=|<=|<>|!=|==|=|>|<)\s*(?P<right>{_OPERAND})',
     re.IGNORECASE,
 )
 _RLL_COMPARE_RE = re.compile(
@@ -122,10 +121,9 @@ _ONE_SHOT_NAMES = {
 _LATCH_NAMES = {"OTL", "OTU", "SET", "RESET", "SR", "RS", "LATCH", "UNLATCH"}
 _SEQUENCER_NAMES = {"SQO", "SQC", "SQL", "SEQ", "SEQUENCER"}
 _PID_NAMES = {"PID", "PIDE", "PID_COMPACT", "CONT_C", "FB41", "PIDFF", "PID_AT"}
-_MOTION_PREFIXES = (
-    "MAJ", "MAS", "MAM", "MAH", "MSO", "MSF", "MAFR", "MAG", "MDAC", "MDO", "MDS",
-    "MC_",
-)
+_ROCKWELL_MOTION_NAMES = {
+    "MAJ", "MAS", "MASD", "MAM", "MAH", "MSO", "MSF", "MAFR", "MAG", "MDAC", "MDO", "MDS",
+}
 
 _HANDSHAKE_SUFFIXES = (
     ("REQUEST", ("request", "req")),
@@ -193,30 +191,33 @@ def _statement_numeric(statement: LiveLogicStatement) -> tuple[LiveNumericCompar
     if str(statement.semantic_state or "").upper() != "FULL":
         return ()
     text = statement.text or ""
-    result: list[LiveNumericComparison] = []
-    for index, match in enumerate(_ASSIGN_COMPARE_RE.finditer(text), start=1):
+    exact = _ASSIGN_COMPARE_EXACT_RE.fullmatch(text)
+    if exact is not None:
         item = _comparison(
-            identifier=f"NUM:{statement.id}:ASSIGN:{index}",
-            result_tag=match.group("result"),
-            left=match.group("left"),
-            operator=match.group("op"),
-            right=match.group("right"),
+            identifier=f"NUM:{statement.id}:ASSIGN:1",
+            result_tag=exact.group("result"),
+            left=exact.group("left"),
+            operator=exact.group("op"),
+            right=exact.group("right"),
             source_locator=statement.source_locator or statement.locator,
             semantic_state=statement.semantic_state,
             origin="STATEMENT_ASSIGNMENT",
         )
-        if item is not None:
-            result.append(item)
-    for index, match in enumerate(_CONDITION_COMPARE_RE.finditer(text), start=1):
+        return (item,) if item is not None else ()
+
+    # Compound/conditional expressions are useful context, but are not equivalent to
+    # any result tag unless the complete RHS is the supported comparison above.
+    result: list[LiveNumericComparison] = []
+    for index, match in enumerate(_BARE_COMPARE_RE.finditer(text), start=1):
         item = _comparison(
-            identifier=f"NUM:{statement.id}:COND:{index}",
+            identifier=f"NUM:{statement.id}:CONTEXT:{index}",
             result_tag=None,
             left=match.group("left"),
             operator=match.group("op"),
             right=match.group("right"),
             source_locator=statement.source_locator or statement.locator,
             semantic_state=statement.semantic_state,
-            origin="STATEMENT_CONDITION",
+            origin="STATEMENT_COMPARISON_CONTEXT",
         )
         if item is not None:
             result.append(item)
@@ -227,12 +228,10 @@ def _rung_numeric(project: Any) -> tuple[LiveNumericComparison, ...]:
     result: list[LiveNumericComparison] = []
     for rung in tuple(getattr(project, "rungs", ()) or ()):
         text = str(getattr(rung, "text", "") or "")
-        writes = tuple(str(item) for item in tuple(getattr(rung, "writes", ()) or ()) if str(item))
-        result_tag = writes[0] if len(writes) == 1 else None
         for index, match in enumerate(_RLL_COMPARE_RE.finditer(text), start=1):
             item = _comparison(
                 identifier=f"NUM:RUNG:{getattr(rung, 'id', '')}:{index}",
-                result_tag=result_tag,
+                result_tag=None,
                 left=match.group("left"),
                 operator=match.group("op"),
                 right=match.group("right"),
@@ -277,7 +276,7 @@ def _classify_instruction(name: str) -> LiveAdvancedKind | None:
         return LiveAdvancedKind.SEQUENCER
     if upper in _PID_NAMES or upper.startswith("PID_"):
         return LiveAdvancedKind.PID
-    if any(upper.startswith(prefix) for prefix in _MOTION_PREFIXES):
+    if upper in _ROCKWELL_MOTION_NAMES or upper.startswith("MC_"):
         return LiveAdvancedKind.MOTION
     return None
 
@@ -542,6 +541,7 @@ def build_live_advanced_coverage(project: Any, context: LiveEngineeringContext) 
             "Name-derived handshakes are INFERRED context until confirmed by explicit PLC logic or engineer evidence.",
             "One-shot, latch, sequencer, motion, and PID instructions require runtime/history evidence; DevAgent does not simulate hidden controller state.",
             "AOI/FB internals are not claimed when source-protected, partial, or absent from the canonical project.",
+            "RLL comparators are modeled as conditions only; Live does not bind them to rung writes without proven topology equivalence.",
             "UDT/array models provide structure context only unless individual members/elements are exposed and reconciled through OPC UA.",
         ),
     )
