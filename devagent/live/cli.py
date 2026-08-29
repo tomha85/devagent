@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
+from .cli_security import add_security_args, security_from_args
 from .errors import LiveError
 from .models import BrowseNode, RuntimeValue
 from .opcua_client import ReadOnlyOpcUaClient
@@ -19,6 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--endpoint",
         help="OPC UA endpoint used by the persistent interactive shell.",
     )
+    add_security_args(parser)
     subparsers = parser.add_subparsers(dest="command")
 
     probe = subparsers.add_parser("probe", help="Discover endpoint security and identity options.")
@@ -88,10 +90,24 @@ def _format_value(value: RuntimeValue) -> str:
     )
 
 
-async def _connected_client(endpoint: str, *, stale_after: float = 5.0) -> ReadOnlyOpcUaClient:
-    client = ReadOnlyOpcUaClient(endpoint, stale_after_seconds=stale_after)
+async def _connected_client(
+    endpoint: str,
+    args: argparse.Namespace,
+    *,
+    stale_after: float = 5.0,
+) -> ReadOnlyOpcUaClient:
+    client = ReadOnlyOpcUaClient(
+        endpoint,
+        stale_after_seconds=stale_after,
+        security=security_from_args(args),
+    )
     await client.connect()
     return client
+
+
+def _print_connection_security(client: ReadOnlyOpcUaClient) -> None:
+    print(f"Authentication: {client.authentication_mode}")
+    print(f"Security: {client.security_summary}")
 
 
 async def _run_probe(args: argparse.Namespace) -> int:
@@ -112,13 +128,15 @@ async def _run_probe(args: argparse.Namespace) -> int:
 
 
 async def _run_browse(args: argparse.Namespace) -> int:
-    client = await _connected_client(args.endpoint)
+    client = await _connected_client(args.endpoint, args)
     try:
         nodes = await client.browse(max_depth=args.max_depth, max_nodes=args.max_nodes)
         print("DEVAGENT LIVE BROWSE")
         print(f"Endpoint: {args.endpoint}")
         print(f"Nodes returned: {len(nodes)}")
-        print("Mode: READ ONLY\n")
+        print("Mode: READ ONLY")
+        _print_connection_security(client)
+        print()
         for node in nodes:
             print(_format_node(node))
         return 0
@@ -127,12 +145,14 @@ async def _run_browse(args: argparse.Namespace) -> int:
 
 
 async def _run_read(args: argparse.Namespace) -> int:
-    client = await _connected_client(args.endpoint, stale_after=args.stale_after)
+    client = await _connected_client(args.endpoint, args, stale_after=args.stale_after)
     try:
         value = await client.read(args.node_id)
         print("DEVAGENT LIVE READ")
         print(f"Endpoint: {args.endpoint}")
-        print("Mode: READ ONLY\n")
+        print("Mode: READ ONLY")
+        _print_connection_security(client)
+        print()
         print(_format_value(value))
         return 0 if value.loaded_successfully else 2
     finally:
@@ -140,7 +160,7 @@ async def _run_read(args: argparse.Namespace) -> int:
 
 
 async def _run_snapshot(args: argparse.Namespace) -> int:
-    client = await _connected_client(args.endpoint)
+    client = await _connected_client(args.endpoint, args)
     try:
         nodes = await client.browse(max_depth=args.max_depth, max_nodes=args.max_nodes)
         values = await client.load_values(nodes, max_values=args.max_values)
@@ -149,6 +169,7 @@ async def _run_snapshot(args: argparse.Namespace) -> int:
         print("DEVAGENT LIVE SNAPSHOT")
         print(f"Endpoint: {args.endpoint}")
         print("Mode: READ ONLY")
+        _print_connection_security(client)
         print(f"Variables attempted: {len(values)}")
         print(f"Loaded successfully: {successful}")
         print(f"Failed/untrusted: {failed}")
@@ -163,7 +184,7 @@ async def _run_snapshot(args: argparse.Namespace) -> int:
 
 
 async def _run_watch(args: argparse.Namespace) -> int:
-    client = await _connected_client(args.endpoint)
+    client = await _connected_client(args.endpoint, args)
     try:
         values = await client.collect_changes(
             args.node_id,
@@ -173,6 +194,7 @@ async def _run_watch(args: argparse.Namespace) -> int:
         print("DEVAGENT LIVE WATCH")
         print(f"Endpoint: {args.endpoint}")
         print("Mode: READ ONLY")
+        _print_connection_security(client)
         print(f"Notifications: {len(values)}")
         for value in values:
             stamp = value.source_timestamp or value.server_timestamp or value.received_at
@@ -200,13 +222,14 @@ async def _run_sim(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _run_shell(endpoint: str) -> int:
-    client = await _connected_client(endpoint)
+async def _run_shell(endpoint: str, args: argparse.Namespace) -> int:
+    client = await _connected_client(endpoint, args)
     try:
         print("DEVAGENT LIVE")
         print(f"Endpoint: {endpoint}")
         print("Connection: CONNECTED")
         print("Mode: READ ONLY")
+        _print_connection_security(client)
         print("PLC write capability: NOT AVAILABLE")
         print("Type :help for commands. :disconnect ends the session.\n")
         while True:
@@ -232,8 +255,9 @@ async def _run_shell(endpoint: str) -> int:
                 continue
             if line == ":status":
                 print(f"Endpoint: {endpoint}")
-                print("Connection: CONNECTED")
+                print(f"Connection: {client.connection_state}")
                 print("Mode: READ ONLY")
+                _print_connection_security(client)
                 continue
             if line == ":browse":
                 nodes = await client.browse(max_depth=3, max_nodes=100)
@@ -272,7 +296,7 @@ async def _run(args: argparse.Namespace) -> int:
     if args.command == "sim":
         return await _run_sim(args)
     if args.endpoint:
-        return await _run_shell(args.endpoint)
+        return await _run_shell(args.endpoint, args)
     raise ValueError("Use --endpoint for an interactive session, or choose probe/browse/read/snapshot/watch/sim.")
 
 
