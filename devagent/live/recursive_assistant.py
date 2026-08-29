@@ -143,9 +143,22 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
+
         combined = answer.render_text()
+        if diagnosis.source_locators:
+            combined += "\n\nTarget PLC source:"
+            combined += "".join(f"\n- {locator}" for locator in diagnosis.source_locators)
         if recursive.roots or recursive.limitations:
             combined += "\n\n" + recursive.render_text()
+
+        # Natural-language follow-ups such as "Why?" should drill into one
+        # immediate modeled blocker instead of repeating the original output.
+        # Keep the original target when there are multiple possible blockers.
+        if len(recursive.roots) == 1:
+            immediate = recursive.roots[0].signal
+            if self.context.rules_for_output(immediate):
+                self._last_target = immediate
+
         return LiveAssistantReply(
             question=text,
             kind=LiveAssistantReplyKind.DIAGNOSIS,
