@@ -205,9 +205,14 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         )
         return lines
 
+    heading = (
+        "Recommended production profile:"
+        if recommended.secure_channel
+        else "Recommended available profile:"
+    )
     lines.extend(
         [
-            "Recommended production profile:",
+            heading,
             f"  Endpoint: {recommended.endpoint.endpoint_url}",
             f"  Security: {recommended.policy_name} / {recommended.mode_name}",
             f"  Authentication: {recommended.authentication_summary}",
@@ -226,5 +231,10 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         if recommended.username_password_available:
             lines.append("  Password: provide through --password-env; never place it directly on argv.")
     else:
-        lines.append("  Next step: browse/read can be attempted directly without certificate flags.")
+        lines.extend(
+            [
+                "  Next step: browse/read can be attempted directly without certificate flags.",
+                "  Note: NoSecurity is appropriate for lab/simulator use; production should prefer a supported secure endpoint when available.",
+            ]
+        )
     return lines
