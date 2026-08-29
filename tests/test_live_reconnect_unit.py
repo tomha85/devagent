@@ -267,3 +267,25 @@ def test_subscription_bad_status_is_not_hidden_when_session_is_connected(
             await wrapper.collect_changes(["ns=2;s=RunCmd"], count=1, timeout_seconds=0.5)
 
     asyncio.run(scenario())
+
+
+def test_connected_bad_timeout_remains_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_subscription_module,
+) -> None:
+    monkeypatch.setattr(opcua_client, "_require_asyncua", lambda: (FakeClient, SimpleNamespace()))
+
+    async def scenario() -> None:
+        wrapper = ReadOnlyOpcUaClient("opc.tcp://127.0.0.1:4840/", auto_reconnect=True)
+        raw = FakeClient(url=wrapper.endpoint, timeout=wrapper.timeout_seconds)
+        raw.state = FakeState("connected")
+        wrapper._client = raw
+        raw.subscription = FakeSubscription(
+            raw,
+            [("connected", StatusChangeEvent(FakeStatus("BadTimeout", bad=True)))],
+        )
+
+        with pytest.raises(LiveConnectionError, match="BadTimeout"):
+            await wrapper.collect_changes(["ns=2;s=RunCmd"], count=1, timeout_seconds=0.5)
+
+    asyncio.run(scenario())
