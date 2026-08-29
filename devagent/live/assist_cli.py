@@ -8,11 +8,13 @@ from pathlib import Path
 from devagent.config import ProviderConfig, load_config, provider_defaults
 from devagent.providers import ModelProvider, ProviderError, create_provider
 
-from .assistant import LiveCommissioningAssistant
+from .assistant import LiveCommissioningAssistant as BaseLiveCommissioningAssistant
 from .cli_security import add_security_args, security_from_args
 from .engineering_context import load_live_engineering_context
 from .errors import LiveError
 from .manager import PlcConnectionSpec
+from .recursive_assistant import RecursiveLiveCommissioningAssistant
+from .recursive_diagnosis import DEFAULT_TRACE_MAX_DEPTH, DEFAULT_TRACE_MAX_NODES
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,6 +59,24 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=500,
         help="Maximum OPC UA nodes inspected for tag reconciliation. Default: 500.",
+    )
+    parser.add_argument(
+        "--trace-max-depth",
+        type=int,
+        default=DEFAULT_TRACE_MAX_DEPTH,
+        help=(
+            "Maximum deterministic upstream PLC logic depth for recursive root-cause tracing. "
+            f"Default: {DEFAULT_TRACE_MAX_DEPTH}."
+        ),
+    )
+    parser.add_argument(
+        "--trace-max-nodes",
+        type=int,
+        default=DEFAULT_TRACE_MAX_NODES,
+        help=(
+            "Maximum engineering/live signals considered by one recursive diagnosis. "
+            f"Default: {DEFAULT_TRACE_MAX_NODES}."
+        ),
     )
     parser.add_argument(
         "--ai",
@@ -117,10 +137,11 @@ def _print_help() -> None:
     print("Or ask a commissioning question, for example:")
     print("  Why is Conveyor7_Run not active?")
     print("  Which permissive is blocking Conveyor7_Run?")
+    print("  Why is that permissive false?")
     print("  What should I check next?")
 
 
-def _print_mapping_summary(assistant: LiveCommissioningAssistant) -> None:
+def _print_mapping_summary(assistant: BaseLiveCommissioningAssistant) -> None:
     reconciliation = assistant.reconciliation
     if reconciliation is None:
         print("Tag reconciliation: NOT RUN")
@@ -140,7 +161,7 @@ def _print_mapping_summary(assistant: LiveCommissioningAssistant) -> None:
             print(f"- ... {len(unresolved) - 12} more")
 
 
-def _print_status(assistant: LiveCommissioningAssistant) -> None:
+def _print_status(assistant: BaseLiveCommissioningAssistant) -> None:
     status = assistant.manager.status(assistant.connection.plc_id)
     print(f"PLC: {status.plc_name} ({status.plc_id})")
     print(f"Endpoint: {status.endpoint}")
@@ -162,12 +183,14 @@ async def _run_session(args: argparse.Namespace) -> int:
         endpoint=args.endpoint,
         security=security_from_args(args),
     )
-    assistant = LiveCommissioningAssistant(
+    assistant = RecursiveLiveCommissioningAssistant(
         loaded,
         connection,
         browse_max_depth=args.max_depth,
         browse_max_nodes=args.max_nodes,
         provider=provider,
+        trace_max_depth=args.trace_max_depth,
+        trace_max_nodes=args.trace_max_nodes,
     )
 
     try:
@@ -183,6 +206,10 @@ async def _run_session(args: argparse.Namespace) -> int:
             "AI explanations: ENABLED"
             if provider is not None
             else "AI explanations: OFF (deterministic diagnosis remains available)"
+        )
+        print(
+            f"Recursive root-cause trace: ENABLED "
+            f"(depth={assistant.trace_max_depth}, nodes={assistant.trace_max_nodes})"
         )
         _print_mapping_summary(assistant)
         print("Type :help for commands. Ask commissioning questions directly.\n")

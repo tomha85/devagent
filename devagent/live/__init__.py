@@ -74,6 +74,19 @@ from .qa import (
     LiveCommissioningAnswer,
     answer_commissioning_question,
 )
+from .recursive_assistant import (
+    RecursiveLiveCommissioningAssistant,
+    create_recursive_live_commissioning_assistant,
+)
+from .recursive_diagnosis import (
+    DEFAULT_TRACE_MAX_DEPTH,
+    DEFAULT_TRACE_MAX_NODES,
+    LiveRecursiveDiagnosis,
+    LiveRootCauseStep,
+    LiveRootCauseStepStatus,
+    required_tag_ids_for_recursive_output,
+    trace_recursive_diagnosis,
+)
 from .readiness import (
     LiveProductionControlResult,
     LiveProductionControlStatus,
@@ -182,6 +195,15 @@ __all__ = [
     "LIVE_COMMISSIONING_QA_SCHEMA",
     "LiveCommissioningAnswer",
     "answer_commissioning_question",
+    "RecursiveLiveCommissioningAssistant",
+    "create_recursive_live_commissioning_assistant",
+    "DEFAULT_TRACE_MAX_DEPTH",
+    "DEFAULT_TRACE_MAX_NODES",
+    "LiveRecursiveDiagnosis",
+    "LiveRootCauseStep",
+    "LiveRootCauseStepStatus",
+    "required_tag_ids_for_recursive_output",
+    "trace_recursive_diagnosis",
     "LiveProductionControlResult",
     "LiveProductionControlStatus",
     "LiveProductionReadinessRating",
