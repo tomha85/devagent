@@ -97,6 +97,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write the qualification report and SHA-256 manifest to a new directory.",
     )
 
+    readiness = subparsers.add_parser(
+        "readiness",
+        help="Evaluate the 10-control Live production-readiness scorecard.",
+    )
+    readiness.add_argument(
+        "--qualification-report",
+        type=Path,
+        help=(
+            "Optional live_release_qualification.json artifact. Without it, the real-runtime "
+            "control remains BLOCKED and the maximum valid rating is 9/10 PRODUCTION_CANDIDATE."
+        ),
+    )
+    readiness.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write the readiness report and SHA-256 manifest to a new directory.",
+    )
+
     sim = subparsers.add_parser("sim", help="Run the local DevAgent OPC UA qualification simulator.")
     sim.add_argument(
         "--endpoint",
@@ -370,6 +388,35 @@ async def _run_qualify(args: argparse.Namespace) -> int:
     return 0 if report.status is LiveQualificationStatus.PASS else 2
 
 
+async def _run_readiness(args: argparse.Namespace) -> int:
+    from .readiness import (
+        evaluate_live_production_readiness,
+        write_live_production_readiness_artifacts,
+    )
+
+    qualification = args.qualification_report if args.qualification_report is not None else None
+    report = evaluate_live_production_readiness(qualification)
+    print("DEVAGENT LIVE PRODUCTION READINESS")
+    print("Mode: READ ONLY")
+    print()
+    for control in report.controls:
+        print(f"[{control.status.value}] {control.control_id} {control.title} - {control.detail}")
+    counts = report.counts()
+    print()
+    print(f"Score: {report.score}/{report.max_score}")
+    print(f"Rating: {report.rating.value}")
+    print(f"Production qualified: {'YES' if report.production_qualified else 'NO'}")
+    print(
+        f"Controls: PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']}"
+    )
+    if report.meets_nine_of_ten and not report.production_qualified:
+        print("Runtime qualification point reserved: run `devagent live qualify` to earn 10/10.")
+    if args.output_dir is not None:
+        written = write_live_production_readiness_artifacts(args.output_dir, report)
+        print(f"Artifacts: {written}")
+    return 0 if report.meets_nine_of_ten else 2
+
+
 async def _run_sim(args: argparse.Namespace) -> int:
     simulator = OpcUaSimulator(args.endpoint, scenario=args.scenario)
     await simulator.start()
@@ -462,13 +509,15 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_commission(args)
     if args.command == "qualify":
         return await _run_qualify(args)
+    if args.command == "readiness":
+        return await _run_readiness(args)
     if args.command == "sim":
         return await _run_sim(args)
     if args.endpoint:
         return await _run_shell(args.endpoint, args)
     raise ValueError(
         "Use --endpoint for an interactive session, or choose "
-        "probe/browse/read/snapshot/watch/plan/commission/qualify/sim."
+        "probe/browse/read/snapshot/watch/plan/commission/qualify/readiness/sim."
     )
 
 
