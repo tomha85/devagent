@@ -79,6 +79,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--history-seconds",
+        type=float,
+        default=300.0,
+        help="Trusted rolling timeline retention in seconds. Use 0 to disable. Default: 300.",
+    )
+    parser.add_argument(
+        "--history-poll-seconds",
+        type=float,
+        default=1.0,
+        help="Read-only historical polling interval in seconds. Default: 1.0.",
+    )
+    parser.add_argument(
+        "--history-max-tags",
+        type=int,
+        default=64,
+        help="Maximum safely reconciled tags retained in the rolling timeline. Default: 64.",
+    )
+    parser.add_argument(
         "--ai",
         action="store_true",
         help=(
@@ -111,10 +129,7 @@ def _provider_from_args(args: argparse.Namespace) -> ModelProvider | None:
     same_provider = provider_name == base.provider.lower()
     config = ProviderConfig(
         provider=provider_name,
-        model=str(
-            args.model
-            or (base.model if same_provider else default_model)
-        ),
+        model=str(args.model or (base.model if same_provider else default_model)),
         base_url=(
             args.base_url
             if args.base_url is not None
@@ -128,7 +143,7 @@ def _provider_from_args(args: argparse.Namespace) -> ModelProvider | None:
 
 def _print_help() -> None:
     print(":status       Show OPC UA connection and security state")
-    print(":overview     Show loaded PLC engineering + mapping overview")
+    print(":overview     Show engineering, mapping, stateful, and history overview")
     print(":mappings     Show accepted/unresolved engineering-to-OPC-UA mapping counts")
     print(":refresh      Re-browse and reconcile engineering tags to OPC UA")
     print(":help         Show this help")
@@ -138,6 +153,9 @@ def _print_help() -> None:
     print("  Why is Conveyor7_Run not active?")
     print("  Which permissive is blocking Conveyor7_Run?")
     print("  Why is that permissive false?")
+    print("  Why did Conveyor7_Run stop 30 seconds ago?")
+    print("  Why is SequenceState not advancing?")
+    print("  Why is Timer1 not done?")
     print("  What should I check next?")
 
 
@@ -191,6 +209,9 @@ async def _run_session(args: argparse.Namespace) -> int:
         provider=provider,
         trace_max_depth=args.trace_max_depth,
         trace_max_nodes=args.trace_max_nodes,
+        history_seconds=args.history_seconds,
+        history_poll_seconds=args.history_poll_seconds,
+        history_max_tags=args.history_max_tags,
     )
 
     try:
@@ -210,6 +231,16 @@ async def _run_session(args: argparse.Namespace) -> int:
         print(
             f"Recursive root-cause trace: ENABLED "
             f"(depth={assistant.trace_max_depth}, nodes={assistant.trace_max_nodes})"
+        )
+        print(
+            f"Stateful context: models={len(assistant.stateful_coverage.models)} "
+            f"timers={assistant.stateful_coverage.timers} "
+            f"counters={assistant.stateful_coverage.counters} "
+            f"state_machines={assistant.stateful_coverage.state_machines}"
+        )
+        print(
+            f"Historical timeline: {'ENABLED' if assistant.history_seconds > 0 else 'OFF'} "
+            f"retention={assistant.history_seconds:g}s"
         )
         _print_mapping_summary(assistant)
         print("Type :help for commands. Ask commissioning questions directly.\n")
@@ -232,7 +263,7 @@ async def _run_session(args: argparse.Namespace) -> int:
                 _print_status(assistant)
                 continue
             if line in {":overview", ":context"}:
-                print(assistant.system_overview().render_text())
+                print(assistant._overview_text())
                 continue
             if line == ":mappings":
                 _print_mapping_summary(assistant)
@@ -252,9 +283,6 @@ async def _run_session(args: argparse.Namespace) -> int:
         try:
             await assistant.close()
         except Exception:
-            # Session close is best-effort here; manager/client surfaces keep PLC
-            # control unavailable and secrets redacted. The original exception, if
-            # any, should remain authoritative.
             pass
         print("OPC UA commissioning session closed.")
 

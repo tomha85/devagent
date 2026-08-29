@@ -19,6 +19,13 @@ from .assistant import (
     LiveCommissioningAssistant,
     create_live_commissioning_assistant,
 )
+from .commercial_readiness import (
+    LiveCommercialGateResult,
+    LiveCommercialGateStatus,
+    LiveCommercialReadinessReport,
+    evaluate_live_commercial_readiness,
+    write_live_commercial_readiness_artifacts,
+)
 from .diagnosis import (
     LiveCommissioningDiagnosis,
     LiveConditionEvaluation,
@@ -33,6 +40,13 @@ from .diagnosis import (
     resolve_question_target,
 )
 from .diagnosis_guard import diagnose_output
+from .doctor import (
+    LiveDoctorCheck,
+    LiveDoctorReport,
+    LiveDoctorStatus,
+    run_live_doctor,
+    write_live_doctor_artifacts,
+)
 from .engineering_context import (
     LiveEngineeringContext,
     LiveEngineeringTag,
@@ -44,6 +58,15 @@ from .engineering_context import (
     build_live_engineering_context,
     load_live_engineering_context,
     normalize_engineering_identifier,
+)
+from .history import (
+    LiveHistoricalDiagnosis,
+    LiveHistoricalSample,
+    LiveHistoryCollector,
+    LiveSignalTransition,
+    LiveTimelineStore,
+    is_historical_question,
+    requested_history_seconds,
 )
 from .manager import (
     ManagedPlcStatus,
@@ -113,6 +136,30 @@ from .reconciled_evidence import (
     run_reconciled_live_augmented_requirement_mapping,
 )
 from .security import LiveSecurityConfig
+from .soak import (
+    LiveSoakPlcResult,
+    LiveSoakReport,
+    LiveSoakStatus,
+    run_live_soak,
+    write_live_soak_artifacts,
+)
+from .stateful_assistant import (
+    render_stateful_diagnosis,
+    required_stateful_tag_ids,
+    resolve_stateful_model,
+    stateful_observation_map,
+)
+from .stateful_context import (
+    LiveStatefulCoverageReport,
+    LiveStatefulDiagnosis,
+    LiveStatefulDiagnosisStatus,
+    LiveStatefulKind,
+    LiveStatefulModel,
+    LiveStatefulTransition,
+    build_live_stateful_coverage,
+    diagnose_live_stateful_model,
+    extract_live_stateful_models,
+)
 from .tag_reconciliation import (
     LiveTagCandidate,
     LiveTagMapping,
@@ -123,6 +170,15 @@ from .tag_reconciliation import (
     reconcile_connected_plc_tags,
     reconcile_connected_project_tags,
     reconcile_engineering_tags,
+)
+from .vendor_qualification import (
+    REQUIRED_VENDOR_FAMILIES,
+    LiveVendorQualificationReport,
+    LiveVendorQualificationResult,
+    LiveVendorQualificationStatus,
+    canonical_vendor_name,
+    run_live_vendor_qualification,
+    write_live_vendor_qualification_artifacts,
 )
 from .workflow import (
     LiveCommissioningPlcResult,
@@ -157,6 +213,11 @@ __all__ = [
     "LiveAssistantReplyKind",
     "LiveCommissioningAssistant",
     "create_live_commissioning_assistant",
+    "LiveCommercialGateResult",
+    "LiveCommercialGateStatus",
+    "LiveCommercialReadinessReport",
+    "evaluate_live_commercial_readiness",
+    "write_live_commercial_readiness_artifacts",
     "LiveCommissioningDiagnosis",
     "LiveConditionEvaluation",
     "LiveConditionState",
@@ -169,6 +230,11 @@ __all__ = [
     "observations_from_reconciled",
     "required_tag_ids_for_output",
     "resolve_question_target",
+    "LiveDoctorCheck",
+    "LiveDoctorReport",
+    "LiveDoctorStatus",
+    "run_live_doctor",
+    "write_live_doctor_artifacts",
     "LiveEngineeringContext",
     "LiveEngineeringTag",
     "LiveLoadedEngineering",
@@ -179,6 +245,13 @@ __all__ = [
     "build_live_engineering_context",
     "load_live_engineering_context",
     "normalize_engineering_identifier",
+    "LiveHistoricalDiagnosis",
+    "LiveHistoricalSample",
+    "LiveHistoryCollector",
+    "LiveSignalTransition",
+    "LiveTimelineStore",
+    "is_historical_question",
+    "requested_history_seconds",
     "LiveCommissionPlan",
     "LivePlanReference",
     "LivePlanReferenceStatus",
@@ -219,6 +292,28 @@ __all__ = [
     "render_live_commissioning_section",
     "summarize_live_production_evidence",
     "write_live_production_artifacts",
+    "ReconciledLiveAgentEvidence",
+    "build_reconciled_live_agent_evidence",
+    "run_reconciled_live_augmented_ai_review",
+    "run_reconciled_live_augmented_requirement_mapping",
+    "LiveSoakPlcResult",
+    "LiveSoakReport",
+    "LiveSoakStatus",
+    "run_live_soak",
+    "write_live_soak_artifacts",
+    "render_stateful_diagnosis",
+    "required_stateful_tag_ids",
+    "resolve_stateful_model",
+    "stateful_observation_map",
+    "LiveStatefulCoverageReport",
+    "LiveStatefulDiagnosis",
+    "LiveStatefulDiagnosisStatus",
+    "LiveStatefulKind",
+    "LiveStatefulModel",
+    "LiveStatefulTransition",
+    "build_live_stateful_coverage",
+    "diagnose_live_stateful_model",
+    "extract_live_stateful_models",
     "LiveTagCandidate",
     "LiveTagMapping",
     "LiveTagMappingStatus",
@@ -228,10 +323,13 @@ __all__ = [
     "reconcile_connected_plc_tags",
     "reconcile_connected_project_tags",
     "reconcile_engineering_tags",
-    "ReconciledLiveAgentEvidence",
-    "build_reconciled_live_agent_evidence",
-    "run_reconciled_live_augmented_ai_review",
-    "run_reconciled_live_augmented_requirement_mapping",
+    "REQUIRED_VENDOR_FAMILIES",
+    "LiveVendorQualificationReport",
+    "LiveVendorQualificationResult",
+    "LiveVendorQualificationStatus",
+    "canonical_vendor_name",
+    "run_live_vendor_qualification",
+    "write_live_vendor_qualification_artifacts",
     "LiveCommissioningPlcResult",
     "LiveCommissioningPlcSpec",
     "LiveCommissioningState",
