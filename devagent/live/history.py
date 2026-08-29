@@ -254,6 +254,7 @@ class LiveHistoryCollector:
         retention_seconds: float = 300.0,
         poll_interval_seconds: float = 1.0,
         max_tags: int = 64,
+        preferred_tag_ids: Iterable[str] = (),
         store: LiveTimelineStore | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
@@ -270,7 +271,21 @@ class LiveHistoryCollector:
         self.last_error: str | None = None
         self.cycles = 0
 
-        accepted = list(reconciliation.accepted_mappings())[:max_tags]
+        preferred = {
+            str(tag_id).strip(): index
+            for index, tag_id in enumerate(preferred_tag_ids)
+            if str(tag_id).strip()
+        }
+        accepted = list(reconciliation.accepted_mappings())
+        accepted.sort(
+            key=lambda mapping: (
+                0 if mapping.tag_id in preferred else 1,
+                preferred.get(mapping.tag_id, len(preferred)),
+                mapping.tag_name.casefold(),
+                mapping.tag_id,
+            )
+        )
+        accepted = accepted[:max_tags]
         self._mappings = tuple(accepted)
         self._node_to_mapping = {
             mapping.selected_node_id: mapping
@@ -281,6 +296,10 @@ class LiveHistoryCollector:
     @property
     def active(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def captured_tag_ids(self) -> tuple[str, ...]:
+        return tuple(mapping.tag_id for mapping in self._mappings)
 
     async def start(self) -> None:
         if self.active or not self._mappings:
