@@ -5,6 +5,13 @@ from typing import Mapping
 
 from devagent.providers import ModelProvider
 
+from .advanced_assistant import (
+    advanced_observation_map,
+    diagnose_advanced_target,
+    required_advanced_tag_ids,
+    resolve_advanced_target,
+)
+from .advanced_semantics import LiveAdvancedKind, build_live_advanced_coverage
 from .assistant import (
     LiveAssistantReply,
     LiveAssistantReplyKind,
@@ -44,7 +51,8 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
 
     DevAgent PLC remains the read-only engineering authority. This class owns onsite
     state only: exact tag reconciliation, trusted live evidence, bounded recursive
-    blocker tracing, stateful/sequence context, and an optional bounded timeline.
+    blocker tracing, stateful/sequence context, advanced commissioning semantics,
+    and an optional bounded timeline.
     """
 
     def __init__(
@@ -89,6 +97,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         self.history_max_tags = history_max_tags
         self.history_collector: LiveHistoryCollector | None = None
         self.stateful_coverage = build_live_stateful_coverage(self.loaded.project)
+        self.advanced_coverage = build_live_advanced_coverage(self.loaded.project, self.context)
 
     def _preferred_history_tag_ids(self) -> tuple[str, ...]:
         """Rank diagnostic signals ahead of unrelated mapped tags in bounded history."""
@@ -107,11 +116,18 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             for path in rule.paths:
                 for term in path.terms:
                     add_reference(term.tag_reference)
-        # Finally state-machine state tags and transition/timer/counter guard dependencies.
+        # Stateful state/guard dependencies.
         for model in self.stateful_coverage.models:
             for tag_id in required_stateful_tag_ids(self.context, model):
                 if tag_id not in result:
                     result.append(tag_id)
+        # Advanced numeric, handshake, one-shot/latch, AOI/FB, fault, motion and PID context.
+        for comparison in self.advanced_coverage.numeric_comparisons:
+            for reference in comparison.references:
+                add_reference(reference)
+        for model in self.advanced_coverage.models:
+            for reference in model.references:
+                add_reference(reference)
         return tuple(result)
 
     async def _start_history(self) -> None:
@@ -158,6 +174,18 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
                 f"Stateful models: {len(self.stateful_coverage.models)} "
                 f"(timers={self.stateful_coverage.timers}, counters={self.stateful_coverage.counters}, "
                 f"state_machines={self.stateful_coverage.state_machines})"
+            ),
+            (
+                "Advanced semantics: "
+                f"numeric={self.advanced_coverage.count(LiveAdvancedKind.NUMERIC_COMPARISON)} "
+                f"oneshot={self.advanced_coverage.count(LiveAdvancedKind.ONE_SHOT)} "
+                f"latch={self.advanced_coverage.count(LiveAdvancedKind.LATCH)} "
+                f"handshake={self.advanced_coverage.count(LiveAdvancedKind.HANDSHAKE)} "
+                f"aoi_fb={self.advanced_coverage.count(LiveAdvancedKind.AOI_FB)} "
+                f"fault_code={self.advanced_coverage.count(LiveAdvancedKind.FAULT_CODE)} "
+                f"sequencer={self.advanced_coverage.count(LiveAdvancedKind.SEQUENCER)} "
+                f"motion={self.advanced_coverage.count(LiveAdvancedKind.MOTION)} "
+                f"pid={self.advanced_coverage.count(LiveAdvancedKind.PID)}"
             ),
             (
                 f"Historical timeline: ENABLED retention={self.history_seconds:g}s "
@@ -245,6 +273,40 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             target_output=model.name,
         )
 
+    async def _advanced_reply(self, text: str) -> LiveAssistantReply | None:
+        target = resolve_advanced_target(self.advanced_coverage, text)
+        if not target.found:
+            return None
+        required_ids = required_advanced_tag_ids(self.context, target)
+        observations = {}
+        if required_ids and self.reconciliation is not None:
+            try:
+                reconciled = await build_reconciled_live_agent_evidence(
+                    self.manager,
+                    self.reconciliation,
+                    required_tag_ids=required_ids,
+                    require_all=False,
+                )
+                observations = advanced_observation_map(reconciled)
+            except LiveConfigurationError:
+                observations = {}
+        history = self.history_collector.store if self.history_collector is not None else None
+        diagnosis = diagnose_advanced_target(
+            self.context,
+            self.advanced_coverage,
+            target,
+            observations,
+            history=history,
+        )
+        if diagnosis is None:
+            return None
+        return LiveAssistantReply(
+            question=text,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text=diagnosis.render_text(),
+            target_output=target.name,
+        )
+
     async def answer(self, question: str) -> LiveAssistantReply:
         text = str(question or "").strip()
         if not text:
@@ -273,6 +335,10 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         stateful = await self._stateful_reply(text)
         if stateful is not None:
             return stateful
+
+        advanced = await self._advanced_reply(text)
+        if advanced is not None:
+            return advanced
 
         target = resolve_question_target(self.context, text)
         output = target.output_tag
