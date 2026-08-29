@@ -47,13 +47,7 @@ from .stateful_context import build_live_stateful_coverage, diagnose_live_statef
 
 
 class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
-    """Onsite assistant with bounded deterministic upstream and historical tracing.
-
-    DevAgent PLC remains the read-only engineering authority. This class owns onsite
-    state only: exact tag reconciliation, trusted live evidence, bounded recursive
-    blocker tracing, stateful/sequence context, advanced commissioning semantics,
-    and an optional bounded timeline.
-    """
+    """Onsite assistant with bounded deterministic upstream and historical tracing."""
 
     def __init__(
         self,
@@ -100,7 +94,6 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         self.advanced_coverage = build_live_advanced_coverage(self.loaded.project, self.context)
 
     def _preferred_history_tag_ids(self) -> tuple[str, ...]:
-        """Rank diagnostic signals ahead of unrelated mapped tags in bounded history."""
         result: list[str] = []
 
         def add_reference(reference: str) -> None:
@@ -229,10 +222,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
-        window = min(
-            requested_history_seconds(text),
-            self.history_seconds,
-        )
+        window = min(requested_history_seconds(text), self.history_seconds)
         diagnosis = self.history_collector.store.diagnose_recent_transition(
             self.context,
             output,
@@ -275,6 +265,16 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         target = resolve_advanced_target(self.advanced_coverage, text)
         if not target.found:
             return None
+        if is_historical_question(text):
+            return LiveAssistantReply(
+                question=text,
+                kind=LiveAssistantReplyKind.LIMITATION,
+                text=(
+                    "The advanced semantic target was identified, but a time-targeted historical conclusion for this model is not proven by the current bounded engine. "
+                    "DevAgent will not substitute present OPC UA state for the requested past event. Use current-state diagnosis or an explicit Boolean output timeline with captured trusted transitions."
+                ),
+                target_output=target.name,
+            )
         required_ids = required_advanced_tag_ids(self.context, target)
         observations = {}
         if required_ids and self.reconciliation is not None:
@@ -373,11 +373,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             observations = self._mapping_only_observations()
 
         diagnosis = diagnose_output(self.context, output, observations)
-        answer = answer_commissioning_question(
-            text,
-            diagnosis,
-            provider=self.provider,
-        )
+        answer = answer_commissioning_question(text, diagnosis, provider=self.provider)
         recursive = trace_recursive_diagnosis(
             self.context,
             diagnosis,
@@ -424,10 +420,7 @@ def create_recursive_live_commissioning_assistant(
     history_poll_seconds: float = 1.0,
     history_max_tags: int = 64,
 ) -> RecursiveLiveCommissioningAssistant:
-    loaded = load_live_engineering_context(
-        Path(project_path),
-        project_loader=project_loader,
-    )
+    loaded = load_live_engineering_context(Path(project_path), project_loader=project_loader)
     return RecursiveLiveCommissioningAssistant(
         loaded,
         connection,
