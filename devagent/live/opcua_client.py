@@ -34,6 +34,25 @@ def _status_name(status: Any) -> str:
     return str(status)
 
 
+_TRANSIENT_RECONNECT_STATUS_NAMES = frozenset(
+    {
+        "BadCommunicationError",
+        "BadConnectionClosed",
+        "BadNoCommunication",
+        "BadSecureChannelClosed",
+        "BadServerHalted",
+        "BadServerNotConnected",
+        "BadSessionClosed",
+        "BadShutdown",
+        "BadTimeout",
+    }
+)
+
+
+def _is_transient_reconnect_status(status: Any) -> bool:
+    return _status_name(status) in _TRANSIENT_RECONNECT_STATUS_NAMES
+
+
 def _quality_from_status(status: Any) -> Quality:
     if status is None:
         return Quality.BAD
@@ -399,11 +418,14 @@ class ReadOnlyOpcUaClient:
                 if isinstance(event, StatusChangeEvent):
                     status = event.notification.Status
                     if status is not None and status.is_bad():
-                        reconnecting = self.auto_reconnect and self.connection_state in {
-                            "CONNECTING",
-                            "DISCONNECTED",
-                            "RECONNECTING",
-                        }
+                        reconnecting = self.auto_reconnect and (
+                            _is_transient_reconnect_status(status)
+                            or self.connection_state in {
+                                "CONNECTING",
+                                "DISCONNECTED",
+                                "RECONNECTING",
+                            }
+                        )
                         if not reconnecting:
                             raise LiveConnectionError(
                                 f"Subscription status changed to {_status_name(status)}"
