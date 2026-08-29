@@ -1,5 +1,25 @@
 from __future__ import annotations
 
+from .advanced_assistant import (
+    LiveAdvancedDiagnosis,
+    LiveAdvancedDiagnosisStatus,
+    LiveAdvancedTarget,
+    advanced_observation_map,
+    diagnose_advanced_model,
+    diagnose_advanced_target,
+    diagnose_numeric_comparison,
+    required_advanced_tag_ids,
+    resolve_advanced_target,
+)
+from .advanced_semantics import (
+    LiveAdvancedCoverage,
+    LiveAdvancedKind,
+    LiveAdvancedModel,
+    LiveNumericComparison,
+    LiveNumericOperand,
+    build_live_advanced_coverage,
+    extract_numeric_comparisons,
+)
 from .agent_integration import (
     LiveAgentEvidenceItem,
     LiveAgentEvidencePack,
@@ -192,6 +212,22 @@ READ_ONLY_MODE = "READ_ONLY"
 
 __all__ = [
     "READ_ONLY_MODE",
+    "LiveAdvancedDiagnosis",
+    "LiveAdvancedDiagnosisStatus",
+    "LiveAdvancedTarget",
+    "LiveAdvancedCoverage",
+    "LiveAdvancedKind",
+    "LiveAdvancedModel",
+    "LiveNumericComparison",
+    "LiveNumericOperand",
+    "advanced_observation_map",
+    "diagnose_advanced_model",
+    "diagnose_advanced_target",
+    "diagnose_numeric_comparison",
+    "required_advanced_tag_ids",
+    "resolve_advanced_target",
+    "build_live_advanced_coverage",
+    "extract_numeric_comparisons",
     "LiveSecurityConfig",
     "ManagedPlcStatus",
     "MultiPlcConnectionManager",
