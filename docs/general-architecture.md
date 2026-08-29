@@ -1,68 +1,99 @@
 # DevAgent — General Architecture
 
-DevAgent has one evidence-driven core with **three intentionally different product workflows**:
+DevAgent has one evidence-driven core with **three separate product branches**. These branches are siblings in the product architecture; none is a sub-branch of another:
 
 1. **Software Engineering** — repository understanding, bounded code changes, verification, review, and safe branch publication.
 2. **DevAgent PLC** — offline/pre-site PLC engineering review and FAT authority.
-3. **DevAgent Live** — onsite, read-only commissioning assistance that consumes engineering context and trusted OPC UA runtime evidence.
+3. **DevAgent Live** — onsite, read-only commissioning assistance using trusted runtime evidence.
 
-The three workflows share evidence, trust, reporting, provider, and fail-closed principles, but they do **not** perform the same work and they do not share control authority.
+The branches share evidence, provider, trust, reporting, and fail-closed principles, but they have different inputs, execution paths, authority, and release responsibilities.
 
-## General architecture
+## General architecture — independent product branches
 
 ```text
                                       DevAgent Core
                                            │
-                 ┌─────────────────────────┼─────────────────────────┐
-                 │                         │                         │
-        Software Engineering         DevAgent PLC              DevAgent Live
-          Repository workflow       Offline / pre-site        Onsite commissioning
-                 │                  engineering authority      READ ONLY consumer
-                 │                         │                         │
-        Local / GitHub Repo      PLC engineering export             │
-                 │                         │                         │
-        Understand / Plan       ┌──────────┼──────────┐              │
-                 │              │          │          │              │
-          Modify Code        Siemens    Rockwell   Schneider         │
-                 │           TIA        Studio     Control           │
-        Build / Test /        exports    5000/L5X   Expert/XEF       │
-            Review              │          │          │              │
-                 │              └──────────┼──────────┘              │
-        Engineering Report               │                          │
-                 │               Canonical PLC model ───────────────┤
-        Commit / Push Branch             │                          │
-                 │               Analyze / Verify                   │
-      Developer / Repo Integration       │                          │
-                                  Requirements / Risks               │
-                                  Regression / Evidence              │
-                                  FAT Plan / FAT Report              │
-                                  Release Readiness                  │
-                                                                     │
-                                                        OPC UA endpoint(s)
-                                                                     │
-                                                     Connect / Browse / Map
-                                                                     │
-                                                   Trust / Freshness Gate
-                                                                     │
-                                              Engineering ↔ Runtime Join
-                                                                     │
-                                          Deterministic Commissioning Diagnosis
-                                                                     │
-                                   Recursive / Stateful / Historical / Advanced
-                                                                     │
-                                                Optional AI Explanation / Q&A
+              ┌────────────────────────────┼────────────────────────────┐
+              │                            │                            │
+              ▼                            ▼                            ▼
+     SOFTWARE ENGINEERING            DEVAGENT PLC                 DEVAGENT LIVE
+      Product Branch #1             Product Branch #2            Product Branch #3
+      Repository workflow           Offline / pre-site           Onsite commissioning
+                                    engineering + FAT            READ ONLY
+              │                            │                            │
+              │                            │                            │
+      Local / GitHub Repo          PLC engineering export        Engineering context input
+              │                            │                     + OPC UA endpoint(s)
+              ▼                            ▼                            │
+     Understand / Plan          Vendor-dispatched import                │
+              │                    │        │        │                  │
+              ▼                 Siemens  Rockwell  Schneider             │
+        Modify Code                  │        │        │                  │
+              │                      └────────┼────────┘                  │
+              ▼                               ▼                           │
+     Build / Test / Review          Canonical PLC Engineering Model       │
+              │                               │                           │
+              ▼                               ▼                           │
+      Engineering Report          Analyze / Verify / Requirements        │
+              │                    Risks / Regression / FAT               │
+              ▼                               │                           │
+    Commit / Push Safe Branch                 ▼                           │
+              │                    FAT Report / Release Readiness          │
+              ▼                                                           │
+   Developer / Repo Integration                                        ▼
+                                                             Connect / Browse / Reconcile
+                                                                       │
+                                                                       ▼
+                                                               Trust / Freshness Gate
+                                                                       │
+                                                                       ▼
+                                                          Engineering ↔ Runtime Join
+                                                                       │
+                                                                       ▼
+                                                       Deterministic Commissioning Diagnosis
+                                                                       │
+                                                                       ▼
+                                                Recursive / Stateful / Historical / Advanced
+                                                                       │
+                                                                       ▼
+                                                         Optional AI Explanation / Q&A
 ```
 
-The important boundary is:
+The diagram above is intentionally a **product hierarchy**, not a data-dependency diagram. DevAgent Live is a first-class branch directly under DevAgent Core, alongside Software Engineering and DevAgent PLC.
+
+## Read-only integration contract between DevAgent PLC and DevAgent Live
+
+DevAgent PLC and DevAgent Live can exchange engineering context through a bounded read-only contract, but this integration does **not** make Live a child of PLC.
 
 ```text
-DEVAGENT PLC  = engineering authority
-DEVAGENT LIVE = commissioning consumer
+DEVAGENT PLC
+    │
+    │ produces / exposes stable canonical engineering context
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│            READ-ONLY ENGINEERING CONTEXT CONTRACT           │
+│                                                             │
+│ tags / identities / logic / dependencies / source location │
+│ stateful facts / semantic coverage / provenance / limits    │
+└─────────────────────────────────────────────────────────────┘
+    │
+    │ consumed read-only
+    ▼
+DEVAGENT LIVE
 ```
 
-DevAgent Live may reuse the stable PLC import/canonical engineering model **read-only**. Live must not modify Siemens, Rockwell, Schneider, FAT, regression, theorem, or release-readiness behavior simply to add an onsite feature. Once engineering information crosses the Live adapter boundary, onsite diagnosis is owned by `devagent/live/**`.
+The authority boundary is:
 
-## 1. Software Engineering
+```text
+DEVAGENT PLC  = offline engineering / FAT / release-readiness authority
+DEVAGENT LIVE = onsite read-only commissioning authority
+```
+
+DevAgent Live must not modify Siemens, Rockwell, Schneider, FAT, regression, theorem, or release-readiness behavior merely to implement an onsite feature. Once engineering information crosses the read-only adapter boundary, commissioning behavior is owned by `devagent/live/**`.
+
+The same separation also means DevAgent PLC does not become responsible for OPC UA session management, live-value trust, history collection, or commissioning Q&A simply because Live consumes its engineering model.
+
+## 1. Software Engineering — Product Branch #1
 
 DevAgent works directly with a software working repository. It can understand the repository, implement a bounded code change, run repository-native tests/builds, independently review the result, produce an engineering report, and publish a verified commit to a safe branch.
 
@@ -86,7 +117,7 @@ Developer / Repository Integration
 
 If a software run starts on `main`, `master`, or `trunk`, DevAgent creates a safe working branch. Runtime DevAgent does not create or merge pull requests, rebase, force-push, or deploy.
 
-## 2. DevAgent PLC — offline engineering authority
+## 2. DevAgent PLC — Product Branch #2: offline engineering authority
 
 DevAgent PLC works from exported PLC engineering artifacts rather than editing or controlling the live PLC. Siemens, Rockwell, and Schneider each have a vendor-specific import path, but all feed the canonical PLC engineering/review workflow.
 
@@ -122,76 +153,67 @@ Engineering Report + Release Readiness
 
 DevAgent PLC is a **pre-site/offline engineering workflow**. It does not claim simulator, HIL, field wiring, process physics, or real-controller execution unless corresponding runtime evidence is supplied.
 
-## 3. DevAgent Live — onsite commissioning branch
+## 3. DevAgent Live — Product Branch #3: onsite commissioning
 
-DevAgent Live is a separate onsite tool for commissioning engineers. Its purpose is not to regenerate the offline FAT/report workflow. Its job is to help an engineer understand the system, inspect trusted live state, diagnose why a machine condition is blocked or abnormal, trace modeled dependencies, and identify the next evidence-backed check.
+DevAgent Live is an independent onsite product branch for commissioning engineers. Its purpose is not to regenerate the offline FAT/report workflow. Its job is to help an engineer understand the running system, inspect trusted live state, diagnose why a machine condition is blocked or abnormal, trace modeled dependencies, inspect bounded history, and identify the next evidence-backed check.
 
-Full commissioning mode uses both:
+Full commissioning mode uses two inputs owned by the Live workflow:
 
 ```text
-PLC engineering project/export
+READ-ONLY ENGINEERING CONTEXT
             +
-      OPC UA endpoint
+      OPC UA ENDPOINT(S)
+            ↓
+       DEVAGENT LIVE
 ```
 
-Why both are needed:
+The engineering context can be created from the same supported PLC export used by DevAgent PLC, but Live consumes it through its own adapter boundary. This keeps the product architecture separate while avoiding duplicated Siemens/Rockwell/Schneider parsing logic.
 
-- the engineering export provides logic, tags, dependencies, source provenance, interlocks/permissives, states, calls, and other modeled engineering context;
+Why both inputs matter:
+
+- engineering context provides logic, tags, dependencies, source provenance, interlocks/permissives, states, calls, and modeled semantics;
 - OPC UA provides live values, quality, timestamps, namespace identity, and runtime observations;
-- endpoint-only mode can observe what is exposed, but it usually cannot prove hidden PLC source logic or why an output is commanded.
+- endpoint-only operation can observe exposed state, but usually cannot prove hidden PLC source logic or why an output is commanded.
 
-### Live data flow
+### DevAgent Live internal architecture
 
 ```text
-PLC Engineering Export
-        ↓
-Existing stable PLC parser / canonical model
-        ↓
-LiveEngineeringContext
-        │
-        ├── tags / identities
-        ├── output logic / dependencies
-        ├── source locations
-        ├── stateful / sequence facts when modeled
-        ├── numeric / analog comparison context
-        ├── AOI / FB context
-        ├── fault / motion / PID / UDT / array context
-        └── provenance / limitations
-        │
-        ├──────────────────────────────────────────┐
-        │                                          │
-        ▼                                          ▼
-Engineering model                           OPC UA endpoint(s)
-                                                   │
-                                      connect / browse / read
-                                                   │
-                                      exact reconciliation
-                                                   │
-                                      trust / freshness gate
-                                                   │
-                         GOOD + CURRENT + non-stale + non-replayed only
-                                                   │
-        └──────────────────────┬────────────────────┘
-                               ▼
-                    Engineering ↔ Runtime Join
-                               ▼
-                 Deterministic Commissioning Engine
-                               │
-                 ┌─────────────┼─────────────┐
-                 │             │             │
-          Direct blocker   Recursive trace   Stateful/history
-                 │             │             │
-                 └─────────────┼─────────────┘
-                               │
-                 Advanced semantic diagnosis
-                               │
-       numeric / handshake / AOI-FB / fault / sequence /
-             motion / PID / UDT-array context
-                               │
-                               ▼
-                    Optional bounded AI explanation
-                               ▼
-                  Engineer answer + evidence + next check
+                    DEVAGENT LIVE
+                         │
+          ┌──────────────┴──────────────┐
+          │                             │
+          ▼                             ▼
+Read-only engineering context      OPC UA endpoint(s)
+          │                             │
+          │                    connect / browse / read
+          │                             │
+          │                    exact reconciliation
+          │                             │
+          │                    trust / freshness gate
+          │                             │
+          └──────────────┬──────────────┘
+                         ▼
+              Engineering ↔ Runtime Join
+                         ▼
+            Deterministic Commissioning Engine
+                         │
+       ┌─────────────────┼─────────────────┐
+       │                 │                 │
+       ▼                 ▼                 ▼
+ Direct blocker     Recursive trace   Stateful / history
+       │                 │                 │
+       └─────────────────┼─────────────────┘
+                         ▼
+              Advanced semantic diagnosis
+                         │
+   numeric / handshake / AOI-FB / fault / sequence /
+        motion / PID / UDT-array context
+                         │
+                         ▼
+              Optional bounded AI explanation
+                         │
+                         ▼
+            Engineer answer + evidence + next check
 ```
 
 ### Live evidence rules
@@ -215,12 +237,12 @@ start / stop / PLC control method calls
 
 Natural-language requests for those actions are refused before diagnosis/AI execution.
 
-## CLI workflow map
+## Product branch CLI map
 
 ```text
-devagent                         → Software Engineering
-devagent plc ...                 → Offline PLC engineering / FAT authority
-devagent live ...                → Read-only onsite commissioning
+devagent                         → Software Engineering branch
+devagent plc ...                 → DevAgent PLC branch
+devagent live ...                → DevAgent Live branch
 ```
 
 Typical Live start:
@@ -242,6 +264,8 @@ Why is that permissive false?
 Why is SequenceState not advancing?
 Why is Timer1 not done?
 Why did Conveyor7_Run stop 30 seconds ago?
+What is the current fault code?
+Is Speed above the configured limit?
 What should I check next?
 ```
 
@@ -250,9 +274,14 @@ Commercial qualification commands are documented in [`docs/live/commercial-v1-ru
 ## Architecture summary
 
 ```text
-Software:   Working Repo → Change → Test → Review → Report → Commit/Push
-PLC:        PLC Export   → Analyze → Verify → FAT / Evidence → Release Readiness
-Live:       PLC Context + OPC UA → Trust → Map → Diagnose → Explain / Next Check
+PRODUCT BRANCH #1 — SOFTWARE
+Working Repo → Change → Test → Review → Report → Commit/Push
+
+PRODUCT BRANCH #2 — DEVAGENT PLC
+PLC Export → Analyze → Verify → FAT / Evidence → Release Readiness
+
+PRODUCT BRANCH #3 — DEVAGENT LIVE
+Engineering Context + OPC UA → Trust → Map → Diagnose → Explain / Next Check
 ```
 
-The three branches share the DevAgent evidence-driven core, but their execution, authority, safety boundaries, and release responsibilities intentionally remain separate.
+The three product branches are siblings under DevAgent Core. They may share stable contracts and evidence primitives, but their execution paths, authority, safety boundaries, and qualification responsibilities intentionally remain separate.
