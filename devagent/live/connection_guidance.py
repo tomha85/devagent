@@ -82,16 +82,17 @@ class OpcUaConnectionGuidance:
 def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
     mode_raw = (endpoint.security_mode or "").strip()
     mode_normalized = _normalized(mode_raw)
-    mode_name = "None" if mode_normalized in {"", "none"} else mode_raw
+    mode_is_none = mode_normalized in {"", "none"}
+    mode_name = "None" if mode_is_none else mode_raw
     policy_name = security_policy_name(endpoint.security_policy_uri)
     policy_normalized = _normalized(policy_name)
+    policy_is_none = policy_normalized in {"", "none"}
     tokens = _token_set(endpoint)
 
     anonymous = "anonymous" in tokens
     username = "username" in tokens or "usernametoken" in tokens
 
-    no_security = mode_normalized in {"", "none"} or policy_normalized in {"", "none"}
-    if no_security:
+    if mode_is_none and policy_is_none:
         supported = anonymous
         reason = (
             "Anonymous / NoSecurity is directly usable without certificates."
@@ -108,6 +109,19 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             policy_name="None",
             mode_name="None",
             reason=reason,
+        )
+
+    if mode_is_none != policy_is_none:
+        return EndpointConnectionAssessment(
+            endpoint=endpoint,
+            supported=False,
+            secure_channel=not mode_is_none,
+            certificate_required=not mode_is_none,
+            anonymous_available=anonymous,
+            username_password_available=False,
+            policy_name=policy_name,
+            mode_name=mode_name or "-",
+            reason="Endpoint advertises inconsistent security mode/policy metadata; refusing to infer a connection profile.",
         )
 
     policy_supported = policy_name in SUPPORTED_SECURITY_POLICIES
