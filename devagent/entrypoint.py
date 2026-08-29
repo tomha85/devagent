@@ -12,6 +12,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from devagent.live.assist_cli import main as live_assist_main
 
         return live_assist_main(arguments[2:])
+    if len(arguments) >= 2 and arguments[0] == "live" and arguments[1] == "sim":
+        from devagent.live.sim_cli import main as live_sim_main
+
+        return live_sim_main(arguments[2:])
     if arguments and arguments[0] == "live":
         from devagent.live.cli import main as live_main
 

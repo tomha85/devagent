@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="WarehouseCommissioningDemo" TargetType="Controller">
+  <Controller Use="Target" Name="WarehouseCommissioningDemo" ProcessorType="1756-L85E" MajorRev="36" MinorRev="11">
+    <DataTypes />
+    <AddOnInstructionDefinitions />
+    <Tags>
+      <Tag Name="AutoMode" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="StartRequest" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="SafetyOK" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="SafetyTrip" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="DriveReady" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="DriveFault" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="DownstreamReady" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="RunCmd" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="Speed" TagType="Base" DataType="REAL" ExternalAccess="Read Only" />
+      <Tag Name="FaultCode" TagType="Base" DataType="DINT" ExternalAccess="Read Only" />
+      <Tag Name="ReadyToReceive" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="HomeSensor" TagType="Base" DataType="BOOL" ExternalAccess="Read Only" />
+      <Tag Name="ProductionCount" TagType="Base" DataType="DINT" ExternalAccess="Read Only" />
+      <Tag Name="MachineState" TagType="Base" DataType="STRING" ExternalAccess="Read Only" />
+    </Tags>
+    <Programs>
+      <Program Name="ConveyorProgram" MainRoutineName="MainRoutine">
+        <Routines>
+          <Routine Name="MainRoutine" Type="RLL">
+            <RLLContent>
+              <Rung Number="0" Type="N">
+                <Comment><![CDATA[Conveyor run command requires automatic mode, operator request, healthy safety and drive states, and downstream readiness.]]></Comment>
+                <Text><![CDATA[XIC(AutoMode)XIC(StartRequest)XIC(SafetyOK)XIO(SafetyTrip)XIC(DriveReady)XIO(DriveFault)XIC(DownstreamReady)OTE(RunCmd);]]></Text>
+              </Rung>
+            </RLLContent>
+          </Routine>
+        </Routines>
+      </Program>
+    </Programs>
+    <Tasks>
+      <Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+        <ScheduledPrograms>
+          <ScheduledProgram Name="ConveyorProgram" />
+        </ScheduledPrograms>
+      </Task>
+    </Tasks>
+  </Controller>
+</RSLogix5000Content>
