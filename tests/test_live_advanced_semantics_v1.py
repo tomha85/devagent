@@ -8,16 +8,9 @@ from devagent.live.advanced_assistant import (
     diagnose_numeric_comparison,
     resolve_advanced_target,
 )
-from devagent.live.advanced_semantics import (
-    LiveAdvancedKind,
-    build_live_advanced_coverage,
-)
+from devagent.live.advanced_semantics import LiveAdvancedKind, build_live_advanced_coverage
 from devagent.live.diagnosis import LiveObservedTag
-from devagent.live.engineering_context import (
-    LiveEngineeringContext,
-    LiveEngineeringTag,
-    LiveLogicStatement,
-)
+from devagent.live.engineering_context import LiveEngineeringContext, LiveEngineeringTag, LiveLogicStatement
 
 
 def _tag(tag_id: str, name: str, dtype: str = "BOOL", description: str | None = None):
@@ -119,7 +112,7 @@ def test_numeric_assignment_comparison_is_extracted_and_evaluated():
     assert "125.0" in diagnosis.summary
 
 
-def test_numeric_comparison_rejects_untrusted_operand_and_detects_result_conflict():
+def test_numeric_comparison_rejects_untrusted_operand_and_fails_closed_on_result_mismatch():
     stmt = _statement("HighPressure := Pressure >= PressureLimit;")
     context = _context(
         tags=(
@@ -141,7 +134,7 @@ def test_numeric_comparison_rejects_untrusted_operand_and_detects_result_conflic
     )
     assert untrusted.status is LiveAdvancedDiagnosisStatus.INDETERMINATE
 
-    conflict = diagnose_numeric_comparison(
+    mismatch = diagnose_numeric_comparison(
         item,
         {
             "pressure": _obs("P", "Pressure", 90.0),
@@ -149,7 +142,8 @@ def test_numeric_comparison_rejects_untrusted_operand_and_detects_result_conflic
             "highpressure": _obs("H", "HighPressure", False),
         },
     )
-    assert conflict.status is LiveAdvancedDiagnosisStatus.LOGIC_CONFLICT
+    assert mismatch.status is LiveAdvancedDiagnosisStatus.INDETERMINATE
+    assert any("not a proven atomic PLC scan" in value for value in mismatch.limitations)
 
 
 def test_name_derived_handshake_is_inferred_and_waiting_response_is_not_overclaimed():
@@ -281,6 +275,6 @@ def test_question_resolver_prefers_numeric_result_identity():
         statements=(stmt,),
     )
     coverage = build_live_advanced_coverage(_project(), context)
-    target = resolve_advanced_target(coverage, "Why is Overspeed active?")
+    target = resolve_advanced_target(coverage, "Why is Overspeed active?", context=context)
     assert target.numeric is not None
     assert target.numeric.result_tag == "Overspeed"
