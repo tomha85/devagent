@@ -53,6 +53,16 @@ def _build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--count", type=int, default=5)
     watch.add_argument("--timeout", type=float, default=10.0)
 
+    plan = subparsers.add_parser(
+        "plan",
+        help="Generate a read-only commissioning config from FAT-derived engineering tag references.",
+    )
+    plan.add_argument("project", type=Path, help="Rockwell/Siemens/Schneider engineering export.")
+    plan.add_argument("--plc-id", required=True, help="Stable PLC identifier for the generated commissioning config.")
+    plan.add_argument("--plc-name", help="Optional human-readable PLC name.")
+    plan.add_argument("--endpoint", required=True, help="Read-only OPC UA opc.tcp:// endpoint.")
+    plan.add_argument("--output", required=True, type=Path, help="New devagent-live-commission-v1 JSON file to create.")
+
     commission = subparsers.add_parser(
         "commission",
         help=(
@@ -227,6 +237,38 @@ async def _run_watch(args: argparse.Namespace) -> int:
         await client.disconnect()
 
 
+async def _run_plan(args: argparse.Namespace) -> int:
+    from .plan import analyze_and_build_live_commission_plan, write_live_commission_plan
+
+    plan = analyze_and_build_live_commission_plan(
+        args.project,
+        plc_id=args.plc_id,
+        plc_name=args.plc_name,
+        endpoint=args.endpoint,
+    )
+    print("DEVAGENT LIVE PLAN")
+    print(f"Project: {plan.engineering_project_path}")
+    print(f"Vendor: {plan.vendor}")
+    print(f"PLC: {plan.plc_id} ({plan.plc_name})")
+    print(f"Endpoint: {plan.endpoint}")
+    print("Mode: READ ONLY")
+    print(f"FAT runtime references: {len(plan.references)}")
+    print(f"Resolved required tags: {len(plan.required_tag_ids)}")
+    print(f"Unresolved references: {len(plan.unresolved)}")
+    if not plan.complete:
+        for item in plan.unresolved:
+            print(f"- {item.reference}: {item.status.value}: {item.reason}")
+        print("Plan: INCOMPLETE — commissioning config was not written.")
+        return 2
+
+    config_path, report_path = write_live_commission_plan(args.output, plan)
+    print("Plan: COMPLETE")
+    print(f"Commission config: {config_path}")
+    print(f"Plan provenance: {report_path}")
+    print(f"Next: devagent live commission {config_path} --validate-only")
+    return 0
+
+
 async def _run_commission(args: argparse.Namespace) -> int:
     # Lazy import keeps ordinary probe/browse/read/watch/sim startup independent
     # from the vendor PLC engineering stack used to analyze commission exports.
@@ -365,6 +407,8 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_snapshot(args)
     if args.command == "watch":
         return await _run_watch(args)
+    if args.command == "plan":
+        return await _run_plan(args)
     if args.command == "commission":
         return await _run_commission(args)
     if args.command == "sim":
@@ -373,7 +417,7 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_shell(args.endpoint, args)
     raise ValueError(
         "Use --endpoint for an interactive session, or choose "
-        "probe/browse/read/snapshot/watch/commission/sim."
+        "probe/browse/read/snapshot/watch/plan/commission/sim."
     )
 
 
