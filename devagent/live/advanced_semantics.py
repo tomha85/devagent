@@ -205,8 +205,6 @@ def _statement_numeric(statement: LiveLogicStatement) -> tuple[LiveNumericCompar
         )
         return (item,) if item is not None else ()
 
-    # Compound/conditional expressions are useful context, but are not equivalent to
-    # any result tag unless the complete RHS is the supported comparison above.
     result: list[LiveNumericComparison] = []
     for index, match in enumerate(_BARE_COMPARE_RE.finditer(text), start=1):
         item = _comparison(
@@ -272,9 +270,9 @@ def _classify_instruction(name: str) -> LiveAdvancedKind | None:
         return LiveAdvancedKind.ONE_SHOT
     if upper in _LATCH_NAMES:
         return LiveAdvancedKind.LATCH
-    if upper in _SEQUENCER_NAMES or upper.startswith("SQO") or upper.startswith("SQC"):
+    if upper in _SEQUENCER_NAMES:
         return LiveAdvancedKind.SEQUENCER
-    if upper in _PID_NAMES or upper.startswith("PID_"):
+    if upper in _PID_NAMES:
         return LiveAdvancedKind.PID
     if upper in _ROCKWELL_MOTION_NAMES or upper.startswith("MC_"):
         return LiveAdvancedKind.MOTION
@@ -425,14 +423,15 @@ def _handshake_models(context: LiveEngineeringContext) -> tuple[LiveAdvancedMode
     grouped: dict[str, dict[str, str]] = {}
     display_stem: dict[str, str] = {}
     for tag in context.tags:
-        resolved = _handshake_role(tag.name)
+        reference = tag.scoped_name
+        resolved = _handshake_role(reference)
         if resolved is None:
             continue
         stem, role = resolved
         key = normalize_engineering_identifier(stem)
         if not key:
             continue
-        grouped.setdefault(key, {})[role] = tag.name
+        grouped.setdefault(key, {})[role] = reference
         display_stem.setdefault(key, stem)
     result: list[LiveAdvancedModel] = []
     for key, roles in grouped.items():
@@ -457,16 +456,17 @@ def _handshake_models(context: LiveEngineeringContext) -> tuple[LiveAdvancedMode
 def _fault_code_models(context: LiveEngineeringContext) -> tuple[LiveAdvancedModel, ...]:
     result: list[LiveAdvancedModel] = []
     for tag in context.tags:
-        key = normalize_engineering_identifier(tag.name)
+        reference = tag.scoped_name
+        key = normalize_engineering_identifier(reference)
         if not any(key.endswith(suffix) for suffix in _FAULT_CODE_SUFFIXES):
             continue
         result.append(
             LiveAdvancedModel(
                 id=f"ADV:FAULT:{tag.id}",
                 kind=LiveAdvancedKind.FAULT_CODE,
-                name=tag.name,
+                name=reference,
                 instruction="FAULT_CODE",
-                references=(tag.name,),
+                references=(reference,),
                 source_locators=(),
                 semantic_state="RUNTIME_REQUIRED",
                 metadata={"data_type": tag.data_type, "description": tag.description},
@@ -483,6 +483,7 @@ def _udt_array_models(project: Any, context: LiveEngineeringContext) -> tuple[Li
         if str(getattr(item, "name", "") or "").strip()
     }
     for tag in context.tags:
+        reference = tag.scoped_name
         dtype = str(tag.data_type or "").strip()
         dtype_key = dtype.casefold()
         if dtype_key in data_types:
@@ -492,9 +493,9 @@ def _udt_array_models(project: Any, context: LiveEngineeringContext) -> tuple[Li
                 LiveAdvancedModel(
                     id=f"ADV:UDT:{tag.id}",
                     kind=LiveAdvancedKind.UDT,
-                    name=tag.name,
+                    name=reference,
                     instruction="STRUCTURED_TYPE",
-                    references=(tag.name,),
+                    references=(reference,),
                     source_locators=(),
                     semantic_state="CONTEXT_ONLY",
                     metadata={"data_type": dtype, "members": members},
@@ -505,9 +506,9 @@ def _udt_array_models(project: Any, context: LiveEngineeringContext) -> tuple[Li
                 LiveAdvancedModel(
                     id=f"ADV:ARRAY:{tag.id}",
                     kind=LiveAdvancedKind.ARRAY,
-                    name=tag.name,
+                    name=reference,
                     instruction="ARRAY",
-                    references=(tag.name,),
+                    references=(reference,),
                     source_locators=(),
                     semantic_state="CONTEXT_ONLY",
                     metadata={"data_type": dtype},
