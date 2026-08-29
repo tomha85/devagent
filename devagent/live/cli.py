@@ -82,6 +82,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write sanitized commissioning summary, mapping, evidence, and manifest artifacts here. Directory must not already exist.",
     )
 
+    qualify = subparsers.add_parser(
+        "qualify",
+        help="Run the read-only Live OPC UA release qualification matrix.",
+    )
+    qualify.add_argument(
+        "--list",
+        action="store_true",
+        help="List stable qualification case IDs without executing the matrix.",
+    )
+    qualify.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write the qualification report and SHA-256 manifest to a new directory.",
+    )
+
     sim = subparsers.add_parser("sim", help="Run the local DevAgent OPC UA qualification simulator.")
     sim.add_argument(
         "--endpoint",
@@ -321,6 +336,40 @@ async def _run_commission(args: argparse.Namespace) -> int:
     return 0 if result.all_complete else 2
 
 
+async def _run_qualify(args: argparse.Namespace) -> int:
+    from .qualification import (
+        LIVE_RELEASE_QUALIFICATION_CASES,
+        LiveQualificationStatus,
+        run_live_release_qualification,
+        write_live_release_qualification_artifacts,
+    )
+
+    print("DEVAGENT LIVE RELEASE QUALIFICATION")
+    print("Mode: READ ONLY")
+    if args.list:
+        for case in LIVE_RELEASE_QUALIFICATION_CASES:
+            kind = "RUNTIME" if case.runtime_required else "DETERMINISTIC"
+            print(f"{case.case_id} [{kind}] {case.title}")
+        return 0
+
+    report = await run_live_release_qualification()
+    runtime = report.runtime_version or ("AVAILABLE" if report.runtime_available else "UNAVAILABLE")
+    print(f"asyncua: {runtime}")
+    print()
+    for case in report.cases:
+        print(f"[{case.status.value}] {case.case_id} {case.title} - {case.detail}")
+    counts = report.counts()
+    print()
+    print(
+        f"Overall: {report.status.value} "
+        f"(PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']})"
+    )
+    if args.output_dir is not None:
+        written = write_live_release_qualification_artifacts(args.output_dir, report)
+        print(f"Artifacts: {written}")
+    return 0 if report.status is LiveQualificationStatus.PASS else 2
+
+
 async def _run_sim(args: argparse.Namespace) -> int:
     simulator = OpcUaSimulator(args.endpoint, scenario=args.scenario)
     await simulator.start()
@@ -411,13 +460,15 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_plan(args)
     if args.command == "commission":
         return await _run_commission(args)
+    if args.command == "qualify":
+        return await _run_qualify(args)
     if args.command == "sim":
         return await _run_sim(args)
     if args.endpoint:
         return await _run_shell(args.endpoint, args)
     raise ValueError(
         "Use --endpoint for an interactive session, or choose "
-        "probe/browse/read/snapshot/watch/plan/commission/sim."
+        "probe/browse/read/snapshot/watch/plan/commission/qualify/sim."
     )
 
 
