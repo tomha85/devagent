@@ -20,6 +20,14 @@ from .manager import (
     PlcReadResult,
     PlcSessionState,
 )
+from .plan import (
+    LiveCommissionPlan,
+    LivePlanReference,
+    LivePlanReferenceStatus,
+    analyze_and_build_live_commission_plan,
+    build_live_commission_plan,
+    write_live_commission_plan,
+)
 from .production_integration import (
     LiveProductionArtifacts,
     LiveProductionAugmentedResult,
@@ -78,6 +86,12 @@ __all__ = [
     "build_live_agent_evidence_pack",
     "run_live_augmented_ai_review",
     "run_live_augmented_requirement_mapping",
+    "LiveCommissionPlan",
+    "LivePlanReference",
+    "LivePlanReferenceStatus",
+    "analyze_and_build_live_commission_plan",
+    "build_live_commission_plan",
+    "write_live_commission_plan",
     "LiveProductionArtifacts",
     "LiveProductionAugmentedResult",
     "LiveProductionEvidenceSummary",
