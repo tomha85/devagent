@@ -7,6 +7,7 @@ from typing import Mapping
 
 from devagent.providers import ModelProvider
 
+from .control_guard import is_plc_control_request, read_only_control_refusal
 from .diagnosis import (
     LiveCommissioningDiagnosis,
     LiveDiagnosisStatus,
@@ -216,6 +217,31 @@ class LiveCommissioningAssistant:
             for mapping in self.reconciliation.mappings
         )
 
+    def _control_refusal_reply(self, question: str) -> LiveAssistantReply:
+        text = read_only_control_refusal()
+        diagnosis = LiveCommissioningDiagnosis(
+            target_output="",
+            status=LiveDiagnosisStatus.INDETERMINATE,
+            expected_output=None,
+            observed_output=None,
+            rule_ids=(),
+            source_locators=(),
+            paths=(),
+            blockers=(),
+            evidence_ids=(),
+            limitations=(
+                "Natural-language request expressed PLC/machine control intent outside DevAgent Live read-only scope.",
+            ),
+            summary=text,
+            next_checks=(),
+        )
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.LIMITATION,
+            text=text,
+            diagnosis=diagnosis,
+        )
+
     def _target_limitation_reply(
         self,
         question: str,
@@ -268,6 +294,8 @@ class LiveCommissioningAssistant:
                 candidates=(),
                 detail="Question is empty.",
             )
+        if is_plc_control_request(text):
+            return self._control_refusal_reply(text)
         if not self.connected or self.reconciliation is None:
             await self.start()
 
