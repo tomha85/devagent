@@ -22,73 +22,54 @@ For a normal verified software run the deterministic harness prints the complete
 
 ## General Architecture
 
-DevAgent has **three sibling product branches** directly under the same evidence-driven core:
+DevAgent has **three sibling product branches** under one evidence-driven core. Each branch owns a distinct engineering responsibility, input model, safety boundary, and qualification path.
 
-```text
-                                      DevAgent Core
-                                           │
-              ┌────────────────────────────┼────────────────────────────┐
-              │                            │                            │
-              ▼                            ▼                            ▼
-     SOFTWARE ENGINEERING            DEVAGENT PLC                 DEVAGENT LIVE
-      Product Branch #1             Product Branch #2            Product Branch #3
-      Repository workflow           Offline / pre-site           Onsite commissioning
-                                    engineering + FAT            READ ONLY
-              │                            │                            │
-      Local / GitHub Repo          PLC engineering export        Engineering context
-              │                            │                     + OPC UA endpoint(s)
-              ▼                            ▼                            │
-     Understand / Plan          Vendor-dispatched import                │
-              │                    │        │        │                  │
-              ▼                 Siemens  Rockwell  Schneider             │
-        Modify Code                  │        │        │                  │
-              │                      └────────┼────────┘                  │
-              ▼                               ▼                           │
-     Build / Test / Review          Canonical PLC Engineering Model       │
-              │                               │                           │
-              ▼                               ▼                           │
-      Engineering Report          Analyze / Verify / FAT                  │
-              │                               │                           │
-              ▼                               ▼                           │
-    Commit / Push Safe Branch      FAT Report / Release Readiness         │
-              │                                                           │
-              ▼                                                           ▼
-   Developer / Repo Integration                          Map / Trust / Observe / Diagnose
+```mermaid
+%%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 50, "rankSpacing": 55}}}%%
+flowchart TB
+    CORE["DevAgent Core<br/>Evidence-Driven Engineering Platform"]
+
+    CORE --> SW["Software Engineering<br/>Product Branch #1"]
+    CORE --> PLC["DevAgent PLC<br/>Product Branch #2"]
+    CORE --> LIVE["DevAgent Live<br/>Product Branch #3"]
+
+    SW --> SW_IN["Local / GitHub Repository"]
+    SW_IN --> SW_FLOW["Understand · Plan · Modify · Test · Review"]
+    SW_FLOW --> SW_OUT["Engineering Report · Safe Branch"]
+
+    PLC --> PLC_IN["PLC Engineering Export"]
+    PLC_IN --> PLC_VENDOR["Siemens · Rockwell · Schneider"]
+    PLC_VENDOR --> PLC_MODEL["Canonical PLC Engineering Model"]
+    PLC_MODEL --> PLC_OUT["Analyze · Verify · FAT · Release Readiness"]
+
+    LIVE --> LIVE_IN["Engineering Context + OPC UA Endpoint(s)"]
+    LIVE_IN --> LIVE_TRUST["Reconcile · Trust · Freshness · History"]
+    LIVE_TRUST --> LIVE_DIAG["Deterministic Commissioning Diagnosis"]
+    LIVE_DIAG --> LIVE_OUT["Evidence · Explanation · Next Check"]
 ```
 
-**DevAgent Live is not a child of DevAgent PLC.** The three branches are separate at the product level:
+| Product branch | Primary input | Authority |
+| --- | --- | --- |
+| **Software Engineering** | Local / GitHub repository | Understand, modify, verify, review, report, publish a safe branch |
+| **DevAgent PLC** | Exported PLC engineering artifacts | Offline engineering review, requirements, FAT, evidence, release readiness |
+| **DevAgent Live** | Read-only engineering context + OPC UA runtime | Onsite commissioning diagnosis, runtime evidence, history, Q&A — **no PLC control** |
 
-```text
-Software Engineering = repository engineering branch
-DevAgent PLC          = offline engineering / FAT / release-readiness branch
-DevAgent Live         = onsite read-only commissioning branch
+### Read-only PLC → Live integration contract
+
+DevAgent Live is **not a child of DevAgent PLC**. PLC engineering context crosses into Live through a bounded data contract; PLC theorem/FAT ownership remains in DevAgent PLC, while OPC UA sessions, runtime trust/history, diagnosis, and commissioning Q&A remain owned by DevAgent Live.
+
+```mermaid
+%%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 50, "rankSpacing": 45}}}%%
+flowchart LR
+    MODEL["Canonical PLC Engineering Model"] -. "READ-ONLY ENGINEERING CONTEXT" .-> ADAPTER["DevAgent Live Adapter"]
+    OPC["OPC UA Runtime Evidence"] --> ADAPTER
+    ADAPTER --> JOIN["Engineering ↔ Runtime Join"]
+    JOIN --> DIAG["Commissioning Diagnosis"]
 ```
 
-DevAgent PLC and DevAgent Live may share engineering information through a bounded interface, but that interface is a **data contract, not a hierarchy**:
+**Solid lines** represent normal execution/data flow. The **dotted line** represents the read-only engineering-context contract; it does not transfer FAT, release-readiness, or PLC control authority to Live.
 
-```text
-DevAgent PLC canonical engineering model
-                │
-                │  READ-ONLY ENGINEERING CONTEXT CONTRACT
-                ▼
-        DevAgent Live adapter
-                +
-        OPC UA runtime evidence
-                ↓
-     Commissioning diagnosis
-```
-
-This keeps vendor theorem/FAT ownership in DevAgent PLC while keeping OPC UA sessions, runtime trust, history, onsite diagnosis, and commissioning Q&A owned by DevAgent Live.
-
-In simple terms:
-
-```text
-Software:   Working Repo → Change → Test → Review → Report → Commit/Push
-PLC:        PLC Export   → Analyze → Verify → FAT / Evidence → Release Readiness
-Live:       Engineering Context + OPC UA → Trust → Map → Diagnose → Explain / Next Check
-```
-
-For the expanded branch boundaries, authority model, and data contracts, see [General Architecture](docs/general-architecture.md).
+For the expanded branch boundaries, ownership model, internal flows, and evidence rules, see [General Architecture](docs/general-architecture.md).
 
 ## Why DevAgent?
 
