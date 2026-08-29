@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 
+from devagent.live.cli_security import add_security_args, security_from_args
 from devagent.live.errors import LiveConfigurationError, LiveConnectionError
 from devagent.live.opcua_client import ReadOnlyOpcUaClient
 from devagent.live.security import LiveSecurityConfig, validate_opcua_endpoint
@@ -212,3 +214,50 @@ def test_read_only_surface_survives_security_change() -> None:
     client = ReadOnlyOpcUaClient("opc.tcp://127.0.0.1:4840/")
     for prohibited in ("write", "write_value", "set_value", "call_method", "force", "reset"):
         assert not hasattr(client, prohibited)
+
+
+def test_cli_reads_passwords_only_from_environment(monkeypatch, tmp_path) -> None:
+    certificate, private_key, server_certificate = _security_files(tmp_path)
+    monkeypatch.setenv("PLC_PASSWORD", "pw-secret")
+    monkeypatch.setenv("PLC_KEY_PASSWORD", "key-secret")
+    parser = argparse.ArgumentParser()
+    add_security_args(parser)
+    args = parser.parse_args(
+        [
+            "--username",
+            "operator",
+            "--password-env",
+            "PLC_PASSWORD",
+            "--security-policy",
+            "Basic256Sha256",
+            "--security-mode",
+            "SignAndEncrypt",
+            "--client-certificate",
+            certificate,
+            "--client-private-key",
+            private_key,
+            "--private-key-password-env",
+            "PLC_KEY_PASSWORD",
+            "--server-certificate",
+            server_certificate,
+        ]
+    )
+    config = security_from_args(args)
+    assert config.password == "pw-secret"
+    assert config.private_key_password == "key-secret"
+    assert "pw-secret" not in repr(config)
+
+
+def test_cli_has_no_literal_password_option() -> None:
+    parser = argparse.ArgumentParser()
+    add_security_args(parser)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--password", "do-not-allow"])
+
+
+def test_missing_secret_environment_variable_fails_closed() -> None:
+    parser = argparse.ArgumentParser()
+    add_security_args(parser)
+    args = parser.parse_args(["--username", "operator", "--password-env", "MISSING_ENV"])
+    with pytest.raises(LiveConfigurationError, match="not set"):
+        security_from_args(args)
