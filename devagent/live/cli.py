@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .cli_security import add_security_args, security_from_args
+from .connection_guidance import analyze_connection_guidance, format_connection_guidance
 from .errors import LiveError
 from .models import BrowseNode, RuntimeValue
 from .opcua_client import ReadOnlyOpcUaClient
@@ -256,17 +257,26 @@ def _print_connection_security(client: ReadOnlyOpcUaClient) -> None:
 async def _run_probe(args: argparse.Namespace) -> int:
     client = ReadOnlyOpcUaClient(args.endpoint, timeout_seconds=args.timeout, auto_reconnect=False)
     endpoints = await client.discover_endpoints()
+    guidance = analyze_connection_guidance(endpoints)
     print("DEVAGENT LIVE OPC UA PROBE")
     print(f"Endpoint: {args.endpoint}")
     print(f"Reachable: {'YES' if endpoints else 'NO'}")
     print(f"Endpoints discovered: {len(endpoints)}")
-    for index, endpoint in enumerate(endpoints, start=1):
+    for index, (endpoint, assessment) in enumerate(
+        zip(endpoints, guidance.assessments, strict=True), start=1
+    ):
         tokens = ", ".join(endpoint.user_token_types) or "-"
         print(f"\n[{index}] {endpoint.endpoint_url}")
         print(f"Server: {endpoint.server_application_name or '-'}")
         print(f"Security mode: {endpoint.security_mode or '-'}")
         print(f"Security policy: {endpoint.security_policy_uri or '-'}")
         print(f"User token types: {tokens}")
+        print(f"DevAgent profile: {'SUPPORTED' if assessment.supported else 'UNSUPPORTED'}")
+        print(f"Client certificate: {'REQUIRED' if assessment.certificate_required else 'NOT REQUIRED'}")
+        print(f"Authentication: {assessment.authentication_summary}")
+        print(f"Assessment: {assessment.reason}")
+    for line in format_connection_guidance(guidance):
+        print(line)
     return 0
 
 
