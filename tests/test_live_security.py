@@ -121,6 +121,26 @@ def test_secure_files_are_checked_and_repr_redacts_secrets(tmp_path) -> None:
     assert config.redact("bad plc-secret and key-secret") == "bad <redacted> and <redacted>"
 
 
+def test_certificate_paths_are_expanded_before_asyncua_uses_them(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    for name in ("client.der", "client.pem", "server.der"):
+        (home / name).write_text("test", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    config = LiveSecurityConfig(
+        security_policy="Basic256Sha256",
+        security_mode="SignAndEncrypt",
+        client_certificate="~/client.der",
+        client_private_key="~/client.pem",
+        server_certificate="~/server.der",
+    )
+    assert config.client_certificate == str(home / "client.der")
+    assert config.client_private_key == str(home / "client.pem")
+    assert config.server_certificate == str(home / "server.der")
+    config.validate_files()
+
+
 def test_sign_only_rejects_username_password(tmp_path) -> None:
     certificate, private_key, server_certificate = _security_files(tmp_path)
     with pytest.raises(LiveConfigurationError, match="SignAndEncrypt"):
