@@ -20,6 +20,17 @@ from .manager import (
     PlcReadResult,
     PlcSessionState,
 )
+from .production_integration import (
+    LiveProductionArtifacts,
+    LiveProductionAugmentedResult,
+    LiveProductionEvidenceSummary,
+    augment_production_result,
+    build_live_customer_evidence_artifact,
+    render_live_augmented_production_report,
+    render_live_commissioning_section,
+    summarize_live_production_evidence,
+    write_live_production_artifacts,
+)
 from .security import LiveSecurityConfig
 
 READ_ONLY_MODE = "READ_ONLY"
@@ -43,4 +54,13 @@ __all__ = [
     "build_live_agent_evidence_pack",
     "run_live_augmented_ai_review",
     "run_live_augmented_requirement_mapping",
+    "LiveProductionArtifacts",
+    "LiveProductionAugmentedResult",
+    "LiveProductionEvidenceSummary",
+    "augment_production_result",
+    "build_live_customer_evidence_artifact",
+    "render_live_augmented_production_report",
+    "render_live_commissioning_section",
+    "summarize_live_production_evidence",
+    "write_live_production_artifacts",
 ]
