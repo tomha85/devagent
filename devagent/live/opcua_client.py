@@ -105,6 +105,7 @@ class ReadOnlyOpcUaClient:
         timeout_seconds: float = 4.0,
         auto_reconnect: bool = True,
         reconnect_max_delay_seconds: float = 5.0,
+        reconnect_request_timeout_seconds: float = 30.0,
         stale_after_seconds: float = 5.0,
     ) -> None:
         if not endpoint.startswith("opc.tcp://"):
@@ -113,12 +114,70 @@ class ReadOnlyOpcUaClient:
         self.timeout_seconds = timeout_seconds
         self.auto_reconnect = auto_reconnect
         self.reconnect_max_delay_seconds = reconnect_max_delay_seconds
+        self.reconnect_request_timeout_seconds = reconnect_request_timeout_seconds
         self.stale_after_seconds = stale_after_seconds
         self._client: Any | None = None
 
     @property
+    def connection_state(self) -> str:
+        """Return the underlying asyncua connection state without exposing its enum type."""
+
+        if self._client is None:
+            return "DISCONNECTED"
+        state = getattr(self._client, "state", None)
+        value = getattr(state, "value", state)
+        if value is None:
+            return "UNKNOWN"
+        return str(value).strip().upper()
+
+    @property
     def connected(self) -> bool:
-        return self._client is not None
+        return self.connection_state == "CONNECTED"
+
+    async def wait_until_connected(self, *, timeout_seconds: float = 30.0) -> None:
+        """Wait for asyncua's reconnect supervisor to restore the session.
+
+        This method does not perform a second reconnect loop. It only observes
+        asyncua's public state-subscription API so DevAgent has one reconnect
+        authority and does not race the library's session/subscription recovery.
+        """
+
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+
+        client = self._require_connected()
+        if self.connected:
+            return
+
+        subscribe_state = getattr(client, "subscribe_state", None)
+        if not callable(subscribe_state):
+            raise LiveConnectionError("Installed asyncua does not expose reconnect state notifications")
+
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        try:
+            async with subscribe_state() as states:
+                while True:
+                    state = self.connection_state
+                    if state == "CONNECTED":
+                        return
+                    if state in {"DISCONNECTED", "DISCONNECTING"} and not self.auto_reconnect:
+                        raise LiveConnectionError(f"OPC UA session is {state.lower()}")
+
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise LiveConnectionError(
+                            f"Timed out waiting for OPC UA reconnect; state={self.connection_state}"
+                        )
+                    try:
+                        await states.next_change(timeout=remaining)
+                    except asyncio.TimeoutError as exc:
+                        raise LiveConnectionError(
+                            f"Timed out waiting for OPC UA reconnect; state={self.connection_state}"
+                        ) from exc
+        except LiveConnectionError:
+            raise
+        except Exception as exc:
+            raise LiveConnectionError(f"Unable to observe OPC UA reconnect state: {exc}") from exc
 
     async def discover_endpoints(self) -> list[EndpointSummary]:
         Client, _ua = _require_asyncua()
@@ -160,16 +219,15 @@ class ReadOnlyOpcUaClient:
         if self._client is not None:
             return
         Client, _ua = _require_asyncua()
-        client = Client(
-            url=self.endpoint,
-            timeout=self.timeout_seconds,
-            auto_reconnect=self.auto_reconnect,
-            reconnect_max_delay=self.reconnect_max_delay_seconds,
-        )
+        # asyncua 2.0 exposes reconnect controls on connect(); 2.0.1 also
+        # accepts them in the constructor. Keep construction compatible with
+        # both supported releases and configure reconnect in one place.
+        client = Client(url=self.endpoint, timeout=self.timeout_seconds)
         try:
             await client.connect(
                 auto_reconnect=self.auto_reconnect,
                 reconnect_max_delay=self.reconnect_max_delay_seconds,
+                reconnect_request_timeout=self.reconnect_request_timeout_seconds,
             )
         except Exception as exc:
             try:
@@ -341,7 +399,15 @@ class ReadOnlyOpcUaClient:
                 if isinstance(event, StatusChangeEvent):
                     status = event.notification.Status
                     if status is not None and status.is_bad():
-                        raise LiveConnectionError(f"Subscription status changed to {_status_name(status)}")
+                        reconnecting = self.auto_reconnect and self.connection_state in {
+                            "CONNECTING",
+                            "DISCONNECTED",
+                            "RECONNECTING",
+                        }
+                        if not reconnecting:
+                            raise LiveConnectionError(
+                                f"Subscription status changed to {_status_name(status)}"
+                            )
                     continue
                 if not isinstance(event, DataChangeEvent):
                     continue
