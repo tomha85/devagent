@@ -8,6 +8,7 @@ from typing import Any
 
 from .errors import LiveConfigurationError, LiveDependencyError
 from .security import SUPPORTED_SECURITY_MODES, SUPPORTED_SECURITY_POLICIES
+from .simulator_scenarios import SimulatorScenarioSpec, simulator_scenario
 
 
 def _require_asyncua() -> tuple[Any, Any]:
@@ -53,7 +54,10 @@ def _build_user_manager(expected_username: str, expected_password: str) -> Any:
 class SimulatorNodeIds:
     auto_mode: str
     start_request: str
+    safety_ok: str
+    safety_trip: str
     drive_ready: str
+    drive_fault: str
     downstream_ready: str
     run_cmd: str
     speed: str
@@ -66,7 +70,12 @@ class SimulatorNodeIds:
 
 
 class OpcUaSimulator:
-    """Deterministic OPC UA server used to qualify DevAgent Live."""
+    """Deterministic OPC UA server used to qualify DevAgent Live.
+
+    ``normal`` preserves the original dynamic transition behavior used by subscription
+    and history qualification. The other scenarios are fixed, known-ground-truth
+    commissioning states used to measure deterministic diagnosis and System Health.
+    """
 
     NAMESPACE_URI = "urn:devagent:live:simulator"
     APPLICATION_URI = "urn:devagent:live:simulator"
@@ -85,8 +94,9 @@ class OpcUaSimulator:
         security_policy: str = "Basic256Sha256",
         security_mode: str = "SignAndEncrypt",
     ) -> None:
-        if scenario not in {"normal", "blocker"}:
-            raise ValueError("scenario must be 'normal' or 'blocker'")
+        scenario_spec = simulator_scenario(scenario)
+        if update_interval_seconds <= 0:
+            raise ValueError("update_interval_seconds must be > 0")
         if (username is None) != (password is None):
             raise LiveConfigurationError(
                 "Simulator username and password must be configured together"
@@ -115,7 +125,8 @@ class OpcUaSimulator:
                 )
 
         self.endpoint = endpoint
-        self.scenario = scenario
+        self.scenario = scenario_spec.name
+        self.scenario_spec = scenario_spec
         self.update_interval_seconds = update_interval_seconds
         self.username = username
         self._password = password
@@ -134,6 +145,18 @@ class OpcUaSimulator:
     @property
     def secure(self) -> bool:
         return self.server_certificate is not None
+
+    @property
+    def scenario_description(self) -> str:
+        return self.scenario_spec.description
+
+    @property
+    def expected_system_health(self) -> str:
+        return self.scenario_spec.expected_system_health
+
+    @property
+    def expected_primary_reason(self) -> str:
+        return self.scenario_spec.expected_primary_reason
 
     async def _configure_server_security(self, server: Any, ua: Any) -> None:
         if not self.secure:
@@ -215,52 +238,94 @@ class OpcUaSimulator:
             self.nodes[key] = node
             return node
 
-        await add_variable(conveyor, "AutoMode", "Warehouse.Conveyor1.AutoMode", True, ua.VariantType.Boolean)
+        spec = self.scenario_spec
         await add_variable(
-            conveyor, "StartRequest", "Warehouse.Conveyor1.StartRequest", True, ua.VariantType.Boolean
+            conveyor, "AutoMode", "Warehouse.Conveyor1.AutoMode", spec.auto_mode, ua.VariantType.Boolean
         )
-        await add_variable(conveyor, "DriveReady", "Warehouse.Conveyor1.DriveReady", True, ua.VariantType.Boolean)
+        await add_variable(
+            conveyor,
+            "StartRequest",
+            "Warehouse.Conveyor1.StartRequest",
+            spec.start_request,
+            ua.VariantType.Boolean,
+        )
+        await add_variable(
+            conveyor, "SafetyOK", "Warehouse.Conveyor1.SafetyOK", spec.safety_ok, ua.VariantType.Boolean
+        )
+        await add_variable(
+            conveyor,
+            "SafetyTrip",
+            "Warehouse.Conveyor1.SafetyTrip",
+            spec.safety_trip,
+            ua.VariantType.Boolean,
+        )
+        await add_variable(
+            conveyor,
+            "DriveReady",
+            "Warehouse.Conveyor1.DriveReady",
+            spec.drive_ready,
+            ua.VariantType.Boolean,
+        )
+        await add_variable(
+            conveyor,
+            "DriveFault",
+            "Warehouse.Conveyor1.DriveFault",
+            spec.drive_fault,
+            ua.VariantType.Boolean,
+        )
         await add_variable(
             conveyor,
             "DownstreamReady",
             "Warehouse.Conveyor1.DownstreamReady",
-            self.scenario == "normal",
+            spec.downstream_ready,
             ua.VariantType.Boolean,
         )
         await add_variable(
             conveyor,
             "RunCmd",
             "Warehouse.Conveyor1.RunCmd",
-            self.scenario == "normal",
+            spec.run_cmd,
             ua.VariantType.Boolean,
         )
-        await add_variable(conveyor, "Speed", "Warehouse.Conveyor1.Speed", 42.5, ua.VariantType.Double)
-        await add_variable(conveyor, "FaultCode", "Warehouse.Conveyor1.FaultCode", 0, ua.VariantType.Int32)
+        await add_variable(
+            conveyor, "Speed", "Warehouse.Conveyor1.Speed", spec.speed, ua.VariantType.Double
+        )
+        await add_variable(
+            conveyor,
+            "FaultCode",
+            "Warehouse.Conveyor1.FaultCode",
+            spec.fault_code,
+            ua.VariantType.Int32,
+        )
 
         await add_variable(
             sorter,
             "ReadyToReceive",
             "Warehouse.Sorter1.ReadyToReceive",
-            self.scenario == "normal",
+            spec.sorter_ready,
             ua.VariantType.Boolean,
         )
         await add_variable(
             sorter,
             "HomeSensor",
             "Warehouse.Sorter1.HomeSensor",
-            self.scenario == "normal",
+            spec.home_sensor,
             ua.VariantType.Boolean,
         )
 
-        await add_variable(system, "ProductionCount", "Warehouse.System.ProductionCount", 0, ua.VariantType.Int32)
+        await add_variable(
+            system, "ProductionCount", "Warehouse.System.ProductionCount", 0, ua.VariantType.Int32
+        )
         await add_variable(
             system,
             "MachineState",
             "Warehouse.System.MachineState",
-            "RUNNING" if self.scenario == "normal" else "BLOCKED",
+            spec.machine_state,
             ua.VariantType.String,
         )
-        await add_variable(system, "LaneCounts", "Warehouse.System.LaneCounts", [1, 2, 3], ua.VariantType.Int32)
+        await add_variable(
+            system, "LaneCounts", "Warehouse.System.LaneCounts", [1, 2, 3], ua.VariantType.Int32
+        )
 
         def node_id(key: str) -> str:
             return self.nodes[key].nodeid.to_string()
@@ -268,7 +333,10 @@ class OpcUaSimulator:
         self.node_ids = SimulatorNodeIds(
             auto_mode=node_id("AutoMode"),
             start_request=node_id("StartRequest"),
+            safety_ok=node_id("SafetyOK"),
+            safety_trip=node_id("SafetyTrip"),
             drive_ready=node_id("DriveReady"),
+            drive_fault=node_id("DriveFault"),
             downstream_ready=node_id("DownstreamReady"),
             run_cmd=node_id("RunCmd"),
             speed=node_id("Speed"),
@@ -283,7 +351,9 @@ class OpcUaSimulator:
         await server.start()
         self.server = server
         self.namespace_index = namespace_index
-        self._update_task = asyncio.create_task(self._run_updates(), name="devagent-live-simulator-updates")
+        self._update_task = asyncio.create_task(
+            self._run_updates(), name="devagent-live-simulator-updates"
+        )
 
     async def stop(self) -> None:
         task, self._update_task = self._update_task, None
@@ -306,28 +376,64 @@ class OpcUaSimulator:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self.stop()
 
+    async def _write_fixed_state(self, ua: Any, spec: SimulatorScenarioSpec) -> None:
+        values = (
+            ("AutoMode", spec.auto_mode, ua.VariantType.Boolean),
+            ("StartRequest", spec.start_request, ua.VariantType.Boolean),
+            ("SafetyOK", spec.safety_ok, ua.VariantType.Boolean),
+            ("SafetyTrip", spec.safety_trip, ua.VariantType.Boolean),
+            ("DriveReady", spec.drive_ready, ua.VariantType.Boolean),
+            ("DriveFault", spec.drive_fault, ua.VariantType.Boolean),
+            ("DownstreamReady", spec.downstream_ready, ua.VariantType.Boolean),
+            ("RunCmd", spec.run_cmd, ua.VariantType.Boolean),
+            ("Speed", spec.speed, ua.VariantType.Double),
+            ("FaultCode", spec.fault_code, ua.VariantType.Int32),
+            ("ReadyToReceive", spec.sorter_ready, ua.VariantType.Boolean),
+            ("HomeSensor", spec.home_sensor, ua.VariantType.Boolean),
+            ("MachineState", spec.machine_state, ua.VariantType.String),
+        )
+        for key, value, variant_type in values:
+            await self.nodes[key].write_value(value, variant_type)
+
     async def _run_updates(self) -> None:
         _Server, ua = _require_asyncua()
         while True:
             await asyncio.sleep(self.update_interval_seconds)
             self._tick += 1
-            await self.nodes["ProductionCount"].write_value(self._tick, ua.VariantType.Int32)
-            await self.nodes["Speed"].write_value(40.0 + float(self._tick % 10), ua.VariantType.Double)
+            spec = self.scenario_spec
 
-            if self.scenario == "normal":
-                # Periodically transition a downstream permissive so subscription
-                # qualification sees both the initial value and a real data change.
+            if spec.dynamic:
+                # Backward-compatible qualification behavior: create real changes for
+                # subscriptions/history while keeping safety/drive health clear.
                 ready = (self._tick // 3) % 2 == 0
-                await self.nodes["DownstreamReady"].write_value(ready, ua.VariantType.Boolean)
-                await self.nodes["ReadyToReceive"].write_value(ready, ua.VariantType.Boolean)
-                await self.nodes["HomeSensor"].write_value(ready, ua.VariantType.Boolean)
+                await self.nodes["ProductionCount"].write_value(
+                    self._tick, ua.VariantType.Int32
+                )
+                await self.nodes["Speed"].write_value(
+                    40.0 + float(self._tick % 10), ua.VariantType.Double
+                )
+                await self.nodes["DownstreamReady"].write_value(
+                    ready, ua.VariantType.Boolean
+                )
+                await self.nodes["ReadyToReceive"].write_value(
+                    ready, ua.VariantType.Boolean
+                )
+                await self.nodes["HomeSensor"].write_value(
+                    ready, ua.VariantType.Boolean
+                )
                 await self.nodes["RunCmd"].write_value(ready, ua.VariantType.Boolean)
                 await self.nodes["MachineState"].write_value(
                     "RUNNING" if ready else "WAITING", ua.VariantType.String
                 )
-            else:
-                await self.nodes["DownstreamReady"].write_value(False, ua.VariantType.Boolean)
-                await self.nodes["ReadyToReceive"].write_value(False, ua.VariantType.Boolean)
-                await self.nodes["HomeSensor"].write_value(False, ua.VariantType.Boolean)
-                await self.nodes["RunCmd"].write_value(False, ua.VariantType.Boolean)
-                await self.nodes["MachineState"].write_value("BLOCKED", ua.VariantType.String)
+                continue
+
+            # Fixed commissioning scenarios intentionally stay deterministic so an
+            # automated evaluator can compare the agent answer with known ground truth.
+            await self._write_fixed_state(ua, spec)
+            production_count = self._tick if spec.run_cmd else 0
+            await self.nodes["ProductionCount"].write_value(
+                production_count, ua.VariantType.Int32
+            )
+
+
+__all__ = ["OpcUaSimulator", "SimulatorNodeIds"]
