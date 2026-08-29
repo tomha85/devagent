@@ -79,6 +79,17 @@ def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
 
 
+def _sha256_json(value: dict[str, Any]) -> str:
+    return _sha256_bytes(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    )
+
+
 def summarize_live_production_evidence(pack: LiveAgentEvidencePack) -> LiveProductionEvidenceSummary:
     current = sum(1 for record in pack.records if record.definitive_current)
     excluded = sum(1 for record in pack.records if not record.agent_eligible)
@@ -313,12 +324,22 @@ def write_live_production_artifacts(
     output_dir = Path(output_dir).expanduser().resolve(strict=False)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    report = render_live_augmented_production_report(production_result, pack)
-    evidence = build_live_customer_evidence_artifact(pack)
     report_path = output_dir / "fat_report_live_augmented.md"
     evidence_path = output_dir / "live_commissioning_evidence.json"
     manifest_path = output_dir / "live_commissioning_manifest.json"
+    existing = [
+        path.name
+        for path in (report_path, evidence_path, manifest_path)
+        if path.exists()
+    ]
+    if existing:
+        raise FileExistsError(
+            "Refusing to overwrite existing live commissioning artifact(s): "
+            + ", ".join(existing)
+        )
 
+    report = render_live_augmented_production_report(production_result, pack)
+    evidence = build_live_customer_evidence_artifact(pack)
     report_path.write_text(report, encoding="utf-8")
     evidence_bytes = (json.dumps(evidence, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     evidence_path.write_bytes(evidence_bytes)
@@ -327,16 +348,57 @@ def write_live_production_artifacts(
     evidence_sha = _sha256_file(evidence_path)
     project = getattr(getattr(production_result, "engineering", None), "project", None)
     metadata = getattr(project, "metadata", None)
+    project_sha = getattr(metadata, "source_sha256", None)
     readiness = getattr(production_result, "readiness", None)
     readiness_status = getattr(getattr(readiness, "status", None), "value", None)
+    readiness_score = getattr(readiness, "score", None)
+    verification_context_sha = getattr(
+        production_result,
+        "verification_context_sha256",
+        None,
+    )
+    execution_results_sha = getattr(
+        production_result,
+        "execution_results_sha256",
+        None,
+    )
+    release_policy_sha = getattr(
+        production_result,
+        "release_policy_sha256",
+        None,
+    )
+    trust_store_sha = getattr(
+        production_result,
+        "trust_store_sha256",
+        None,
+    )
 
+    binding = {
+        "project_sha256": project_sha,
+        "production_verification_context_sha256": verification_context_sha,
+        "production_execution_results_sha256": execution_results_sha,
+        "production_release_policy_sha256": release_policy_sha,
+        "production_trust_store_sha256": trust_store_sha,
+        "production_readiness": readiness_status or "NOT_EVALUATED",
+        "production_readiness_score": readiness_score,
+        "live_pack_id": pack.pack_id,
+        "live_captured_at": _iso(pack.captured_at),
+        "report_sha256": report_sha,
+        "evidence_sha256": evidence_sha,
+    }
     manifest = {
         "schema": "devagent-live-commissioning-artifacts-v1",
         "pack_id": pack.pack_id,
-        "project_sha256": getattr(metadata, "source_sha256", None),
+        "project_sha256": project_sha,
+        "production_verification_context_sha256": verification_context_sha,
+        "production_execution_results_sha256": execution_results_sha,
+        "production_release_policy_sha256": release_policy_sha,
+        "production_trust_store_sha256": trust_store_sha,
         "production_readiness": readiness_status or "NOT_EVALUATED",
+        "production_readiness_score": readiness_score,
         "production_readiness_modified_by_live_evidence": False,
         "mode": "READ_ONLY",
+        "binding_sha256": _sha256_json(binding),
         "artifacts": {
             report_path.name: report_sha,
             evidence_path.name: evidence_sha,
