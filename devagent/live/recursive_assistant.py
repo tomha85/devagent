@@ -108,20 +108,16 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             if tag is not None and tag.id not in result:
                 result.append(tag.id)
 
-        # Outputs first because engineers commonly ask why an output stopped/changed.
         for rule in self.context.rules:
             add_reference(rule.output_tag)
-        # Then direct permissive/interlock dependencies.
         for rule in self.context.rules:
             for path in rule.paths:
                 for term in path.terms:
                     add_reference(term.tag_reference)
-        # Stateful state/guard dependencies.
         for model in self.stateful_coverage.models:
             for tag_id in required_stateful_tag_ids(self.context, model):
                 if tag_id not in result:
                     result.append(tag_id)
-        # Advanced numeric, handshake, one-shot/latch, AOI/FB, fault, motion and PID context.
         for comparison in self.advanced_coverage.numeric_comparisons:
             for reference in comparison.references:
                 add_reference(reference)
@@ -208,6 +204,8 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         if output is None and self._can_reuse_last_target(text):
             output = self._last_target
         if output is None:
+            if resolve_advanced_target(self.advanced_coverage, text).found:
+                return None
             return self._target_limitation_reply(
                 text,
                 status=target.status or LiveDiagnosisStatus.TARGET_NOT_FOUND,
@@ -287,7 +285,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
                     required_tag_ids=required_ids,
                     require_all=False,
                 )
-                observations = advanced_observation_map(reconciled)
+                observations = advanced_observation_map(self.context, reconciled)
             except LiveConfigurationError:
                 observations = {}
         history = self.history_collector.store if self.history_collector is not None else None
