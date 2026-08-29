@@ -74,6 +74,8 @@ class LiveCommercialReadinessReport:
 
 
 _MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
+_EXPECTED_RUNTIME_CASE_IDS = tuple(f"LQ-{index:03d}" for index in range(1, 15))
+_EXPECTED_DOCTOR_CHECK_IDS = tuple(f"DR-{index:03d}" for index in range(1, 9))
 
 
 def _load_artifact(path: Path | None, schema: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -110,6 +112,11 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
     assert data is not None
     counts = data.get("counts")
     cases = data.get("cases")
+    ids = tuple(
+        str(item.get("case_id"))
+        for item in cases
+        if isinstance(item, dict)
+    ) if isinstance(cases, list) else ()
     valid = (
         data.get("status") == "PASS"
         and isinstance(counts, dict)
@@ -118,6 +125,7 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
         and counts.get("BLOCKED") == 0
         and isinstance(cases, list)
         and len(cases) == 14
+        and ids == _EXPECTED_RUNTIME_CASE_IDS
         and all(isinstance(item, dict) and item.get("status") == "PASS" for item in cases)
     )
     return LiveCommercialGateResult(
@@ -125,9 +133,9 @@ def _runtime_gate(path: Path | None) -> LiveCommercialGateResult:
         "Real OPC UA runtime qualification",
         LiveCommercialGateStatus.PASS if valid else LiveCommercialGateStatus.FAIL,
         (
-            "Exact read-only runtime matrix is PASS=14 FAIL=0 BLOCKED=0."
+            "Exact read-only runtime matrix LQ-001..LQ-014 is PASS=14 FAIL=0 BLOCKED=0."
             if valid
-            else "Runtime qualification artifact is present but does not prove exact 14/14 PASS."
+            else "Runtime qualification artifact is present but does not prove the exact ordered LQ-001..LQ-014 14/14 PASS contract."
         ),
     )
 
@@ -143,15 +151,23 @@ def _vendor_gate(path: Path | None) -> LiveCommercialGateResult:
         )
     assert data is not None
     vendors = data.get("vendors")
-    names = {
-        str(item.get("vendor"))
-        for item in vendors
-        if isinstance(item, dict) and item.get("status") == "PASS"
-    } if isinstance(vendors, list) else set()
+    valid_rows = isinstance(vendors, list) and len(vendors) == len(REQUIRED_VENDOR_FAMILIES)
+    rows = [item for item in vendors if isinstance(item, dict)] if isinstance(vendors, list) else []
+    names = {str(item.get("vendor")) for item in rows}
+    rows_proven = valid_rows and all(
+        item.get("status") == "PASS"
+        and isinstance(item.get("plc_ids"), list)
+        and len(item["plc_ids"]) >= 1
+        and int(item.get("complete_plcs", -1)) == len(item["plc_ids"])
+        and int(item.get("definitive_current_evidence", 0)) >= len(item["plc_ids"])
+        for item in rows
+    )
     valid = (
         data.get("status") == "PASS"
         and data.get("all_required_vendors_pass") is True
+        and data.get("required_vendors") == list(REQUIRED_VENDOR_FAMILIES)
         and names == set(REQUIRED_VENDOR_FAMILIES)
+        and rows_proven
     )
     return LiveCommercialGateResult(
         "CV1-002",
@@ -160,7 +176,7 @@ def _vendor_gate(path: Path | None) -> LiveCommercialGateResult:
         (
             "All three required vendor families passed project parse + real OPC UA + exact mapping + trusted CURRENT capture."
             if valid
-            else "Vendor artifact does not prove PASS for exactly Rockwell, Siemens, and Schneider."
+            else "Vendor artifact does not prove complete real endpoint qualification for exactly Rockwell, Siemens, and Schneider."
         ),
     )
 
@@ -300,16 +316,36 @@ def _ops_gate(
     assert doctor is not None and soak is not None
     duration = float(soak.get("actual_duration_seconds", 0.0) or 0.0)
     required = min_soak_hours * 3600.0
-    valid = (
+
+    checks = doctor.get("checks")
+    doctor_ids = tuple(
+        str(item.get("check_id"))
+        for item in checks
+        if isinstance(item, dict)
+    ) if isinstance(checks, list) else ()
+    doctor_valid = (
         doctor.get("status") == "PASS"
-        and soak.get("status") == "PASS"
+        and isinstance(checks, list)
+        and len(checks) == 8
+        and doctor_ids == _EXPECTED_DOCTOR_CHECK_IDS
+        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in checks)
+    )
+
+    plc_rows = soak.get("plcs")
+    soak_valid = (
+        soak.get("status") == "PASS"
+        and soak.get("setup_error") in (None, "")
+        and isinstance(plc_rows, list)
+        and len(plc_rows) >= 1
+        and all(isinstance(item, dict) and item.get("status") == "PASS" for item in plc_rows)
         and duration >= required
     )
+    valid = doctor_valid and soak_valid
     detail = (
-        f"Doctor PASS and soak PASS for {duration / 3600.0:.2f}h (required >= {min_soak_hours:.2f}h)."
+        f"Doctor DR-001..DR-008 PASS and soak PASS for {duration / 3600.0:.2f}h (required >= {min_soak_hours:.2f}h)."
         if valid
         else (
-            f"Operations evidence is insufficient: doctor={doctor.get('status')} soak={soak.get('status')} "
+            f"Operations evidence is insufficient: doctor_valid={doctor_valid} soak_valid={soak_valid} "
             f"duration={duration / 3600.0:.2f}h required={min_soak_hours:.2f}h."
         )
     )
