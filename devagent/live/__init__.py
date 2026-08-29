@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+from .agent_integration import (
+    LiveAgentEvidencePack,
+    LiveAugmentedRequirementMappingResult,
+    LiveAugmentedReviewResult,
+    LiveDataTrustLayer,
+    LiveEvidenceDisposition,
+    LiveEvidenceRecord,
+    LiveEvidenceStore,
+    build_live_agent_evidence_pack,
+    run_live_augmented_ai_review,
+    run_live_augmented_requirement_mapping,
+)
 from .manager import (
     ManagedPlcStatus,
     MultiPlcConnectionManager,
@@ -19,4 +31,14 @@ __all__ = [
     "PlcConnectionSpec",
     "PlcReadResult",
     "PlcSessionState",
+    "LiveAgentEvidencePack",
+    "LiveAugmentedRequirementMappingResult",
+    "LiveAugmentedReviewResult",
+    "LiveDataTrustLayer",
+    "LiveEvidenceDisposition",
+    "LiveEvidenceRecord",
+    "LiveEvidenceStore",
+    "build_live_agent_evidence_pack",
+    "run_live_augmented_ai_review",
+    "run_live_augmented_requirement_mapping",
 ]
