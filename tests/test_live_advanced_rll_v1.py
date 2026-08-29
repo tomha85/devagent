@@ -16,7 +16,7 @@ def _obs(tag_id: str, name: str, value):
     return LiveObservedTag(tag_id, name, None, value, f"E:{tag_id}", True, "MAPPED")
 
 
-def test_rll_grt_threshold_with_single_output_writer_is_evaluated():
+def test_rll_grt_threshold_is_evaluated_as_condition_without_output_binding():
     context = LiveEngineeringContext(
         vendor="ROCKWELL",
         engineering_tool="Studio 5000",
@@ -35,7 +35,7 @@ def test_rll_grt_threshold_with_single_output_writer_is_evaluated():
     )
     rung = SimpleNamespace(
         id="R1",
-        text="GRT(LineSpeed,MaxSpeed)OTE(Overspeed);",
+        text="XIC(Enable)GRT(LineSpeed,MaxSpeed)OTE(Overspeed);",
         writes=("Overspeed",),
         instructions=(),
         source=SimpleNamespace(locator="PLC1/Main/Rung 10"),
@@ -45,16 +45,17 @@ def test_rll_grt_threshold_with_single_output_writer_is_evaluated():
 
     assert len(coverage.numeric_comparisons) == 1
     item = coverage.numeric_comparisons[0]
-    assert item.result_tag == "Overspeed"
+    assert item.result_tag is None
     diagnosis = diagnose_numeric_comparison(
         item,
         {
             "linespeed": _obs("S", "LineSpeed", 130.0),
             "maxspeed": _obs("L", "MaxSpeed", 120.0),
-            "overspeed": _obs("O", "Overspeed", True),
+            "overspeed": _obs("O", "Overspeed", False),
         },
     )
     assert diagnosis.status is LiveAdvancedDiagnosisStatus.CONDITION_TRUE
+    assert any("one rung condition" in item for item in diagnosis.limitations)
 
 
 def test_numeric_mode_comparison_is_supported_without_treating_mode_as_boolean():
