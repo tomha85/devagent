@@ -439,7 +439,11 @@ def commissioning_summary(
                 "connected_during_capture": item.connection_status.connected,
                 "authentication_mode": item.connection_status.authentication_mode,
                 "security": item.connection_status.security_summary,
-                "error": item.error,
+                "error": (
+                    spec.connection.security.redact(item.error)
+                    if item.error
+                    else None
+                ),
                 "mapping": {
                     "total": len(mappings),
                     "accepted": sum(1 for mapping in mappings if mapping.accepted),
