@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from .errors import LiveConnectionError, LiveDependencyError
 from .models import BrowseNode, EndpointSummary, Quality, RuntimeValue
+from .security import LiveSecurityConfig, validate_opcua_endpoint
 
 
 def _require_asyncua() -> tuple[Any, Any]:
@@ -18,6 +19,17 @@ def _require_asyncua() -> tuple[Any, Any]:
             'Install it with: python -m pip install "devagent-ai[live]"'
         ) from exc
     return Client, ua
+
+
+def _require_security_policies() -> Any:
+    try:
+        from asyncua.crypto import security_policies
+    except ImportError as exc:  # pragma: no cover - optional dependency guard
+        raise LiveDependencyError(
+            'DevAgent Live secure OPC UA requires the optional OPC UA runtime. '
+            'Install it with: python -m pip install "devagent-ai[live]"'
+        ) from exc
+    return security_policies
 
 
 def _node_id_text(node_id: Any) -> str:
@@ -114,15 +126,15 @@ class ReadOnlyOpcUaClient:
         reconnect_max_delay_seconds: float = 5.0,
         reconnect_request_timeout_seconds: float = 30.0,
         stale_after_seconds: float = 5.0,
+        security: LiveSecurityConfig | None = None,
     ) -> None:
-        if not endpoint.startswith("opc.tcp://"):
-            raise ValueError("DevAgent Live V1 requires an opc.tcp:// endpoint")
-        self.endpoint = endpoint
+        self.endpoint = validate_opcua_endpoint(endpoint)
         self.timeout_seconds = timeout_seconds
         self.auto_reconnect = auto_reconnect
         self.reconnect_max_delay_seconds = reconnect_max_delay_seconds
         self.reconnect_request_timeout_seconds = reconnect_request_timeout_seconds
         self.stale_after_seconds = stale_after_seconds
+        self.security = security or LiveSecurityConfig()
         self._client: Any | None = None
 
     @property
@@ -140,6 +152,14 @@ class ReadOnlyOpcUaClient:
     @property
     def connected(self) -> bool:
         return self.connection_state == "CONNECTED"
+
+    @property
+    def authentication_mode(self) -> str:
+        return self.security.authentication_mode
+
+    @property
+    def security_summary(self) -> str:
+        return self.security.channel_summary
 
     async def wait_until_connected(self, *, timeout_seconds: float = 30.0) -> None:
         """Wait for asyncua's reconnect supervisor to restore the session.
@@ -192,7 +212,10 @@ class ReadOnlyOpcUaClient:
         try:
             endpoints = await client.connect_and_get_server_endpoints()
         except Exception as exc:
-            raise LiveConnectionError(f"Unable to discover OPC UA endpoint {self.endpoint}: {exc}") from exc
+            message = self.security.redact(str(exc))
+            raise LiveConnectionError(
+                f"Unable to discover OPC UA endpoint {self.endpoint}: {message}"
+            ) from None
 
         summaries: list[EndpointSummary] = []
         for endpoint in endpoints:
@@ -222,26 +245,69 @@ class ReadOnlyOpcUaClient:
             )
         return summaries
 
+    async def _configure_client_security(self, client: Any, ua: Any) -> None:
+        self.security.validate_files()
+
+        if self.security.username is not None:
+            client.set_user(self.security.username)
+            assert self.security.password is not None
+            client.set_password(self.security.password)
+
+        if not self.security.secure_channel:
+            return
+
+        security_policies = _require_security_policies()
+        policy = getattr(
+            security_policies,
+            f"SecurityPolicy{self.security.security_policy}",
+            None,
+        )
+        if policy is None:
+            raise LiveConnectionError(
+                f"Installed asyncua does not support security policy {self.security.security_policy}"
+            )
+        mode = getattr(ua.MessageSecurityMode, str(self.security.security_mode), None)
+        if mode is None:
+            raise LiveConnectionError(
+                f"Installed asyncua does not support security mode {self.security.security_mode}"
+            )
+
+        client.application_uri = self.security.application_uri
+        await client.set_security(
+            policy,
+            certificate=str(self.security.client_certificate),
+            private_key=str(self.security.client_private_key),
+            private_key_password=self.security.private_key_password,
+            server_certificate=str(self.security.server_certificate),
+            mode=mode,
+        )
+
     async def connect(self) -> None:
         if self._client is not None:
             return
-        Client, _ua = _require_asyncua()
+        Client, ua = _require_asyncua()
         # asyncua 2.0 exposes reconnect controls on connect(); 2.0.1 also
         # accepts them in the constructor. Keep construction compatible with
         # both supported releases and configure reconnect in one place.
         client = Client(url=self.endpoint, timeout=self.timeout_seconds)
         try:
+            await self._configure_client_security(client, ua)
             await client.connect(
                 auto_reconnect=self.auto_reconnect,
                 reconnect_max_delay=self.reconnect_max_delay_seconds,
                 reconnect_request_timeout=self.reconnect_request_timeout_seconds,
             )
+        except LiveDependencyError:
+            raise
         except Exception as exc:
             try:
                 await client.disconnect()
             except Exception:
                 pass
-            raise LiveConnectionError(f"Unable to connect OPC UA session {self.endpoint}: {exc}") from exc
+            message = self.security.redact(str(exc))
+            raise LiveConnectionError(
+                f"Unable to connect OPC UA session {self.endpoint}: {message}"
+            ) from None
         self._client = client
 
     async def disconnect(self) -> None:
@@ -251,7 +317,10 @@ class ReadOnlyOpcUaClient:
         try:
             await client.disconnect()
         except Exception as exc:
-            raise LiveConnectionError(f"Error while closing OPC UA session {self.endpoint}: {exc}") from exc
+            message = self.security.redact(str(exc))
+            raise LiveConnectionError(
+                f"Error while closing OPC UA session {self.endpoint}: {message}"
+            ) from None
 
     def _require_connected(self) -> Any:
         if self._client is None:
