@@ -16,6 +16,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="devagent live",
         description="Read-only OPC UA commissioning foundation for DevAgent.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--endpoint",
@@ -97,6 +98,65 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write the qualification report and SHA-256 manifest to a new directory.",
     )
 
+    vendor_qualify = subparsers.add_parser(
+        "vendor-qualify",
+        help=(
+            "Qualify real Rockwell, Siemens, and Schneider engineering projects against their "
+            "configured read-only OPC UA endpoints."
+        ),
+    )
+    vendor_qualify.add_argument(
+        "config",
+        type=Path,
+        help="devagent-live-commission-v1 config containing the real vendor project/endpoints.",
+    )
+    vendor_qualify.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write vendor qualification evidence and manifest to a new directory.",
+    )
+
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="Check production Live install/runtime, project parsing, security, and a real OPC UA endpoint.",
+        allow_abbrev=False,
+    )
+    doctor.add_argument("--project", type=Path, help="Optional onsite PLC engineering export to parse.")
+    doctor.add_argument("--endpoint", help="Optional real read-only OPC UA endpoint to discover/connect.")
+    doctor.add_argument(
+        "--output-parent",
+        type=Path,
+        help="Directory to verify for evidence read/write access. Default: current directory.",
+    )
+    doctor.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write doctor report and manifest to a new directory.",
+    )
+    add_security_args(doctor)
+
+    soak = subparsers.add_parser(
+        "soak",
+        help="Run a long-lived read-only multi-PLC quality/recovery/resource soak.",
+    )
+    soak.add_argument("config", type=Path, help="Path to devagent-live-commission-v1 JSON config.")
+    soak.add_argument(
+        "--duration-hours",
+        type=float,
+        default=8.0,
+        help="Requested soak duration in hours. Default: 8.",
+    )
+    soak.add_argument("--interval-seconds", type=float, default=1.0)
+    soak.add_argument("--min-current-ratio", type=float, default=0.95)
+    soak.add_argument("--max-consecutive-error-cycles", type=int, default=5)
+    soak.add_argument("--max-memory-growth-mb", type=float, default=256.0)
+    soak.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="New directory for the soak evidence artifact and manifest.",
+    )
+
     readiness = subparsers.add_parser(
         "readiness",
         help="Evaluate the 10-control Live production-readiness scorecard.",
@@ -113,6 +173,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         help="Write the readiness report and SHA-256 manifest to a new directory.",
+    )
+
+    commercial = subparsers.add_parser(
+        "commercial-readiness",
+        help="Evaluate the strict five-gate DevAgent Live Commercial V1 readiness contract.",
+    )
+    commercial.add_argument("--runtime-qualification", type=Path)
+    commercial.add_argument("--vendor-qualification", type=Path)
+    commercial.add_argument("--doctor-report", type=Path)
+    commercial.add_argument("--soak-report", type=Path)
+    commercial.add_argument(
+        "--min-soak-hours",
+        type=float,
+        default=8.0,
+        help="Minimum accepted real soak duration. Default: 8 hours.",
+    )
+    commercial.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write the commercial readiness report and manifest to a new directory.",
     )
 
     sim = subparsers.add_parser("sim", help="Run the local DevAgent OPC UA qualification simulator.")
@@ -303,8 +383,6 @@ async def _run_plan(args: argparse.Namespace) -> int:
 
 
 async def _run_commission(args: argparse.Namespace) -> int:
-    # Lazy import keeps ordinary probe/browse/read/watch/sim startup independent
-    # from the vendor PLC engineering stack used to analyze commission exports.
     from .commission import (
         commissioning_summary,
         load_commissioning_config,
@@ -388,6 +466,101 @@ async def _run_qualify(args: argparse.Namespace) -> int:
     return 0 if report.status is LiveQualificationStatus.PASS else 2
 
 
+async def _run_vendor_qualify(args: argparse.Namespace) -> int:
+    from .commission import load_commissioning_config
+    from .vendor_qualification import (
+        LiveVendorQualificationStatus,
+        run_live_vendor_qualification,
+        write_live_vendor_qualification_artifacts,
+    )
+
+    config = load_commissioning_config(args.config)
+    report = await run_live_vendor_qualification(config)
+    print("DEVAGENT LIVE REAL VENDOR QUALIFICATION")
+    print("Mode: READ ONLY")
+    print(f"Config SHA-256: {config.source_sha256}")
+    print()
+    for vendor in report.vendors:
+        print(
+            f"[{vendor.status.value}] {vendor.vendor}: PLCs={len(vendor.plc_ids)} "
+            f"complete={vendor.complete_plcs} current={vendor.definitive_current_evidence} "
+            f"mapped={vendor.accepted_mappings} unresolved={vendor.unresolved_mappings}"
+        )
+        print(f"  {vendor.detail}")
+    print()
+    print(f"Overall: {report.status.value}")
+    if args.output_dir is not None:
+        written = write_live_vendor_qualification_artifacts(args.output_dir, report)
+        print(f"Artifacts: {written}")
+    return 0 if report.status is LiveVendorQualificationStatus.PASS else 2
+
+
+async def _run_doctor(args: argparse.Namespace) -> int:
+    from .doctor import LiveDoctorStatus, run_live_doctor, write_live_doctor_artifacts
+
+    report = await run_live_doctor(
+        project_path=args.project,
+        endpoint=args.endpoint,
+        security=security_from_args(args),
+        output_parent=args.output_parent,
+    )
+    print("DEVAGENT LIVE DOCTOR")
+    print("Mode: READ ONLY")
+    print()
+    for check in report.checks:
+        print(f"[{check.status.value}] {check.check_id} {check.title} - {check.detail}")
+    counts = report.counts()
+    print()
+    print(
+        f"Overall: {report.status.value} "
+        f"(PASS={counts['PASS']} FAIL={counts['FAIL']} BLOCKED={counts['BLOCKED']})"
+    )
+    if args.output_dir is not None:
+        written = write_live_doctor_artifacts(args.output_dir, report)
+        print(f"Artifacts: {written}")
+    return 0 if report.status is LiveDoctorStatus.PASS else 2
+
+
+async def _run_soak(args: argparse.Namespace) -> int:
+    from .commission import load_commissioning_config
+    from .soak import LiveSoakStatus, run_live_soak, write_live_soak_artifacts
+
+    if args.duration_hours <= 0:
+        raise ValueError("--duration-hours must be > 0")
+    config = load_commissioning_config(args.config)
+    report = await run_live_soak(
+        config,
+        duration_seconds=args.duration_hours * 3600.0,
+        interval_seconds=args.interval_seconds,
+        min_current_ratio=args.min_current_ratio,
+        max_consecutive_error_cycles=args.max_consecutive_error_cycles,
+        max_memory_growth_mb=args.max_memory_growth_mb,
+    )
+    print("DEVAGENT LIVE PRODUCTION SOAK")
+    print("Mode: READ ONLY")
+    print(f"Requested duration: {args.duration_hours:.3f}h")
+    print(f"Actual duration: {report.actual_duration_seconds / 3600.0:.3f}h")
+    print(
+        f"RSS start={report.memory_start_mb:.1f}MiB peak={report.memory_peak_mb:.1f}MiB "
+        f"growth={report.memory_growth_mb:.1f}MiB"
+    )
+    print()
+    for item in report.plcs:
+        print(
+            f"[{item.status.value}] {item.plc_id}: cycles={item.cycles} "
+            f"current_ratio={item.current_ratio:.4f} errors={item.read_error_cycles} "
+            f"max_consecutive_errors={item.max_consecutive_error_cycles} final={item.final_state}"
+        )
+        print(f"  {item.detail}")
+    if report.setup_error:
+        print(f"Setup/overall limitation: {report.setup_error}")
+    print()
+    print(f"Overall: {report.status.value}")
+    written = write_live_soak_artifacts(args.output_dir, report)
+    print(f"Artifacts: {written}")
+    return 0 if report.status is LiveSoakStatus.PASS else 2
+
+
 async def _run_readiness(args: argparse.Namespace) -> int:
     from .readiness import (
         evaluate_live_production_readiness,
@@ -415,6 +588,33 @@ async def _run_readiness(args: argparse.Namespace) -> int:
         written = write_live_production_readiness_artifacts(args.output_dir, report)
         print(f"Artifacts: {written}")
     return 0 if report.meets_nine_of_ten else 2
+
+
+async def _run_commercial_readiness(args: argparse.Namespace) -> int:
+    from .commercial_readiness import (
+        evaluate_live_commercial_readiness,
+        write_live_commercial_readiness_artifacts,
+    )
+
+    report = evaluate_live_commercial_readiness(
+        runtime_qualification_path=args.runtime_qualification,
+        vendor_qualification_path=args.vendor_qualification,
+        doctor_path=args.doctor_report,
+        soak_path=args.soak_report,
+        min_soak_hours=args.min_soak_hours,
+    )
+    print("DEVAGENT LIVE COMMERCIAL V1 READINESS")
+    print("Mode: READ ONLY")
+    print()
+    for gate in report.gates:
+        print(f"[{gate.status.value}] {gate.gate_id} {gate.title} - {gate.detail}")
+    print()
+    print(f"Overall: {report.status.value}")
+    print(f"Commercial V1 ready: {'YES' if report.commercial_v1_ready else 'NO'}")
+    if args.output_dir is not None:
+        written = write_live_commercial_readiness_artifacts(args.output_dir, report)
+        print(f"Artifacts: {written}")
+    return 0 if report.commercial_v1_ready else 2
 
 
 async def _run_sim(args: argparse.Namespace) -> int:
@@ -458,10 +658,7 @@ async def _run_shell(endpoint: str, args: argparse.Namespace) -> int:
                 print(":browse")
                 print(":read <NodeId>")
                 print(":disconnect")
-                print(
-                    "Natural-language diagnosis is intentionally deferred until the "
-                    "OPC UA evidence foundation is qualified."
-                )
+                print("For engineering-aware natural-language diagnosis use `devagent live assist <PLC_PROJECT> --endpoint ...`.")
                 continue
             if line == ":status":
                 print(f"Endpoint: {endpoint}")
@@ -482,8 +679,8 @@ async def _run_shell(endpoint: str, args: argparse.Namespace) -> int:
                 print(_format_value(await client.read(node_id)))
                 continue
             print(
-                "Natural-language commissioning diagnosis is not enabled in this foundation milestone yet. "
-                "The OPC UA session remains connected; use :read, :browse, or :status."
+                "This endpoint-only shell has no PLC engineering logic context. "
+                "Use :read/:browse here, or `devagent live assist` for commissioning Q&A."
             )
     finally:
         try:
@@ -509,15 +706,23 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_commission(args)
     if args.command == "qualify":
         return await _run_qualify(args)
+    if args.command == "vendor-qualify":
+        return await _run_vendor_qualify(args)
+    if args.command == "doctor":
+        return await _run_doctor(args)
+    if args.command == "soak":
+        return await _run_soak(args)
     if args.command == "readiness":
         return await _run_readiness(args)
+    if args.command == "commercial-readiness":
+        return await _run_commercial_readiness(args)
     if args.command == "sim":
         return await _run_sim(args)
     if args.endpoint:
         return await _run_shell(args.endpoint, args)
     raise ValueError(
-        "Use --endpoint for an interactive session, or choose "
-        "probe/browse/read/snapshot/watch/plan/commission/qualify/readiness/sim."
+        "Use --endpoint for an endpoint-only interactive session, or choose "
+        "probe/browse/read/snapshot/watch/plan/commission/qualify/vendor-qualify/doctor/soak/readiness/commercial-readiness/sim."
     )
 
 
