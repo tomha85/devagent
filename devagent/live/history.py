@@ -86,18 +86,36 @@ _TIME_RE = re.compile(
 )
 
 
+class _HistoricalWindow(float):
+    """Float-compatible lookback carrying requested event intent."""
+
+    def __new__(cls, value: float, *, direction: str | None):
+        obj = float.__new__(cls, value)
+        obj.age_seconds = float(value)
+        obj.direction = direction
+        return obj
+
+
 def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
     """Return the requested historical age, bounded to one day."""
     match = _TIME_RE.search(str(question or ""))
     if match is None:
-        return default
+        bounded = float(default)
+        return _HistoricalWindow(
+            bounded,
+            direction=requested_transition_direction(question),
+        )
     value = float(match.group("value"))
     unit = match.group("unit").casefold()
     if unit.startswith("m"):
         value *= 60.0
     elif unit.startswith("h"):
         value *= 3600.0
-    return max(1.0, min(value, 86400.0))
+    bounded = max(1.0, min(value, 86400.0))
+    return _HistoricalWindow(
+        bounded,
+        direction=requested_transition_direction(question),
+    )
 
 
 def requested_transition_direction(question: str) -> str | None:
@@ -276,6 +294,11 @@ class LiveTimelineStore:
     ) -> LiveHistoricalDiagnosis:
         if lookback_seconds <= 0 or preceding_seconds <= 0:
             raise ValueError("history windows must be > 0")
+        if isinstance(lookback_seconds, _HistoricalWindow):
+            if target_age_seconds is None:
+                target_age_seconds = lookback_seconds.age_seconds
+            if direction is None:
+                direction = lookback_seconds.direction
         if target_age_seconds is not None and target_age_seconds < 0:
             raise ValueError("target_age_seconds must be >= 0")
         if direction not in {None, "STOP", "START"}:
@@ -286,13 +309,20 @@ class LiveTimelineStore:
                 target_output=target_output,
                 transition=None,
                 preceding_changes=(),
-                lookback_seconds=lookback_seconds,
+                lookback_seconds=float(lookback_seconds),
                 limitations=(
                     "Target does not resolve to exactly one canonical engineering tag.",
                 ),
             )
         current = now or self._now()
-        cutoff = current - timedelta(seconds=lookback_seconds)
+        effective_lookback = float(lookback_seconds)
+        if target_age_seconds is not None:
+            tolerance = max(5.0, min(30.0, target_age_seconds * 0.10))
+            effective_lookback = max(
+                effective_lookback,
+                min(self.retention_seconds, target_age_seconds + tolerance),
+            )
+        cutoff = current - timedelta(seconds=effective_lookback)
         candidates = [
             item
             for item in self._transitions
@@ -306,7 +336,7 @@ class LiveTimelineStore:
                 target_output=target_output,
                 transition=None,
                 preceding_changes=(),
-                lookback_seconds=lookback_seconds,
+                lookback_seconds=effective_lookback,
                 limitations=(
                     f"No trusted{direction_text} transition matching the requested event was captured.",
                     "The timeline only contains data observed after this Live session started; earlier controller history is not reconstructed.",
@@ -350,7 +380,7 @@ class LiveTimelineStore:
             target_output=target_output,
             transition=target_transition,
             preceding_changes=tuple(preceding[:max_preceding]),
-            lookback_seconds=lookback_seconds,
+            lookback_seconds=effective_lookback,
             limitations=tuple(limitations),
         )
 
