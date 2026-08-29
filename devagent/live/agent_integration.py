@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Mapping
@@ -14,7 +14,16 @@ from devagent.live.manager import (
     PlcSessionState,
 )
 from devagent.live.models import Quality, RuntimeValue, TrustState
-from devagent.plc.production_models import EvidenceItem
+
+
+@dataclass(frozen=True)
+class LiveAgentEvidenceItem:
+    id: str
+    kind: str
+    summary: str
+    source_locator: str | None = None
+    source_sha256: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 class LiveEvidenceDisposition(str, Enum):
@@ -46,7 +55,7 @@ class LiveEvidenceRecord:
     agent_eligible: bool
     definitive_current: bool
 
-    def as_evidence_item(self) -> EvidenceItem:
+    def as_evidence_item(self) -> LiveAgentEvidenceItem:
         value_text = _compact_value(self.value)
         summary = (
             f"Live OPC UA observation {self.plc_name} ({self.plc_id}) {self.node_id}: "
@@ -55,7 +64,7 @@ class LiveEvidenceRecord:
             "CURRENT live observations support diagnosis only; they do not by themselves prove "
             "FAT PASS, safety certification, or release readiness."
         )
-        return EvidenceItem(
+        return LiveAgentEvidenceItem(
             id=self.evidence_id,
             kind=f"LIVE_OPCUA_{self.disposition.value}",
             summary=summary,
@@ -86,14 +95,14 @@ class LiveAgentEvidencePack:
     pack_id: str
     captured_at: datetime
     records: tuple[LiveEvidenceRecord, ...]
-    evidence: tuple[EvidenceItem, ...]
+    evidence: tuple[LiveAgentEvidenceItem, ...]
     agent_evidence_ids: frozenset[str]
     definitive_current_evidence_ids: frozenset[str]
     excluded_raw_evidence_ids: frozenset[str]
     limitations: tuple[str, ...]
     plc_states: dict[str, str]
 
-    def evidence_for_agent(self) -> tuple[EvidenceItem, ...]:
+    def evidence_for_agent(self) -> tuple[LiveAgentEvidenceItem, ...]:
         return tuple(item for item in self.evidence if item.id in self.agent_evidence_ids)
 
     def current_records(self) -> tuple[LiveEvidenceRecord, ...]:
@@ -235,11 +244,11 @@ def _limitation_evidence(
     state: str,
     reason: str,
     node_id: str | None = None,
-) -> EvidenceItem:
+) -> LiveAgentEvidenceItem:
     key = f"{pack_seed}|{plc_id}|{node_id or '-'}|{state}|{reason}"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
     target = f" node {node_id}" if node_id else ""
-    return EvidenceItem(
+    return LiveAgentEvidenceItem(
         id=f"LIVE-LIMIT:{plc_id}:{digest}",
         kind="LIVE_OPCUA_LIMITATION",
         summary=(
@@ -300,7 +309,7 @@ async def build_live_agent_evidence_pack(
     statuses = manager.statuses()
 
     records: list[LiveEvidenceRecord] = []
-    evidence: list[EvidenceItem] = []
+    evidence: list[LiveAgentEvidenceItem] = []
     eligible_ids: set[str] = set()
     definitive_ids: set[str] = set()
     excluded_ids: set[str] = set()
@@ -406,7 +415,7 @@ async def build_live_agent_evidence_pack(
 async def run_live_augmented_ai_review(
     provider: Any,
     engineering: Any,
-    static_evidence: list[EvidenceItem],
+    static_evidence: list[Any],
     deterministic_findings: list[Any],
     manager: MultiPlcConnectionManager,
     node_ids_by_plc: Mapping[str, Iterable[str]],
@@ -442,7 +451,7 @@ async def run_live_augmented_requirement_mapping(
     provider: Any,
     requirements: list[Any],
     verifications: list[Any],
-    static_evidence: list[EvidenceItem],
+    static_evidence: list[Any],
     manager: MultiPlcConnectionManager,
     node_ids_by_plc: Mapping[str, Iterable[str]],
     *,
