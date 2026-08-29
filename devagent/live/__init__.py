@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .agent_integration import (
+    LiveAgentEvidenceItem,
     LiveAgentEvidencePack,
     LiveAugmentedRequirementMappingResult,
     LiveAugmentedReviewResult,
@@ -31,6 +32,7 @@ __all__ = [
     "PlcConnectionSpec",
     "PlcReadResult",
     "PlcSessionState",
+    "LiveAgentEvidenceItem",
     "LiveAgentEvidencePack",
     "LiveAugmentedRequirementMappingResult",
     "LiveAugmentedReviewResult",
