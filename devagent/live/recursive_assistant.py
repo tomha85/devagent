@@ -16,11 +16,12 @@ from .assistant import LiveAssistantReply, LiveAssistantReplyKind, LiveCommissio
 from .control_guard import is_plc_control_request
 from .diagnosis import LiveDiagnosisStatus, LiveObservedTag, observations_from_reconciled, resolve_question_target
 from .diagnosis_guard import diagnose_output
-from .engineering_context import LiveLoadedEngineering, ProjectLoader, load_live_engineering_context
+from .engineering_context import LiveEngineeringTag, LiveLoadedEngineering, ProjectLoader, load_live_engineering_context
 from .errors import LiveConfigurationError
 from .history import LiveHistoryCollector, is_historical_question, requested_history_seconds
 from .manager import MultiPlcConnectionManager, PlcConnectionSpec
 from .qa import answer_commissioning_question
+from .question_resolution import resolve_explicit_tag_reference
 from .reconciled_evidence import build_reconciled_live_agent_evidence
 from .recursive_diagnosis import (
     DEFAULT_TRACE_MAX_DEPTH,
@@ -35,6 +36,11 @@ from .stateful_assistant import (
     stateful_observation_map,
 )
 from .stateful_context import build_live_stateful_coverage, diagnose_live_stateful_model
+from .system_health import (
+    build_system_health_scope,
+    diagnose_system_health,
+    is_system_health_question,
+)
 
 
 class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
@@ -180,11 +186,132 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             lines.append(f"Historical collector last limitation: {history.last_error}")
         return "\n".join(lines)
 
+    async def _system_health_reply(self, text: str) -> LiveAssistantReply | None:
+        if not is_system_health_question(text):
+            return None
+        assert self.reconciliation is not None
+        scope = build_system_health_scope(self.context, self.reconciliation)
+        observations: tuple[LiveObservedTag, ...]
+        if scope.tag_ids:
+            try:
+                reconciled = await build_reconciled_live_agent_evidence(
+                    self.manager,
+                    self.reconciliation,
+                    required_tag_ids=scope.tag_ids,
+                    require_all=False,
+                )
+                observations = tuple(
+                    item
+                    for item in observations_from_reconciled(reconciled)
+                    if item.tag_id in scope.tag_ids
+                )
+            except LiveConfigurationError:
+                observations = tuple(
+                    item for item in self._mapping_only_observations()
+                    if item.tag_id in scope.tag_ids
+                )
+        else:
+            observations = ()
+        diagnosis = diagnose_system_health(
+            self.context,
+            self.reconciliation,
+            observations,
+            scope,
+        )
+        return LiveAssistantReply(
+            question=text,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text=diagnosis.render_text(),
+            target_output=None,
+        )
+
+    async def _direct_signal_reply(
+        self,
+        text: str,
+        tag: LiveEngineeringTag,
+    ) -> LiveAssistantReply:
+        assert self.reconciliation is not None
+        self._last_target = tag.scoped_name
+        observation: LiveObservedTag | None = None
+        try:
+            reconciled = await build_reconciled_live_agent_evidence(
+                self.manager,
+                self.reconciliation,
+                required_tag_ids=(tag.id,),
+                require_all=False,
+            )
+            observation = next(
+                (
+                    item for item in observations_from_reconciled(reconciled)
+                    if item.tag_id == tag.id
+                ),
+                None,
+            )
+        except LiveConfigurationError:
+            observation = next(
+                (item for item in self._mapping_only_observations() if item.tag_id == tag.id),
+                None,
+            )
+
+        lines = [
+            "Signal observation (read-only, evidence bounded):",
+            f"- Target: {tag.scoped_name}",
+        ]
+        if observation is not None and observation.definitive_current:
+            lines.extend(
+                [
+                    f"- Current value: {observation.value!r}",
+                    "- Runtime evidence: TRUSTED CURRENT",
+                    f"- Mapping: {observation.mapping_status}",
+                ]
+            )
+            if observation.evidence_id:
+                lines.append(f"- Evidence: {observation.evidence_id}")
+        else:
+            lines.append("- Current value: NOT PROVEN")
+            lines.append("- Runtime evidence: NOT DEFINITIVE")
+            if observation is not None and observation.limitation:
+                lines.append(f"- Limitation: {observation.limitation}")
+
+        lines.extend(
+            [
+                "- Deterministic writer: NOT FOUND in the canonical Boolean output model",
+                (
+                    f"- Conclusion: {tag.scoped_name} is directly observable, but DevAgent Live cannot prove why this signal itself has its current value from the imported PLC logic."
+                    if observation is not None and observation.definitive_current
+                    else f"- Conclusion: DevAgent Live cannot prove the current value or upstream cause of {tag.scoped_name}."
+                ),
+                "- Further physical/process root cause: NOT PROVEN",
+                f"- Next check: inspect the upstream controller/device/process that produces {tag.scoped_name}, or import its deterministic writer logic if it exists in another engineering scope.",
+            ]
+        )
+        return LiveAssistantReply(
+            question=text,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text="\n".join(lines),
+            target_output=tag.scoped_name,
+        )
+
     async def _historical_reply(self, text: str) -> LiveAssistantReply | None:
         if not is_historical_question(text):
             return None
         target = resolve_question_target(self.context, text)
         output = target.output_tag
+        explicit_tag = resolve_explicit_tag_reference(self.context, text)
+        if output is None and explicit_tag is not None:
+            explicit_output = explicit_tag.scoped_name
+            if self.context.rules_for_output(explicit_output):
+                output = explicit_output
+            else:
+                return LiveAssistantReply(
+                    question=text,
+                    kind=LiveAssistantReplyKind.LIMITATION,
+                    text=(
+                        f"Historical root-cause diagnosis for explicit non-output signal {explicit_tag.scoped_name} is not proven by the current bounded engine. "
+                        "DevAgent will not silently reuse a previous output target when the engineer explicitly names a different signal."
+                    ),
+                    target_output=explicit_tag.scoped_name,
+                )
         if output is None and self._can_reuse_last_target(text):
             output = self._last_target
         if output is None:
@@ -315,6 +442,9 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
                 kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
                 text=self._overview_text(),
             )
+        system_health = await self._system_health_reply(text)
+        if system_health is not None:
+            return system_health
         historical = await self._historical_reply(text)
         if historical is not None:
             return historical
@@ -327,7 +457,18 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
 
         target = resolve_question_target(self.context, text)
         output = target.output_tag
+        explicit_tag = resolve_explicit_tag_reference(self.context, text)
+        if output is None and explicit_tag is not None:
+            explicit_output = explicit_tag.scoped_name
+            if self.context.rules_for_output(explicit_output):
+                output = explicit_output
+            else:
+                return await self._direct_signal_reply(text, explicit_tag)
         if output is None and self._can_reuse_last_target(text):
+            if self._last_target is not None:
+                remembered_tag = self.context.unique_tag_for_reference(self._last_target)
+                if remembered_tag is not None and not self.context.rules_for_output(self._last_target):
+                    return await self._direct_signal_reply(text, remembered_tag)
             output = self._last_target
         if output is None:
             return self._target_limitation_reply(
