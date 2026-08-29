@@ -31,7 +31,24 @@ from .production_integration import (
     summarize_live_production_evidence,
     write_live_production_artifacts,
 )
+from .reconciled_evidence import (
+    ReconciledLiveAgentEvidence,
+    build_reconciled_live_agent_evidence,
+    run_reconciled_live_augmented_ai_review,
+    run_reconciled_live_augmented_requirement_mapping,
+)
 from .security import LiveSecurityConfig
+from .tag_reconciliation import (
+    LiveTagCandidate,
+    LiveTagMapping,
+    LiveTagMappingStatus,
+    LiveTagMatchKind,
+    LiveTagReconciliation,
+    LiveTypeCompatibility,
+    reconcile_connected_plc_tags,
+    reconcile_connected_project_tags,
+    reconcile_engineering_tags,
+)
 
 READ_ONLY_MODE = "READ_ONLY"
 
@@ -63,4 +80,17 @@ __all__ = [
     "render_live_commissioning_section",
     "summarize_live_production_evidence",
     "write_live_production_artifacts",
+    "LiveTagCandidate",
+    "LiveTagMapping",
+    "LiveTagMappingStatus",
+    "LiveTagMatchKind",
+    "LiveTagReconciliation",
+    "LiveTypeCompatibility",
+    "reconcile_connected_plc_tags",
+    "reconcile_connected_project_tags",
+    "reconcile_engineering_tags",
+    "ReconciledLiveAgentEvidence",
+    "build_reconciled_live_agent_evidence",
+    "run_reconciled_live_augmented_ai_review",
+    "run_reconciled_live_augmented_requirement_mapping",
 ]
