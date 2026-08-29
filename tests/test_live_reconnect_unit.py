@@ -289,3 +289,33 @@ def test_connected_bad_timeout_remains_fail_closed(
             await wrapper.collect_changes(["ns=2;s=RunCmd"], count=1, timeout_seconds=0.5)
 
     asyncio.run(scenario())
+
+
+def test_wait_until_connected_timeout_fails_closed() -> None:
+    class NeverConnectStateSubscription:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def next_change(self, timeout: float | None = None):
+            raise asyncio.TimeoutError
+
+    async def scenario() -> None:
+        wrapper = ReadOnlyOpcUaClient("opc.tcp://127.0.0.1:4840/", auto_reconnect=True)
+        raw = FakeClient(url=wrapper.endpoint, timeout=wrapper.timeout_seconds)
+        raw.state = FakeState("reconnecting")
+        raw.subscribe_state = lambda: NeverConnectStateSubscription()
+        wrapper._client = raw
+
+        with pytest.raises(LiveConnectionError, match="Timed out waiting for OPC UA reconnect"):
+            await wrapper.wait_until_connected(timeout_seconds=0.05)
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_changes_preserve_read_only_surface() -> None:
+    client = ReadOnlyOpcUaClient("opc.tcp://127.0.0.1:4840/")
+    for prohibited in ("write", "write_value", "set_value", "call_method", "force", "reset"):
+        assert not hasattr(client, prohibited)
