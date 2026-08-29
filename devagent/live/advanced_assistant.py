@@ -101,9 +101,22 @@ def _contains_identity(question: str, value: str | None) -> bool:
     return bool(target and target in normalize_engineering_identifier(question))
 
 
+def _unique_model_matches(items: Iterable[LiveAdvancedModel]) -> list[LiveAdvancedModel]:
+    result: list[LiveAdvancedModel] = []
+    seen: set[str] = set()
+    for item in items:
+        if item.id in seen:
+            continue
+        seen.add(item.id)
+        result.append(item)
+    return result
+
+
 def resolve_advanced_target(
     coverage: LiveAdvancedCoverage,
     question: str,
+    *,
+    context: LiveEngineeringContext | None = None,
 ) -> LiveAdvancedTarget:
     text = str(question or "").strip()
     if not text:
@@ -118,25 +131,45 @@ def resolve_advanced_target(
         return LiveAdvancedTarget(numeric=numeric_direct[0])
     if len(numeric_direct) > 1:
         exact = [
-            item for item in numeric_direct
+            item
+            for item in numeric_direct
             if normalize_engineering_identifier(item.result_tag) == normalize_engineering_identifier(text)
         ]
         if len(exact) == 1:
             return LiveAdvancedTarget(numeric=exact[0])
+        return LiveAdvancedTarget()
 
-    model_direct = [
-        item
-        for item in coverage.models
-        if _contains_identity(text, item.name)
-        or any(_contains_identity(text, ref) for ref in item.references)
-    ]
-    if len(model_direct) == 1:
-        return LiveAdvancedTarget(model=model_direct[0])
-    if len(model_direct) > 1:
-        longest = max(len(normalize_engineering_identifier(item.name)) for item in model_direct)
-        narrowed = [item for item in model_direct if len(normalize_engineering_identifier(item.name)) == longest]
-        if len(narrowed) == 1:
-            return LiveAdvancedTarget(model=narrowed[0])
+    name_direct = _unique_model_matches(
+        item for item in coverage.models if _contains_identity(text, item.name)
+    )
+    if len(name_direct) == 1:
+        return LiveAdvancedTarget(model=name_direct[0])
+    if len(name_direct) > 1:
+        exact_name = [
+            item
+            for item in name_direct
+            if normalize_engineering_identifier(item.name) == normalize_engineering_identifier(text)
+        ]
+        if len(exact_name) == 1:
+            return LiveAdvancedTarget(model=exact_name[0])
+        return LiveAdvancedTarget()
+
+    if context is not None:
+        reference_direct = _unique_model_matches(
+            item
+            for item in coverage.models
+            if any(
+                context.unique_tag_for_reference(reference) is not None
+                and _contains_identity(text, reference)
+                for reference in item.references
+            )
+        )
+        if len(reference_direct) == 1:
+            return LiveAdvancedTarget(model=reference_direct[0])
+        if len(reference_direct) > 1:
+            # A shared referenced tag (for example Enable) identifies the signal, not
+            # which AOI/motion/handshake use the engineer intended.
+            return LiveAdvancedTarget()
 
     lowered = text.casefold().replace("_", " ")
     requested_kinds = [
@@ -278,15 +311,17 @@ def diagnose_numeric_comparison(
             return LiveAdvancedDiagnosis(
                 kind=LiveAdvancedKind.NUMERIC_COMPARISON,
                 name=name,
-                status=LiveAdvancedDiagnosisStatus.LOGIC_CONFLICT,
+                status=LiveAdvancedDiagnosisStatus.INDETERMINATE,
                 summary=(
-                    f"Trusted operands evaluate {item.left.display} {item.operator} {item.right.display} as {expected}, "
-                    f"but observed direct-assignment result {result_observed.tag_name}={result_observed.value}."
+                    f"Trusted operands currently evaluate {item.left.display} {item.operator} {item.right.display} as {expected}, "
+                    f"while observed result {result_observed.tag_name}={result_observed.value}."
                 ),
                 current_values=tuple(current),
                 source_locators=(item.source_locator,) if item.source_locator else (),
-                limitations=("Check scan timing, multiple writers, stale mapping, or additional source logic affecting the direct assignment result.",),
-                next_checks=("Inspect the result tag writers and scan-order context at the PLC source location.",),
+                limitations=(
+                    "The values are not a proven atomic PLC scan snapshot and the result may have additional writers/scan-order effects; Live refuses to classify this mismatch as a logic conflict without stronger provenance.",
+                ),
+                next_checks=("Inspect result-tag writers, scan order, and source timestamps at the PLC source location.",),
             )
 
     return LiveAdvancedDiagnosis(
@@ -378,9 +413,7 @@ def _diagnose_handshake(
         summary = "Request is active and a trusted response/busy state is observed."
     elif request is True and missing_for_negative_conclusion:
         status = LiveAdvancedDiagnosisStatus.INDETERMINATE
-        summary = (
-            "Request is active, but Live cannot prove a waiting-response state because one or more modeled response/status signals are missing or untrusted."
-        )
+        summary = "Request is active, but Live cannot prove a waiting-response state because one or more modeled response/status signals are missing or untrusted."
     elif request is True:
         status = LiveAdvancedDiagnosisStatus.WAITING_RESPONSE
         summary = "Request is active and all modeled trusted response/status signals are inactive."
@@ -389,9 +422,7 @@ def _diagnose_handshake(
         summary = "A trusted response state remains active while Request is false; this may be cleanup or a stuck handshake depending on PLC logic."
     elif request is False and missing_for_negative_conclusion:
         status = LiveAdvancedDiagnosisStatus.INDETERMINATE
-        summary = (
-            "Request is inactive, but Live cannot prove the handshake is idle because one or more modeled response/status signals are missing or untrusted."
-        )
+        summary = "Request is inactive, but Live cannot prove the handshake is idle because one or more modeled response/status signals are missing or untrusted."
     elif request is False:
         status = LiveAdvancedDiagnosisStatus.IDLE
         summary = "Request and all modeled trusted response/status signals are inactive."
