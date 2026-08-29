@@ -4,6 +4,7 @@ import inspect
 
 import devagent.live as live
 from devagent.live import assist_cli
+from devagent.live import recursive_assistant, recursive_diagnosis
 from devagent.live.recursive_assistant import RecursiveLiveCommissioningAssistant
 
 
@@ -51,8 +52,8 @@ def test_live_assist_parser_rejects_password_abbreviation_with_recursive_options
 def test_recursive_live_modules_expose_no_plc_control_calls():
     source = "\n".join(
         [
-            inspect.getsource(live.recursive_diagnosis),
-            inspect.getsource(live.recursive_assistant),
+            inspect.getsource(recursive_diagnosis),
+            inspect.getsource(recursive_assistant),
         ]
     ).casefold()
     for forbidden in (
