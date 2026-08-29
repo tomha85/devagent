@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Mapping
 
 from .errors import LiveConnectionError
-from .models import RuntimeValue
+from .models import BrowseNode, RuntimeValue
 from .opcua_client import ReadOnlyOpcUaClient
 from .security import LiveSecurityConfig, validate_opcua_endpoint
 
@@ -277,6 +277,41 @@ class MultiPlcConnectionManager:
         tasks = [asyncio.create_task(self._disconnect_isolated(plc_id)) for plc_id in self._plcs]
         results = await asyncio.gather(*tasks)
         return {status.plc_id: status for status in results}
+
+    async def browse(
+        self,
+        plc_id: str,
+        *,
+        max_depth: int = 4,
+        max_nodes: int = 500,
+    ) -> list[BrowseNode]:
+        entry = self._entry(plc_id)
+        async with entry.lock:
+            client = entry.client
+            if client is None or not bool(getattr(client, "connected", False)):
+                observed = self.status(plc_id)
+                raise LiveConnectionError(
+                    f"PLC {plc_id} session is not connected; state={observed.state.value}"
+                )
+            try:
+                nodes = await client.browse(
+                    max_depth=max_depth,
+                    max_nodes=max_nodes,
+                )
+            except Exception as exc:
+                safe = self._safe_error(entry, exc)
+                raw_state = str(getattr(client, "connection_state", "UNKNOWN")).strip().upper()
+                next_state = (
+                    PlcSessionState.RECONNECTING
+                    if raw_state in {"CONNECTING", "RECONNECTING"}
+                    else PlcSessionState.DEGRADED
+                )
+                self._set_state(entry, next_state, error=safe)
+                raise LiveConnectionError(
+                    f"PLC {plc_id} browse failed: {safe}"
+                ) from None
+            self._set_state(entry, PlcSessionState.CONNECTED)
+            return list(nodes)
 
     async def read(self, plc_id: str, node_id: str) -> RuntimeValue:
         entry = self._entry(plc_id)
