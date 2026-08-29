@@ -90,6 +90,30 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         self.history_collector: LiveHistoryCollector | None = None
         self.stateful_coverage = build_live_stateful_coverage(self.loaded.project)
 
+    def _preferred_history_tag_ids(self) -> tuple[str, ...]:
+        """Rank diagnostic signals ahead of unrelated mapped tags in bounded history."""
+        result: list[str] = []
+
+        def add_reference(reference: str) -> None:
+            tag = self.context.unique_tag_for_reference(reference)
+            if tag is not None and tag.id not in result:
+                result.append(tag.id)
+
+        # Outputs first because engineers commonly ask why an output stopped/changed.
+        for rule in self.context.rules:
+            add_reference(rule.output_tag)
+        # Then direct permissive/interlock dependencies.
+        for rule in self.context.rules:
+            for path in rule.paths:
+                for term in path.terms:
+                    add_reference(term.tag_reference)
+        # Finally state-machine state tags and transition/timer/counter guard dependencies.
+        for model in self.stateful_coverage.models:
+            for tag_id in required_stateful_tag_ids(self.context, model):
+                if tag_id not in result:
+                    result.append(tag_id)
+        return tuple(result)
+
     async def _start_history(self) -> None:
         if self.history_seconds <= 0 or self.reconciliation is None:
             return
@@ -101,6 +125,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             retention_seconds=self.history_seconds,
             poll_interval_seconds=self.history_poll_seconds,
             max_tags=self.history_max_tags,
+            preferred_tag_ids=self._preferred_history_tag_ids(),
         )
         await self.history_collector.start()
 
@@ -137,6 +162,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             (
                 f"Historical timeline: ENABLED retention={self.history_seconds:g}s "
                 f"poll={self.history_poll_seconds:g}s max_tags={self.history_max_tags} "
+                f"captured_tags={len(history.captured_tag_ids) if history else 0} "
                 f"cycles={history.cycles if history else 0}"
                 if self.history_seconds > 0
                 else "Historical timeline: OFF"
