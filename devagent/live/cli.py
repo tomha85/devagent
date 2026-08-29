@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Sequence
+from pathlib import Path
 
 from .cli_security import add_security_args, security_from_args
 from .errors import LiveError
@@ -51,6 +52,25 @@ def _build_parser() -> argparse.ArgumentParser:
     watch.add_argument("node_id", nargs="+")
     watch.add_argument("--count", type=int, default=5)
     watch.add_argument("--timeout", type=float, default=10.0)
+
+    commission = subparsers.add_parser(
+        "commission",
+        help=(
+            "Validate and run a bounded multi-PLC read-only commissioning workflow "
+            "from a JSON configuration."
+        ),
+    )
+    commission.add_argument("config", type=Path, help="Path to devagent-live-commission-v1 JSON config.")
+    commission.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate config, security files, engineering exports, and required tag IDs without connecting to PLCs.",
+    )
+    commission.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Write sanitized commissioning summary, mapping, evidence, and manifest artifacts here. Directory must not already exist.",
+    )
 
     sim = subparsers.add_parser("sim", help="Run the local DevAgent OPC UA qualification simulator.")
     sim.add_argument(
@@ -207,6 +227,58 @@ async def _run_watch(args: argparse.Namespace) -> int:
         await client.disconnect()
 
 
+async def _run_commission(args: argparse.Namespace) -> int:
+    # Lazy import keeps ordinary probe/browse/read/watch/sim startup independent
+    # from the vendor PLC engineering stack used to analyze commission exports.
+    from .commission import (
+        commissioning_summary,
+        load_commissioning_config,
+        run_loaded_commissioning_config,
+        write_commissioning_artifacts,
+    )
+
+    config = load_commissioning_config(args.config)
+    print("DEVAGENT LIVE COMMISSION")
+    print(f"Config: {config.source_path}")
+    print(f"Config SHA-256: {config.source_sha256}")
+    print("Mode: READ ONLY")
+    print(f"PLCs: {len(config.specs)}")
+    for spec in config.specs:
+        metadata = getattr(spec.engineering_project, "metadata", None)
+        vendor = getattr(metadata, "vendor", "UNKNOWN")
+        print(
+            f"[{spec.connection.plc_id}] {spec.connection.display_name} "
+            f"vendor={vendor} endpoint={spec.connection.endpoint} "
+            f"required_tags={len(spec.required_tag_ids)} "
+            f"auth={spec.connection.security.authentication_mode} "
+            f"security={spec.connection.security.channel_summary}"
+        )
+
+    if args.validate_only:
+        print("Validation: PASS")
+        print("Network connection: NOT ATTEMPTED")
+        return 0
+
+    result = await run_loaded_commissioning_config(config)
+    print()
+    print("Commissioning results:")
+    summary = commissioning_summary(config, result)
+    for item in summary["plcs"]:
+        error = f" error={item['error']}" if item["error"] else ""
+        print(
+            f"[{item['plc_id']}] state={item['state']} "
+            f"connection={item['connection_state']} "
+            f"current={item['definitive_current_evidence']} "
+            f"excluded={item['excluded_raw_evidence']} "
+            f"limitations={len(item['limitations'])}{error}"
+        )
+
+    if args.output_dir is not None:
+        written = write_commissioning_artifacts(args.output_dir, config, result)
+        print(f"Artifacts: {written}")
+    return 0 if result.all_complete else 2
+
+
 async def _run_sim(args: argparse.Namespace) -> int:
     simulator = OpcUaSimulator(args.endpoint, scenario=args.scenario)
     await simulator.start()
@@ -293,11 +365,16 @@ async def _run(args: argparse.Namespace) -> int:
         return await _run_snapshot(args)
     if args.command == "watch":
         return await _run_watch(args)
+    if args.command == "commission":
+        return await _run_commission(args)
     if args.command == "sim":
         return await _run_sim(args)
     if args.endpoint:
         return await _run_shell(args.endpoint, args)
-    raise ValueError("Use --endpoint for an interactive session, or choose probe/browse/read/snapshot/watch/sim.")
+    raise ValueError(
+        "Use --endpoint for an interactive session, or choose "
+        "probe/browse/read/snapshot/watch/commission/sim."
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -308,7 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nDevAgent Live interrupted; closing the OPC UA session.")
         return 130
-    except (LiveError, ValueError) as exc:
+    except (LiveError, OSError, ValueError) as exc:
         parser.exit(2, f"devagent live: {exc}\n")
 
 
