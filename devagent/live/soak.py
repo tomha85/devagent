@@ -58,6 +58,7 @@ class LiveSoakReport:
     plcs: tuple[LiveSoakPlcResult, ...]
     setup_error: str | None = None
     runtime_version: str | None = None
+    read_loop_duration_seconds: float = 0.0
 
     @property
     def status(self) -> LiveSoakStatus:
@@ -84,6 +85,7 @@ class LiveSoakReport:
             "runtime_version": self.runtime_version,
             "requested_duration_seconds": self.requested_duration_seconds,
             "actual_duration_seconds": round(self.actual_duration_seconds, 6),
+            "read_loop_duration_seconds": round(self.read_loop_duration_seconds, 6),
             "interval_seconds": self.interval_seconds,
             "thresholds": {
                 "min_current_ratio": self.min_current_ratio,
@@ -193,6 +195,7 @@ def _blocked_runtime_report(
         ),
         setup_error="DEPENDENCY:" + detail,
         runtime_version=runtime_version,
+        read_loop_duration_seconds=0.0,
     )
 
 
@@ -241,6 +244,8 @@ async def run_live_soak(
     requests: dict[str, tuple[str, ...]] = {}
     setup_error: str | None = None
     trust = LiveDataTrustLayer()
+    read_loop_started: float | None = None
+    read_loop_finished: float | None = None
 
     try:
         connect_statuses = await manager.connect_all()
@@ -248,7 +253,9 @@ async def run_live_soak(
             plc_id = spec.connection.plc_id
             connect = connect_statuses[plc_id]
             if not connect.connected or connect.state is not PlcSessionState.CONNECTED:
-                stats[plc_id].setup_error = connect.last_error or "initial connection did not reach CONNECTED"
+                stats[plc_id].setup_error = (
+                    connect.last_error or "initial connection did not reach CONNECTED"
+                )
                 continue
             try:
                 reconciliation = await reconcile_connected_project_tags(
@@ -276,7 +283,8 @@ async def run_live_soak(
         if not runnable:
             setup_error = "No PLC has a safely reconciled read set for the soak run."
         else:
-            deadline = started_clock + duration_seconds
+            read_loop_started = perf_counter()
+            deadline = read_loop_started + duration_seconds
             while perf_counter() < deadline:
                 cycle_started = perf_counter()
                 results = await manager.read_many(runnable)
@@ -301,10 +309,15 @@ async def run_live_soak(
                 memory_peak = max(memory_peak, _rss_mb())
                 remaining = interval_seconds - (perf_counter() - cycle_started)
                 if remaining > 0 and perf_counter() < deadline:
-                    await asyncio.sleep(min(remaining, max(0.0, deadline - perf_counter())))
+                    await asyncio.sleep(
+                        min(remaining, max(0.0, deadline - perf_counter()))
+                    )
+            read_loop_finished = perf_counter()
     except Exception as exc:
         setup_error = str(exc)
     finally:
+        if read_loop_started is not None and read_loop_finished is None:
+            read_loop_finished = perf_counter()
         final_statuses = {
             plc_id: manager.status(plc_id)
             for plc_id in manager.plc_ids
@@ -315,6 +328,11 @@ async def run_live_soak(
             pass
 
     actual_duration = perf_counter() - started_clock
+    read_loop_duration = (
+        max(0.0, read_loop_finished - read_loop_started)
+        if read_loop_started is not None and read_loop_finished is not None
+        else 0.0
+    )
     memory_peak = max(memory_peak, _rss_mb())
     memory_growth = max(0.0, memory_peak - memory_start)
     plc_results: list[LiveSoakPlcResult] = []
@@ -338,7 +356,9 @@ async def run_live_soak(
                 f"max consecutive error cycles {item.max_consecutive_errors} > allowed {max_consecutive_error_cycles}"
             )
         if not final.connected or final.state is not PlcSessionState.CONNECTED:
-            reasons.append(f"final session did not recover to CONNECTED ({final.state.value})")
+            reasons.append(
+                f"final session did not recover to CONNECTED ({final.state.value})"
+            )
         status = LiveSoakStatus.FAIL if reasons else LiveSoakStatus.PASS
         plc_results.append(
             LiveSoakPlcResult(
@@ -363,7 +383,8 @@ async def run_live_soak(
 
     if memory_growth > max_memory_growth_mb:
         suffix = (
-            f"RSS high-water growth {memory_growth:.1f} MiB exceeds allowed {max_memory_growth_mb:.1f} MiB."
+            f"RSS high-water growth {memory_growth:.1f} MiB exceeds allowed "
+            f"{max_memory_growth_mb:.1f} MiB."
         )
         setup_error = f"{setup_error}; {suffix}" if setup_error else suffix
 
@@ -382,6 +403,7 @@ async def run_live_soak(
         plcs=tuple(plc_results),
         setup_error=setup_error,
         runtime_version=runtime.version,
+        read_loop_duration_seconds=read_loop_duration,
     )
 
 
