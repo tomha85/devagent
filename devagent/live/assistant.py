@@ -30,7 +30,9 @@ from .manager import (
     PlcSessionState,
 )
 from .qa import LiveCommissioningAnswer, answer_commissioning_question
+from .question_resolution import resolve_explicit_tag_reference
 from .reconciled_evidence import build_reconciled_live_agent_evidence
+from .system_health import is_system_health_question
 from .tag_reconciliation import (
     LiveTagReconciliation,
     reconcile_connected_project_tags,
@@ -253,6 +255,10 @@ class LiveCommissioningAssistant:
         )
 
     def _is_overview_question(self, question: str) -> bool:
+        if is_system_health_question(question):
+            return False
+        if resolve_explicit_tag_reference(self.context, question) is not None:
+            return False
         lowered = question.casefold()
         return any(phrase in lowered for phrase in _OVERVIEW_PHRASES)
 
