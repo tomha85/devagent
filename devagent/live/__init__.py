@@ -28,11 +28,11 @@ from .diagnosis import (
     LivePathEvaluation,
     LivePathState,
     LiveQuestionTarget,
-    diagnose_output,
     observations_from_reconciled,
     required_tag_ids_for_output,
     resolve_question_target,
 )
+from .diagnosis_guard import diagnose_output
 from .engineering_context import (
     LiveEngineeringContext,
     LiveEngineeringTag,
