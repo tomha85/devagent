@@ -34,23 +34,11 @@ def _status_name(status: Any) -> str:
     return str(status)
 
 
-_TRANSIENT_RECONNECT_STATUS_NAMES = frozenset(
-    {
-        "BadCommunicationError",
-        "BadConnectionClosed",
-        "BadNoCommunication",
-        "BadSecureChannelClosed",
-        "BadServerHalted",
-        "BadServerNotConnected",
-        "BadSessionClosed",
-        "BadShutdown",
-        "BadTimeout",
-    }
-)
-
-
-def _is_transient_reconnect_status(status: Any) -> bool:
-    return _status_name(status) in _TRANSIENT_RECONNECT_STATUS_NAMES
+def _is_graceful_shutdown_status(status: Any) -> bool:
+    # A server can publish BadShutdown before the transport-loss callback has
+    # moved the client state away from CONNECTED. Other bad statuses remain
+    # fail-closed unless the public connection state already shows recovery.
+    return _status_name(status) == "BadShutdown"
 
 
 def _quality_from_status(status: Any) -> Quality:
@@ -419,7 +407,7 @@ class ReadOnlyOpcUaClient:
                     status = event.notification.Status
                     if status is not None and status.is_bad():
                         reconnecting = self.auto_reconnect and (
-                            _is_transient_reconnect_status(status)
+                            _is_graceful_shutdown_status(status)
                             or self.connection_state in {
                                 "CONNECTING",
                                 "DISCONNECTED",
