@@ -5,18 +5,16 @@ from typing import Mapping
 
 from devagent.providers import ModelProvider
 
-from .assistant import (
-    LiveAssistantReply,
-    LiveAssistantReplyKind,
-    LiveCommissioningAssistant,
+from .advanced_assistant import (
+    advanced_observation_map,
+    diagnose_advanced_target,
+    required_advanced_tag_ids,
+    resolve_advanced_target,
 )
+from .advanced_semantics import LiveAdvancedKind, build_live_advanced_coverage
+from .assistant import LiveAssistantReply, LiveAssistantReplyKind, LiveCommissioningAssistant
 from .control_guard import is_plc_control_request
-from .diagnosis import (
-    LiveDiagnosisStatus,
-    LiveObservedTag,
-    observations_from_reconciled,
-    resolve_question_target,
-)
+from .diagnosis import LiveDiagnosisStatus, LiveObservedTag, observations_from_reconciled, resolve_question_target
 from .diagnosis_guard import diagnose_output
 from .engineering_context import LiveLoadedEngineering, ProjectLoader, load_live_engineering_context
 from .errors import LiveConfigurationError
@@ -40,12 +38,7 @@ from .stateful_context import build_live_stateful_coverage, diagnose_live_statef
 
 
 class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
-    """Onsite assistant with bounded deterministic upstream and historical tracing.
-
-    DevAgent PLC remains the read-only engineering authority. This class owns onsite
-    state only: exact tag reconciliation, trusted live evidence, bounded recursive
-    blocker tracing, stateful/sequence context, and an optional bounded timeline.
-    """
+    """Onsite assistant with bounded deterministic upstream and historical tracing."""
 
     def __init__(
         self,
@@ -89,9 +82,9 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         self.history_max_tags = history_max_tags
         self.history_collector: LiveHistoryCollector | None = None
         self.stateful_coverage = build_live_stateful_coverage(self.loaded.project)
+        self.advanced_coverage = build_live_advanced_coverage(self.loaded.project, self.context)
 
     def _preferred_history_tag_ids(self) -> tuple[str, ...]:
-        """Rank diagnostic signals ahead of unrelated mapped tags in bounded history."""
         result: list[str] = []
 
         def add_reference(reference: str) -> None:
@@ -99,19 +92,22 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             if tag is not None and tag.id not in result:
                 result.append(tag.id)
 
-        # Outputs first because engineers commonly ask why an output stopped/changed.
         for rule in self.context.rules:
             add_reference(rule.output_tag)
-        # Then direct permissive/interlock dependencies.
         for rule in self.context.rules:
             for path in rule.paths:
                 for term in path.terms:
                     add_reference(term.tag_reference)
-        # Finally state-machine state tags and transition/timer/counter guard dependencies.
         for model in self.stateful_coverage.models:
             for tag_id in required_stateful_tag_ids(self.context, model):
                 if tag_id not in result:
                     result.append(tag_id)
+        for comparison in self.advanced_coverage.numeric_comparisons:
+            for reference in comparison.references:
+                add_reference(reference)
+        for model in self.advanced_coverage.models:
+            for reference in model.references:
+                add_reference(reference)
         return tuple(result)
 
     async def _start_history(self) -> None:
@@ -160,6 +156,18 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
                 f"state_machines={self.stateful_coverage.state_machines})"
             ),
             (
+                "Advanced semantics: "
+                f"numeric={self.advanced_coverage.count(LiveAdvancedKind.NUMERIC_COMPARISON)} "
+                f"oneshot={self.advanced_coverage.count(LiveAdvancedKind.ONE_SHOT)} "
+                f"latch={self.advanced_coverage.count(LiveAdvancedKind.LATCH)} "
+                f"handshake={self.advanced_coverage.count(LiveAdvancedKind.HANDSHAKE)} "
+                f"aoi_fb={self.advanced_coverage.count(LiveAdvancedKind.AOI_FB)} "
+                f"fault_code={self.advanced_coverage.count(LiveAdvancedKind.FAULT_CODE)} "
+                f"sequencer={self.advanced_coverage.count(LiveAdvancedKind.SEQUENCER)} "
+                f"motion={self.advanced_coverage.count(LiveAdvancedKind.MOTION)} "
+                f"pid={self.advanced_coverage.count(LiveAdvancedKind.PID)}"
+            ),
+            (
                 f"Historical timeline: ENABLED retention={self.history_seconds:g}s "
                 f"poll={self.history_poll_seconds:g}s max_tags={self.history_max_tags} "
                 f"captured_tags={len(history.captured_tag_ids) if history else 0} "
@@ -180,6 +188,8 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         if output is None and self._can_reuse_last_target(text):
             output = self._last_target
         if output is None:
+            if resolve_advanced_target(self.advanced_coverage, text, context=self.context).found:
+                return None
             return self._target_limitation_reply(
                 text,
                 status=target.status or LiveDiagnosisStatus.TARGET_NOT_FOUND,
@@ -203,10 +213,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
-        window = min(
-            requested_history_seconds(text),
-            self.history_seconds,
-        )
+        window = min(requested_history_seconds(text), self.history_seconds)
         diagnosis = self.history_collector.store.diagnose_recent_transition(
             self.context,
             output,
@@ -245,6 +252,50 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             target_output=model.name,
         )
 
+    async def _advanced_reply(self, text: str) -> LiveAssistantReply | None:
+        target = resolve_advanced_target(self.advanced_coverage, text, context=self.context)
+        if not target.found:
+            return None
+        if is_historical_question(text):
+            return LiveAssistantReply(
+                question=text,
+                kind=LiveAssistantReplyKind.LIMITATION,
+                text=(
+                    "The advanced semantic target was identified, but a time-targeted historical conclusion for this model is not proven by the current bounded engine. "
+                    "DevAgent will not substitute present OPC UA state for the requested past event. Use current-state diagnosis or an explicit Boolean output timeline with captured trusted transitions."
+                ),
+                target_output=target.name,
+            )
+        required_ids = required_advanced_tag_ids(self.context, target)
+        observations = {}
+        if required_ids and self.reconciliation is not None:
+            try:
+                reconciled = await build_reconciled_live_agent_evidence(
+                    self.manager,
+                    self.reconciliation,
+                    required_tag_ids=required_ids,
+                    require_all=False,
+                )
+                observations = advanced_observation_map(self.context, reconciled)
+            except LiveConfigurationError:
+                observations = {}
+        history = self.history_collector.store if self.history_collector is not None else None
+        diagnosis = diagnose_advanced_target(
+            self.context,
+            self.advanced_coverage,
+            target,
+            observations,
+            history=history,
+        )
+        if diagnosis is None:
+            return None
+        return LiveAssistantReply(
+            question=text,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text=diagnosis.render_text(),
+            target_output=target.name,
+        )
+
     async def answer(self, question: str) -> LiveAssistantReply:
         text = str(question or "").strip()
         if not text:
@@ -258,21 +309,21 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             return self._control_refusal_reply(text)
         if not self.connected or self.reconciliation is None:
             await self.start()
-
         if self._is_overview_question(text):
             return LiveAssistantReply(
                 question=text,
                 kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
                 text=self._overview_text(),
             )
-
         historical = await self._historical_reply(text)
         if historical is not None:
             return historical
-
         stateful = await self._stateful_reply(text)
         if stateful is not None:
             return stateful
+        advanced = await self._advanced_reply(text)
+        if advanced is not None:
+            return advanced
 
         target = resolve_question_target(self.context, text)
         output = target.output_tag
@@ -309,11 +360,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             observations = self._mapping_only_observations()
 
         diagnosis = diagnose_output(self.context, output, observations)
-        answer = answer_commissioning_question(
-            text,
-            diagnosis,
-            provider=self.provider,
-        )
+        answer = answer_commissioning_question(text, diagnosis, provider=self.provider)
         recursive = trace_recursive_diagnosis(
             self.context,
             diagnosis,
@@ -321,19 +368,16 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
-
         combined = answer.render_text()
         if diagnosis.source_locators:
             combined += "\n\nTarget PLC source:"
             combined += "".join(f"\n- {locator}" for locator in diagnosis.source_locators)
         if recursive.roots or recursive.limitations:
             combined += "\n\n" + recursive.render_text()
-
         if len(recursive.roots) == 1:
             immediate = recursive.roots[0].signal
             if self.context.rules_for_output(immediate):
                 self._last_target = immediate
-
         return LiveAssistantReply(
             question=text,
             kind=LiveAssistantReplyKind.DIAGNOSIS,
@@ -360,10 +404,7 @@ def create_recursive_live_commissioning_assistant(
     history_poll_seconds: float = 1.0,
     history_max_tags: int = 64,
 ) -> RecursiveLiveCommissioningAssistant:
-    loaded = load_live_engineering_context(
-        Path(project_path),
-        project_loader=project_loader,
-    )
+    loaded = load_live_engineering_context(Path(project_path), project_loader=project_loader)
     return RecursiveLiveCommissioningAssistant(
         loaded,
         connection,
@@ -380,7 +421,4 @@ def create_recursive_live_commissioning_assistant(
     )
 
 
-__all__ = [
-    "RecursiveLiveCommissioningAssistant",
-    "create_recursive_live_commissioning_assistant",
-]
+__all__ = ["RecursiveLiveCommissioningAssistant", "create_recursive_live_commissioning_assistant"]
