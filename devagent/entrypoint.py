@@ -8,6 +8,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Route domain subcommands without changing the existing software CLI."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "live":
+        from devagent.live.cli import main as live_main
+
+        return live_main(arguments[1:])
     if len(arguments) >= 2 and arguments[0] == "plc" and arguments[1] == "inspect":
         from devagent.plc.inspect_cli import main as plc_inspect_main
 

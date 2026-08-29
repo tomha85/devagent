@@ -29,7 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+live = ["asyncua>=2.0,<3"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "asyncua>=2.0,<3"]
 
 [project.scripts]
 devagent = "devagent.entrypoint:main"
