@@ -16,56 +16,79 @@ DevAgent runs against a developer's local repository or supported exported PLC e
 
 For PLC engineering, **DevAgent PLC** provides a vendor-dispatched offline/pre-site review workflow for **Siemens TIA Portal**, **Rockwell Studio 5000 / Logix Designer**, and **Schneider Electric EcoStruxure Control Expert / Unity Pro**. It normalizes supported exports into a canonical PLC model, analyzes logic and dependencies, verifies requirements where evidence permits, detects engineering risks, generates FAT procedures, evaluates regression impact, produces recommendations and evidence, and reports release readiness without pretending that static analysis replaces simulator, HIL, or real-PLC execution.
 
-For onsite commissioning, **DevAgent Live** is a separate **read-only** workflow. It consumes the stable canonical PLC engineering context without changing DevAgent PLC authority, connects to OPC UA endpoints, reconciles engineering tags to runtime nodes, rejects bad/stale/replayed/ambiguous evidence, and supports deterministic blocker diagnosis, recursive tracing, stateful/historical context, numeric/analog comparisons, handshakes, AOI/FB context, fault codes, sequencers, motion/PID context, and bounded AI explanation. It does not provide PLC write, force, reset, bypass, download, mode-change, start/stop, or other control authority.
+For onsite commissioning, **DevAgent Live** is a separate first-class **read-only product branch**. It owns its own onsite commissioning workflow, connects to OPC UA endpoints, reconciles engineering tags to runtime nodes, rejects bad/stale/replayed/ambiguous evidence, and supports deterministic blocker diagnosis, recursive tracing, stateful/historical context, numeric/analog comparisons, handshakes, AOI/FB context, fault codes, sequencers, motion/PID context, and bounded AI explanation. Live may consume stable canonical PLC engineering context through a read-only adapter contract, but it is not a sub-branch of DevAgent PLC and does not inherit FAT or release-readiness authority.
 
 For a normal verified software run the deterministic harness prints the complete engineering report first, then commits reviewed paths and fast-forward pushes the developer's current non-protected branch. If the developer starts on `main`, `master`, or `trunk`, DevAgent creates a new safe branch instead. Runtime DevAgent never creates a pull request, merges, rebases, force-pushes, or deploys.
 
 ## General Architecture
 
+DevAgent has **three sibling product branches** directly under the same evidence-driven core:
+
 ```text
                                       DevAgent Core
                                            │
-                 ┌─────────────────────────┼─────────────────────────┐
-                 │                         │                         │
-        Software Engineering         DevAgent PLC              DevAgent Live
-          Repository workflow       Offline / pre-site        Onsite commissioning
-                 │                  engineering authority      READ ONLY consumer
-                 │                         │                         │
-        Local / GitHub Repo      PLC engineering export             │
-                 │                         │                         │
-        Understand / Plan       ┌──────────┼──────────┐              │
-                 │              │          │          │              │
-          Modify Code        Siemens    Rockwell   Schneider         │
-                 │           TIA        Studio     Control           │
-        Build / Test /        exports    5000/L5X   Expert/XEF       │
-            Review              │          │          │              │
-                 │              └──────────┼──────────┘              │
-        Engineering Report               │                          │
-                 │               Canonical PLC model ───────────────┤
-        Commit / Push Branch             │                          │
-                 │               Analyze / Verify                   │
-      Developer / Repo Integration       │                          │
-                                  FAT Plan / Report                  │
-                                  Release Readiness                  │
-                                                                     │
-                                                        OPC UA endpoint(s)
-                                                                     │
-                                                     Map / Trust / Observe
-                                                                     │
-                                               Commissioning Diagnosis / Q&A
+              ┌────────────────────────────┼────────────────────────────┐
+              │                            │                            │
+              ▼                            ▼                            ▼
+     SOFTWARE ENGINEERING            DEVAGENT PLC                 DEVAGENT LIVE
+      Product Branch #1             Product Branch #2            Product Branch #3
+      Repository workflow           Offline / pre-site           Onsite commissioning
+                                    engineering + FAT            READ ONLY
+              │                            │                            │
+      Local / GitHub Repo          PLC engineering export        Engineering context
+              │                            │                     + OPC UA endpoint(s)
+              ▼                            ▼                            │
+     Understand / Plan          Vendor-dispatched import                │
+              │                    │        │        │                  │
+              ▼                 Siemens  Rockwell  Schneider             │
+        Modify Code                  │        │        │                  │
+              │                      └────────┼────────┘                  │
+              ▼                               ▼                           │
+     Build / Test / Review          Canonical PLC Engineering Model       │
+              │                               │                           │
+              ▼                               ▼                           │
+      Engineering Report          Analyze / Verify / FAT                  │
+              │                               │                           │
+              ▼                               ▼                           │
+    Commit / Push Safe Branch      FAT Report / Release Readiness         │
+              │                                                           │
+              ▼                                                           ▼
+   Developer / Repo Integration                          Map / Trust / Observe / Diagnose
 ```
 
-**One DevAgent core, three intentionally different workflows.** Software Engineering works inside a local/GitHub repository and can understand, modify, test, review, report, and publish a verified branch. **DevAgent PLC is the offline engineering/FAT authority. DevAgent Live is the onsite commissioning consumer.** Live may reuse the canonical PLC engineering model read-only, but it must not modify or duplicate PLC theorem/FAT/release-readiness behavior simply to add onsite diagnosis.
+**DevAgent Live is not a child of DevAgent PLC.** The three branches are separate at the product level:
+
+```text
+Software Engineering = repository engineering branch
+DevAgent PLC          = offline engineering / FAT / release-readiness branch
+DevAgent Live         = onsite read-only commissioning branch
+```
+
+DevAgent PLC and DevAgent Live may share engineering information through a bounded interface, but that interface is a **data contract, not a hierarchy**:
+
+```text
+DevAgent PLC canonical engineering model
+                │
+                │  READ-ONLY ENGINEERING CONTEXT CONTRACT
+                ▼
+        DevAgent Live adapter
+                +
+        OPC UA runtime evidence
+                ↓
+     Commissioning diagnosis
+```
+
+This keeps vendor theorem/FAT ownership in DevAgent PLC while keeping OPC UA sessions, runtime trust, history, onsite diagnosis, and commissioning Q&A owned by DevAgent Live.
 
 In simple terms:
 
 ```text
 Software:   Working Repo → Change → Test → Review → Report → Commit/Push
 PLC:        PLC Export   → Analyze → Verify → FAT / Evidence → Release Readiness
-Live:       PLC Context + OPC UA → Trust → Map → Diagnose → Explain / Next Check
+Live:       Engineering Context + OPC UA → Trust → Map → Diagnose → Explain / Next Check
 ```
 
-For the expanded authority boundaries and data flow, see [General Architecture](docs/general-architecture.md).
+For the expanded branch boundaries, authority model, and data contracts, see [General Architecture](docs/general-architecture.md).
 
 ## Why DevAgent?
 
@@ -283,7 +306,7 @@ Binary data, invalid UTF-8, secret-like paths, and files above the input-size bo
 
 DevAgent also provides an **offline PLC engineering review, requirement-verification, regression-analysis, risk-review, and FAT-planning workflow** through `devagent plc` for Siemens, Rockwell, and Schneider engineering exports.
 
-The PLC workflow is intended for controls/PLC engineers who want to review exported engineering artifacts before FAT, site travel, commissioning, or release. DevAgent PLC does **not** connect to, upload to, download to, force, start, stop, or control a PLC, TIA Portal, Studio 5000, Control Expert, PLCSIM, Logix Echo, HIL bench, or production machine. Runtime FAT and commissioning execution remain owned by the PLC engineer; onsite read-only assistance belongs to the separate `devagent live` workflow.
+The PLC workflow is intended for controls/PLC engineers who want to review exported engineering artifacts before FAT, site travel, commissioning, or release. DevAgent PLC does **not** connect to, upload to, download to, force, start, stop, or control a PLC, TIA Portal, Studio 5000, Control Expert, PLCSIM, Logix Echo, HIL bench, or production machine. Runtime FAT and commissioning execution remain owned by the PLC engineer; onsite read-only assistance belongs to the separate `devagent live` product branch.
 
 ### 1. Export the PLC project
 
@@ -463,23 +486,23 @@ For signed runtime-result, policy, trust-store, and approval workflows, and a co
 
 ## DevAgent Live onsite commissioning quick start
 
-Use **DevAgent Live** when the engineer is onsite and needs to understand the controller/system, inspect trusted runtime state, diagnose a blocked condition, trace modeled logic upstream, inspect recent trusted transitions, or identify the next evidence-backed check.
+Use **DevAgent Live** as the separate onsite product branch when the engineer needs to understand the running controller/system, inspect trusted runtime state, diagnose a blocked condition, trace modeled logic upstream, inspect recent trusted transitions, or identify the next evidence-backed check.
 
 DevAgent Live is intentionally separate from DevAgent PLC:
 
 ```text
-DevAgent PLC  = offline engineering / FAT authority
-DevAgent Live = onsite read-only commissioning consumer
+DevAgent PLC  = Product Branch #2 — offline engineering / FAT authority
+DevAgent Live = Product Branch #3 — onsite read-only commissioning
 ```
 
-For the strongest commissioning diagnosis, provide both the supported PLC engineering export and the OPC UA endpoint:
+For the strongest commissioning diagnosis, provide both the supported PLC engineering export/context and the OPC UA endpoint:
 
 ```text
-PLC engineering project/export
+Read-only engineering context
             +
       OPC UA endpoint
             ↓
-engineering context + trusted runtime state
+       DevAgent Live
             ↓
 commissioning diagnosis
 ```
@@ -863,7 +886,7 @@ The current core includes evidence-backed `VERIFIED` / `PARTIALLY_VERIFIED` / `B
 
 Current `main` also includes vendor-dispatched **DevAgent PLC** engineering review for **Rockwell Studio 5000 full-project `.L5X`**, **Siemens TIA Portal exported engineering artifacts**, and **Schneider Electric EcoStruxure Control Expert / Unity Pro XML engineering exports with `.XEF` preferred**. All three feed the canonical PLC engineering/review/FAT/report pipeline while preserving vendor-specific proof boundaries. Siemens qualification is cumulative through its V9 support-accounting stack. Schneider includes V9 support closeout plus additive V10 real-ST local-action modeling and the PLC Report Contract V1, while unsupported or stateful/runtime-dependent regions remain explicitly `PARTIAL`, `OPAQUE`, `PROTECTED`, or FAT-gated. Rockwell remains the mature Studio 5000 path. These are bounded static engineering capabilities; they do not claim simulator, HIL, field wiring, process physics, or real-controller execution unless corresponding runtime evidence is supplied.
 
-Current `main` also includes the separate **DevAgent Live** read-only onsite commissioning branch. Live consumes canonical PLC engineering context without modifying DevAgent PLC authority, reconciles engineering tags to OPC UA runtime nodes, applies trust/freshness/replay gates, and supports direct/recursive blocker diagnosis, stateful and historical context, numeric/analog comparisons, one-shot/latch awareness, handshake diagnosis, AOI/FB context, fault-code observations, generic sequencer context, motion/PID context, and UDT/array structure context. Unsupported or insufficiently evidenced behavior remains bounded/indeterminate. Live's Commercial V1 field-readiness gate still requires real OPC UA 14/14, real three-vendor endpoint evidence, production doctor evidence, and a qualifying read-only soak; merged feature coverage is not itself a claim of completed field certification.
+Current `main` also includes the independent **DevAgent Live** onsite product branch. Live consumes canonical PLC engineering context through a read-only adapter contract without modifying DevAgent PLC authority, reconciles engineering tags to OPC UA runtime nodes, applies trust/freshness/replay gates, and supports direct/recursive blocker diagnosis, stateful and historical context, numeric/analog comparisons, one-shot/latch awareness, handshake diagnosis, AOI/FB context, fault-code observations, generic sequencer context, motion/PID context, and UDT/array structure context. Unsupported or insufficiently evidenced behavior remains bounded/indeterminate. Live's Commercial V1 field-readiness gate still requires real OPC UA 14/14, real three-vendor endpoint evidence, production doctor evidence, and a qualifying read-only soak; merged feature coverage is not itself a claim of completed field certification.
 
 These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI or documented local qualification.
 
