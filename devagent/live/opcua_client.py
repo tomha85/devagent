@@ -215,7 +215,7 @@ class ReadOnlyOpcUaClient:
             message = self.security.redact(str(exc))
             raise LiveConnectionError(
                 f"Unable to discover OPC UA endpoint {self.endpoint}: {message}"
-            ) from exc
+            ) from None
 
         summaries: list[EndpointSummary] = []
         for endpoint in endpoints:
@@ -307,7 +307,7 @@ class ReadOnlyOpcUaClient:
             message = self.security.redact(str(exc))
             raise LiveConnectionError(
                 f"Unable to connect OPC UA session {self.endpoint}: {message}"
-            ) from exc
+            ) from None
         self._client = client
 
     async def disconnect(self) -> None:
@@ -320,7 +320,7 @@ class ReadOnlyOpcUaClient:
             message = self.security.redact(str(exc))
             raise LiveConnectionError(
                 f"Error while closing OPC UA session {self.endpoint}: {message}"
-            ) from exc
+            ) from None
 
     def _require_connected(self) -> Any:
         if self._client is None:
