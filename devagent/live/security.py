@@ -92,6 +92,17 @@ class LiveSecurityConfig:
                 "Username/password authentication requires security mode SignAndEncrypt"
             )
 
+        # Normalize home-directory references once so validation and the
+        # asyncua security loader use exactly the same certificate/key paths.
+        for attribute in (
+            "client_certificate",
+            "client_private_key",
+            "server_certificate",
+        ):
+            value = getattr(self, attribute)
+            if value is not None:
+                object.__setattr__(self, attribute, str(Path(value).expanduser()))
+
     @property
     def secure_channel(self) -> bool:
         return self.security_policy is not None
@@ -115,7 +126,7 @@ class LiveSecurityConfig:
             ("server certificate", self.server_certificate),
         ):
             assert value is not None
-            path = Path(value).expanduser()
+            path = Path(value)
             if not path.is_file():
                 raise LiveConfigurationError(f"OPC UA {label} file does not exist: {path}")
 
