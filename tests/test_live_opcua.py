@@ -4,13 +4,16 @@ import asyncio
 import socket
 
 import pytest
+from cryptography.x509.oid import ExtendedKeyUsageOID
 
 asyncua = pytest.importorskip("asyncua")
 
 from asyncua import Client
+from asyncua.crypto.cert_gen import setup_self_signed_certificate
 from devagent.live.errors import LiveConnectionError
 from devagent.live.models import Quality, TrustState
 from devagent.live.opcua_client import ReadOnlyOpcUaClient
+from devagent.live.security import LiveSecurityConfig
 from devagent.live.simulator import OpcUaSimulator
 
 
@@ -19,6 +22,26 @@ def _free_endpoint() -> str:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     return f"opc.tcp://127.0.0.1:{port}/devagent/simulator/"
+
+
+async def _create_test_certificate(
+    private_key,
+    certificate,
+    application_uri: str,
+    *,
+    server: bool,
+) -> None:
+    extended = [ExtendedKeyUsageOID.CLIENT_AUTH]
+    if server:
+        extended.append(ExtendedKeyUsageOID.SERVER_AUTH)
+    await setup_self_signed_certificate(
+        private_key,
+        certificate,
+        application_uri,
+        socket.gethostname(),
+        extended,
+        {"organizationName": "DevAgent Qualification"},
+    )
 
 
 def test_unreachable_endpoint_fails_closed() -> None:
@@ -203,5 +226,113 @@ def test_simulator_reconnect_restores_subscription_after_server_restart() -> Non
             if replacement is not None:
                 await replacement.stop()
             await first.stop()
+
+    asyncio.run(scenario())
+
+
+def test_secure_username_password_and_server_certificate_pinning(tmp_path) -> None:
+    async def scenario() -> None:
+        endpoint = _free_endpoint()
+        server_key = tmp_path / "server-key.pem"
+        server_cert = tmp_path / "server-cert.der"
+        client_key = tmp_path / "client-key.pem"
+        client_cert = tmp_path / "client-cert.der"
+        wrong_server_key = tmp_path / "wrong-server-key.pem"
+        wrong_server_cert = tmp_path / "wrong-server-cert.der"
+        client_uri = "urn:devagent:qualification:secure-client"
+
+        await _create_test_certificate(
+            server_key,
+            server_cert,
+            OpcUaSimulator.APPLICATION_URI,
+            server=True,
+        )
+        await _create_test_certificate(
+            client_key,
+            client_cert,
+            client_uri,
+            server=False,
+        )
+        await _create_test_certificate(
+            wrong_server_key,
+            wrong_server_cert,
+            "urn:devagent:qualification:wrong-server",
+            server=True,
+        )
+
+        async with OpcUaSimulator(
+            endpoint,
+            scenario="blocker",
+            username="operator",
+            password="correct-password",
+            server_certificate=str(server_cert),
+            server_private_key=str(server_key),
+            security_policy="Basic256Sha256",
+            security_mode="SignAndEncrypt",
+        ) as simulator:
+            assert simulator.node_ids is not None
+
+            good_security = LiveSecurityConfig(
+                username="operator",
+                password="correct-password",
+                security_policy="Basic256Sha256",
+                security_mode="SignAndEncrypt",
+                client_certificate=str(client_cert),
+                client_private_key=str(client_key),
+                server_certificate=str(server_cert),
+                application_uri=client_uri,
+            )
+            client = ReadOnlyOpcUaClient(
+                endpoint,
+                auto_reconnect=False,
+                security=good_security,
+            )
+            await client.connect()
+            try:
+                state = await client.read(simulator.node_ids.machine_state)
+                assert state.value == "BLOCKED"
+                assert state.quality is Quality.GOOD
+                assert state.trust is TrustState.CURRENT
+                assert client.authentication_mode == "USERNAME_PASSWORD"
+                assert client.security_summary == "Basic256Sha256/SignAndEncrypt"
+            finally:
+                await client.disconnect()
+
+            bad_password = LiveSecurityConfig(
+                username="operator",
+                password="wrong-password",
+                security_policy="Basic256Sha256",
+                security_mode="SignAndEncrypt",
+                client_certificate=str(client_cert),
+                client_private_key=str(client_key),
+                server_certificate=str(server_cert),
+                application_uri=client_uri,
+            )
+            rejected = ReadOnlyOpcUaClient(
+                endpoint,
+                auto_reconnect=False,
+                security=bad_password,
+            )
+            with pytest.raises(LiveConnectionError) as bad_password_error:
+                await rejected.connect()
+            assert "wrong-password" not in str(bad_password_error.value)
+
+            wrong_pin = LiveSecurityConfig(
+                username="operator",
+                password="correct-password",
+                security_policy="Basic256Sha256",
+                security_mode="SignAndEncrypt",
+                client_certificate=str(client_cert),
+                client_private_key=str(client_key),
+                server_certificate=str(wrong_server_cert),
+                application_uri=client_uri,
+            )
+            untrusted = ReadOnlyOpcUaClient(
+                endpoint,
+                auto_reconnect=False,
+                security=wrong_pin,
+            )
+            with pytest.raises(LiveConnectionError):
+                await untrusted.connect()
 
     asyncio.run(scenario())
