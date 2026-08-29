@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
-import importlib.util
 import json
 import shutil
 import sys
@@ -16,6 +15,7 @@ from typing import Any
 from .engineering_context import load_live_engineering_context
 from .manager import MultiPlcConnectionManager
 from .opcua_client import ReadOnlyOpcUaClient
+from .runtime_environment import detect_live_opcua_runtime
 from .security import LiveSecurityConfig
 from .workflow import LiveCommissioningWorkflow
 
@@ -116,7 +116,7 @@ def _read_only_check() -> LiveDoctorCheck:
         "DR-005",
         "Read-only PLC boundary",
         LiveDoctorStatus.PASS,
-        "Client, manager, and commissioning workflow expose no PLC write/control methods.",
+        "Client, multi-PLC manager, and commissioning workflow expose no PLC write/control methods.",
     )
 
 
@@ -163,18 +163,13 @@ async def run_live_doctor(
         )
     )
 
-    asyncua_version = _version("asyncua") if importlib.util.find_spec("asyncua") is not None else None
-    asyncua_ok = _major(asyncua_version) == 2
+    runtime = detect_live_opcua_runtime()
     checks.append(
         LiveDoctorCheck(
             "DR-002",
             "asyncua production runtime",
-            LiveDoctorStatus.PASS if asyncua_ok else LiveDoctorStatus.BLOCKED,
-            (
-                f"asyncua {asyncua_version} is inside supported >=2,<3 range."
-                if asyncua_ok
-                else "asyncua 2.x is not installed/qualified; install the DevAgent live extra before real OPC UA use."
-            ),
+            LiveDoctorStatus.PASS if runtime.supported else LiveDoctorStatus.BLOCKED,
+            runtime.detail,
         )
     )
 
@@ -251,19 +246,20 @@ async def run_live_doctor(
                 "No real OPC UA endpoint was supplied to doctor.",
             )
         )
-    elif not asyncua_ok:
+    elif not runtime.supported:
         checks.append(
             LiveDoctorCheck(
                 "DR-008",
                 "Real OPC UA endpoint",
                 LiveDoctorStatus.BLOCKED,
-                "Endpoint check cannot run until supported asyncua 2.x is installed.",
+                "Endpoint check cannot run until supported asyncua >=2,<3 is installed.",
             )
         )
     else:
+        configured_security = security or LiveSecurityConfig()
         client = ReadOnlyOpcUaClient(
             endpoint,
-            security=security or LiveSecurityConfig(),
+            security=configured_security,
             auto_reconnect=False,
         )
         try:
@@ -281,7 +277,7 @@ async def run_live_doctor(
                 )
             )
         except Exception as exc:
-            safe = (security or LiveSecurityConfig()).redact(str(exc))
+            safe = configured_security.redact(str(exc))
             checks.append(
                 LiveDoctorCheck(
                     "DR-008",
