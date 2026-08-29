@@ -129,3 +129,79 @@ def test_read_only_client_has_no_write_or_method_call_surface() -> None:
     client = ReadOnlyOpcUaClient("opc.tcp://127.0.0.1:4840/")
     for prohibited in ("write", "write_value", "set_value", "call_method", "force", "reset"):
         assert not hasattr(client, prohibited)
+
+
+def test_simulator_reconnect_restores_subscription_after_server_restart() -> None:
+    async def scenario() -> None:
+        endpoint = _free_endpoint()
+        first = OpcUaSimulator(endpoint, scenario="normal", update_interval_seconds=1.0)
+        replacement: OpcUaSimulator | None = None
+        collect_task: asyncio.Task[list] | None = None
+        client = ReadOnlyOpcUaClient(
+            endpoint,
+            timeout_seconds=0.25,
+            auto_reconnect=True,
+            reconnect_max_delay_seconds=0.25,
+            reconnect_request_timeout_seconds=5.0,
+        )
+
+        await first.start()
+        assert first.node_ids is not None
+        production_count_id = first.node_ids.production_count
+        await client.connect()
+        try:
+            collect_task = asyncio.create_task(
+                client.collect_changes(
+                    [production_count_id],
+                    count=3,
+                    timeout_seconds=10.0,
+                    publishing_interval_ms=50.0,
+                    sampling_interval_ms=20.0,
+                )
+            )
+
+            # ProductionCount changes only once per second on the first server.
+            # The subscription must still be incomplete when the outage begins.
+            await asyncio.sleep(0.40)
+            assert collect_task.done() is False
+
+            await first.stop()
+
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while client.connection_state == "CONNECTED":
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.05)
+            assert client.connection_state in {"DISCONNECTED", "RECONNECTING"}
+
+            replacement = OpcUaSimulator(endpoint, scenario="normal", update_interval_seconds=0.05)
+            await replacement.start()
+            assert replacement.node_ids is not None
+            assert replacement.node_ids.production_count == production_count_id
+
+            await client.wait_until_connected(timeout_seconds=5.0)
+            assert client.connected is True
+
+            changes = await asyncio.wait_for(collect_task, timeout=5.0)
+            assert len(changes) == 3
+            assert all(change.node_id == production_count_id for change in changes)
+            assert all(change.quality is Quality.GOOD for change in changes)
+            assert any(isinstance(change.value, int) and change.value >= 1 for change in changes)
+
+            recovered = await client.read(production_count_id)
+            assert isinstance(recovered.value, int)
+            assert recovered.quality is Quality.GOOD
+            assert recovered.trust is TrustState.CURRENT
+        finally:
+            if collect_task is not None and not collect_task.done():
+                collect_task.cancel()
+                try:
+                    await collect_task
+                except asyncio.CancelledError:
+                    pass
+            await client.disconnect()
+            if replacement is not None:
+                await replacement.stop()
+            await first.stop()
+
+    asyncio.run(scenario())
