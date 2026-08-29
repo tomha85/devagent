@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devagent-ai"
-version = "0.8.8"
+version = "0.8.9"
 description = "Evidence-driven local autonomous software engineering agent"
 readme = "README.md"
 requires-python = ">=3.10"
