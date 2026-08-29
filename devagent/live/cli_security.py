@@ -12,6 +12,9 @@ from .security import (
 
 
 def add_security_args(parser: argparse.ArgumentParser) -> None:
+    # Security-related long options must never be prefix-matched. Without this,
+    # argparse can interpret a literal --password flag as --password-env.
+    parser.allow_abbrev = False
     group = parser.add_argument_group("OPC UA security")
     group.add_argument(
         "--username",
