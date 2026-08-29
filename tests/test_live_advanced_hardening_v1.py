@@ -47,7 +47,7 @@ def test_rll_comparator_truth_does_not_claim_output_conflict():
     assert any("one rung condition" in item for item in diagnosis.limitations)
 
 
-def test_direct_assignment_result_mismatch_still_fails_as_logic_conflict():
+def test_direct_assignment_result_mismatch_is_indeterminate_without_atomic_unique_writer_proof():
     comparison = LiveNumericComparison(
         id="ST",
         result_tag="Overspeed",
@@ -66,17 +66,19 @@ def test_direct_assignment_result_mismatch_still_fails_as_logic_conflict():
             "overspeed": _obs("O", "Overspeed", False),
         },
     )
-    assert diagnosis.status is LiveAdvancedDiagnosisStatus.LOGIC_CONFLICT
+    assert diagnosis.status is LiveAdvancedDiagnosisStatus.INDETERMINATE
+    assert any("not a proven atomic PLC scan" in item for item in diagnosis.limitations)
 
 
-def test_recursive_assistant_passes_canonical_context_to_advanced_observation_map():
+def test_recursive_assistant_passes_canonical_context_to_advanced_observation_map_and_resolver():
     source = inspect.getsource(recursive_assistant.RecursiveLiveCommissioningAssistant._advanced_reply)
+    assert "resolve_advanced_target(self.advanced_coverage, text, context=self.context)" in source
     assert "advanced_observation_map(self.context, reconciled)" in source
 
 
 def test_historical_advanced_question_routes_to_explicit_past_event_limitation():
     historical_source = inspect.getsource(recursive_assistant.RecursiveLiveCommissioningAssistant._historical_reply)
     advanced_source = inspect.getsource(recursive_assistant.RecursiveLiveCommissioningAssistant._advanced_reply)
-    assert "resolve_advanced_target(self.advanced_coverage, text).found" in historical_source
+    assert "resolve_advanced_target(self.advanced_coverage, text, context=self.context).found" in historical_source
     assert "is_historical_question(text)" in advanced_source
     assert "will not substitute present OPC UA state" in advanced_source
