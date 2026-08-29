@@ -7,13 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .commission import LoadedCommissioningConfig, run_loaded_commissioning_config
+from .runtime_environment import detect_live_opcua_runtime
 from .workflow import LiveCommissioningState, LiveCommissioningWorkflowResult
 
 
 REQUIRED_VENDOR_FAMILIES = ("ROCKWELL", "SIEMENS", "SCHNEIDER")
+WorkflowRunner = Callable[[LoadedCommissioningConfig], Awaitable[LiveCommissioningWorkflowResult]]
 
 
 class LiveVendorQualificationStatus(str, Enum):
@@ -40,6 +42,7 @@ class LiveVendorQualificationReport:
     finished_at: datetime
     config_sha256: str
     vendors: tuple[LiveVendorQualificationResult, ...]
+    runtime_version: str | None = None
 
     @property
     def status(self) -> LiveVendorQualificationStatus:
@@ -69,6 +72,7 @@ class LiveVendorQualificationReport:
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat(),
             "config_sha256": self.config_sha256,
+            "runtime_version": self.runtime_version,
             "required_vendors": list(REQUIRED_VENDOR_FAMILIES),
             "status": self.status.value,
             "all_required_vendors_pass": self.all_required_vendors_pass,
@@ -103,6 +107,28 @@ def canonical_vendor_name(project: Any) -> str:
     if "SCHNEIDER" in raw or "CONTROL EXPERT" in raw or "UNITY" in raw:
         return "SCHNEIDER"
     return raw or "UNKNOWN"
+
+
+def _blocked_runtime_result(
+    vendor: str,
+    config: LoadedCommissioningConfig,
+    detail: str,
+) -> LiveVendorQualificationResult:
+    plc_ids = tuple(
+        spec.connection.plc_id
+        for spec in config.specs
+        if canonical_vendor_name(spec.engineering_project) == vendor
+    )
+    return LiveVendorQualificationResult(
+        vendor=vendor,
+        status=LiveVendorQualificationStatus.BLOCKED,
+        plc_ids=plc_ids,
+        complete_plcs=0,
+        definitive_current_evidence=0,
+        accepted_mappings=0,
+        unresolved_mappings=0,
+        detail=f"Real {vendor} endpoint qualification was not executed: {detail}",
+    )
 
 
 def _summarize_vendor(
@@ -195,9 +221,24 @@ def _summarize_vendor(
 
 async def run_live_vendor_qualification(
     config: LoadedCommissioningConfig,
+    *,
+    workflow_runner: WorkflowRunner = run_loaded_commissioning_config,
 ) -> LiveVendorQualificationReport:
     started = _now()
-    workflow_result = await run_loaded_commissioning_config(config)
+    runtime = detect_live_opcua_runtime()
+    if not runtime.supported:
+        return LiveVendorQualificationReport(
+            started_at=started,
+            finished_at=_now(),
+            config_sha256=config.source_sha256,
+            runtime_version=runtime.version,
+            vendors=tuple(
+                _blocked_runtime_result(vendor, config, runtime.detail)
+                for vendor in REQUIRED_VENDOR_FAMILIES
+            ),
+        )
+
+    workflow_result = await workflow_runner(config)
     vendors = tuple(
         _summarize_vendor(vendor, config, workflow_result)
         for vendor in REQUIRED_VENDOR_FAMILIES
@@ -206,6 +247,7 @@ async def run_live_vendor_qualification(
         started_at=started,
         finished_at=_now(),
         config_sha256=config.source_sha256,
+        runtime_version=runtime.version,
         vendors=vendors,
     )
 
