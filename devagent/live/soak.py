@@ -15,8 +15,8 @@ from typing import Any
 
 from .agent_integration import LiveDataTrustLayer, LiveEvidenceDisposition
 from .commission import LoadedCommissioningConfig
-from .errors import LiveDependencyError
 from .manager import MultiPlcConnectionManager, PlcSessionState
+from .runtime_environment import detect_live_opcua_runtime
 from .tag_reconciliation import reconcile_connected_project_tags
 
 
@@ -57,6 +57,7 @@ class LiveSoakReport:
     memory_growth_mb: float
     plcs: tuple[LiveSoakPlcResult, ...]
     setup_error: str | None = None
+    runtime_version: str | None = None
 
     @property
     def status(self) -> LiveSoakStatus:
@@ -80,6 +81,7 @@ class LiveSoakReport:
             "mode": "READ_ONLY",
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat(),
+            "runtime_version": self.runtime_version,
             "requested_duration_seconds": self.requested_duration_seconds,
             "actual_duration_seconds": round(self.actual_duration_seconds, 6),
             "interval_seconds": self.interval_seconds,
@@ -145,6 +147,55 @@ def _safe_error(config: LoadedCommissioningConfig, plc_id: str, exc: BaseExcepti
     return str(exc)
 
 
+def _blocked_runtime_report(
+    config: LoadedCommissioningConfig,
+    *,
+    started_at: datetime,
+    started_clock: float,
+    duration_seconds: float,
+    interval_seconds: float,
+    min_current_ratio: float,
+    max_consecutive_error_cycles: int,
+    max_memory_growth_mb: float,
+    memory_start: float,
+    runtime_version: str | None,
+    detail: str,
+) -> LiveSoakReport:
+    memory_peak = _rss_mb()
+    return LiveSoakReport(
+        started_at=started_at,
+        finished_at=_now(),
+        requested_duration_seconds=duration_seconds,
+        actual_duration_seconds=perf_counter() - started_clock,
+        interval_seconds=interval_seconds,
+        min_current_ratio=min_current_ratio,
+        max_consecutive_error_cycles_allowed=max_consecutive_error_cycles,
+        max_memory_growth_mb_allowed=max_memory_growth_mb,
+        memory_start_mb=memory_start,
+        memory_peak_mb=memory_peak,
+        memory_growth_mb=max(0.0, memory_peak - memory_start),
+        plcs=tuple(
+            LiveSoakPlcResult(
+                plc_id=spec.connection.plc_id,
+                plc_name=spec.connection.display_name,
+                cycles=0,
+                total_values=0,
+                current_values=0,
+                noncurrent_values=0,
+                read_error_cycles=0,
+                max_consecutive_error_cycles=0,
+                final_state="NOT_RUN",
+                current_ratio=0.0,
+                status=LiveSoakStatus.BLOCKED,
+                detail="Soak was not executed because the supported OPC UA runtime prerequisite is unavailable.",
+            )
+            for spec in config.specs
+        ),
+        setup_error="DEPENDENCY:" + detail,
+        runtime_version=runtime_version,
+    )
+
+
 async def run_live_soak(
     config: LoadedCommissioningConfig,
     *,
@@ -168,6 +219,22 @@ async def run_live_soak(
     started_at = _now()
     started_clock = perf_counter()
     memory_start = _rss_mb()
+    runtime = detect_live_opcua_runtime()
+    if not runtime.supported:
+        return _blocked_runtime_report(
+            config,
+            started_at=started_at,
+            started_clock=started_clock,
+            duration_seconds=duration_seconds,
+            interval_seconds=interval_seconds,
+            min_current_ratio=min_current_ratio,
+            max_consecutive_error_cycles=max_consecutive_error_cycles,
+            max_memory_growth_mb=max_memory_growth_mb,
+            memory_start=memory_start,
+            runtime_version=runtime.version,
+            detail=runtime.detail,
+        )
+
     memory_peak = memory_start
     manager = MultiPlcConnectionManager([spec.connection for spec in config.specs])
     stats = {spec.connection.plc_id: _Stats() for spec in config.specs}
@@ -235,8 +302,6 @@ async def run_live_soak(
                 remaining = interval_seconds - (perf_counter() - cycle_started)
                 if remaining > 0 and perf_counter() < deadline:
                     await asyncio.sleep(min(remaining, max(0.0, deadline - perf_counter())))
-    except LiveDependencyError as exc:
-        setup_error = "DEPENDENCY:" + str(exc)
     except Exception as exc:
         setup_error = str(exc)
     finally:
@@ -258,11 +323,7 @@ async def run_live_soak(
         plc_id = spec.connection.plc_id
         item = stats[plc_id]
         final = final_statuses[plc_id]
-        ratio = (
-            item.current_values / item.total_values
-            if item.total_values
-            else 0.0
-        )
+        ratio = item.current_values / item.total_values if item.total_values else 0.0
         reasons: list[str] = []
         if item.setup_error:
             reasons.append("setup: " + item.setup_error)
@@ -320,6 +381,7 @@ async def run_live_soak(
         memory_growth_mb=memory_growth,
         plcs=tuple(plc_results),
         setup_error=setup_error,
+        runtime_version=runtime.version,
     )
 
 
