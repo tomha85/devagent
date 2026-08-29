@@ -26,6 +26,25 @@ class ReconciledLiveAgentEvidence:
         return self.mapping_evidence + self.live_pack.evidence_for_agent()
 
 
+def _requested_mapping_evidence(
+    reconciliation: LiveTagReconciliation,
+    required_tag_ids: Iterable[str] | None,
+) -> tuple[LiveAgentEvidenceItem, ...]:
+    items = reconciliation.evidence_items()
+    if required_tag_ids is None:
+        return items
+    requested = {
+        str(tag_id).strip()
+        for tag_id in required_tag_ids
+        if str(tag_id).strip()
+    }
+    return tuple(
+        item
+        for item in items
+        if str(item.payload.get("tag_id", "")) in requested
+    )
+
+
 async def build_reconciled_live_agent_evidence(
     manager: MultiPlcConnectionManager,
     reconciliation: LiveTagReconciliation,
@@ -37,8 +56,9 @@ async def build_reconciled_live_agent_evidence(
 ) -> ReconciledLiveAgentEvidence:
     """Read reconciled tags and build AI evidence without accepting unresolved mappings."""
 
+    requested_tag_ids = None if required_tag_ids is None else tuple(required_tag_ids)
     requests = reconciliation.node_request_map(
-        required_tag_ids=required_tag_ids,
+        required_tag_ids=requested_tag_ids,
         require_all=require_all,
     )
     node_ids = requests.get(reconciliation.plc_id, ())
@@ -57,7 +77,10 @@ async def build_reconciled_live_agent_evidence(
     return ReconciledLiveAgentEvidence(
         reconciliation=reconciliation,
         live_pack=pack,
-        mapping_evidence=reconciliation.evidence_items(),
+        mapping_evidence=_requested_mapping_evidence(
+            reconciliation,
+            requested_tag_ids,
+        ),
     )
 
 
