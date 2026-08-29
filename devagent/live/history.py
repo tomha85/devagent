@@ -87,23 +87,31 @@ _TIME_RE = re.compile(
 
 
 class _HistoricalWindow(float):
-    """Float-compatible lookback carrying requested event intent."""
+    """Float-compatible lookback carrying optional requested event intent."""
 
-    def __new__(cls, value: float, *, direction: str | None):
+    def __new__(
+        cls,
+        value: float,
+        *,
+        direction: str | None,
+        age_seconds: float | None,
+    ):
         obj = float.__new__(cls, value)
-        obj.age_seconds = float(value)
+        obj.age_seconds = None if age_seconds is None else float(age_seconds)
         obj.direction = direction
         return obj
 
 
 def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
-    """Return the requested historical age, bounded to one day."""
+    """Return a float lookback and preserve explicit event age/direction metadata."""
     match = _TIME_RE.search(str(question or ""))
+    direction = requested_transition_direction(question)
     if match is None:
-        bounded = float(default)
+        bounded = max(1.0, min(float(default), 86400.0))
         return _HistoricalWindow(
             bounded,
-            direction=requested_transition_direction(question),
+            direction=direction,
+            age_seconds=None,
         )
     value = float(match.group("value"))
     unit = match.group("unit").casefold()
@@ -114,7 +122,8 @@ def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
     bounded = max(1.0, min(value, 86400.0))
     return _HistoricalWindow(
         bounded,
-        direction=requested_transition_direction(question),
+        direction=direction,
+        age_seconds=bounded,
     )
 
 
@@ -295,7 +304,7 @@ class LiveTimelineStore:
         if lookback_seconds <= 0 or preceding_seconds <= 0:
             raise ValueError("history windows must be > 0")
         if isinstance(lookback_seconds, _HistoricalWindow):
-            if target_age_seconds is None:
+            if target_age_seconds is None and lookback_seconds.age_seconds is not None:
                 target_age_seconds = lookback_seconds.age_seconds
             if direction is None:
                 direction = lookback_seconds.direction
