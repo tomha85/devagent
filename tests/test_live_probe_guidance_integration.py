@@ -35,4 +35,5 @@ def test_probe_explains_that_simulator_does_not_require_client_certificate(capsy
     assert "CONNECTION GUIDANCE" in output
     assert "Certificate required to connect: NO" in output
     assert "Certificate-free profile available: YES" in output
-    assert "Recommended production profile:" in output
+    assert "Recommended available profile:" in output
+    assert "NoSecurity is appropriate for lab/simulator use" in output
