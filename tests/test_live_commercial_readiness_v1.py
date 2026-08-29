@@ -68,17 +68,35 @@ def _doctor_payload() -> dict:
     }
 
 
-def _soak_payload(*, duration_hours: float = 8.1) -> dict:
+def _soak_row(plc_id: str) -> dict:
+    return {
+        "plc_id": plc_id,
+        "status": "PASS",
+        "final_state": "CONNECTED",
+        "cycles": 100,
+        "total_values": 100,
+        "current_values": 99,
+        "noncurrent_values": 1,
+        "read_error_cycles": 1,
+        "max_consecutive_error_cycles": 1,
+        "current_ratio": 0.99,
+    }
+
+
+def _soak_payload(*, duration_hours: float = 8.1, total_hours: float | None = None) -> dict:
+    total = duration_hours if total_hours is None else total_hours
     return {
         "schema": "devagent-live-soak-v1",
         "mode": "READ_ONLY",
         "status": "PASS",
         "setup_error": None,
-        "actual_duration_seconds": duration_hours * 3600.0,
+        "requested_duration_seconds": duration_hours * 3600.0,
+        "actual_duration_seconds": total * 3600.0,
+        "read_loop_duration_seconds": duration_hours * 3600.0,
         "plcs": [
-            {"plc_id": "rockwell-1", "status": "PASS"},
-            {"plc_id": "siemens-1", "status": "PASS"},
-            {"plc_id": "schneider-1", "status": "PASS"},
+            _soak_row("rockwell-1"),
+            _soak_row("siemens-1"),
+            _soak_row("schneider-1"),
         ],
     }
 
@@ -94,7 +112,6 @@ def _all_artifacts(tmp_path: Path, *, soak_hours: float = 8.1):
 
 def test_missing_real_evidence_is_blocked_not_falsely_passed():
     report = evaluate_live_commercial_readiness()
-
     assert report.commercial_v1_ready is False
     assert report.status is LiveCommercialGateStatus.BLOCKED
     by_id = {gate.gate_id: gate for gate in report.gates}
@@ -107,15 +124,10 @@ def test_missing_real_evidence_is_blocked_not_falsely_passed():
 
 def test_exact_five_gate_evidence_reaches_commercial_v1_ready(tmp_path: Path):
     report = evaluate_live_commercial_readiness(**_all_artifacts(tmp_path))
-
     assert report.status is LiveCommercialGateStatus.PASS
     assert report.commercial_v1_ready is True
     assert [gate.gate_id for gate in report.gates] == [
-        "CV1-001",
-        "CV1-002",
-        "CV1-003",
-        "CV1-004",
-        "CV1-005",
+        "CV1-001", "CV1-002", "CV1-003", "CV1-004", "CV1-005"
     ]
     assert all(gate.status is LiveCommercialGateStatus.PASS for gate in report.gates)
 
@@ -125,10 +137,7 @@ def test_runtime_artifact_with_duplicate_case_ids_fails_closed(tmp_path: Path):
     payload = _runtime_payload()
     payload["cases"][-1]["case_id"] = "LQ-001"
     _write(artifacts["runtime_qualification_path"], payload)
-
     report = evaluate_live_commercial_readiness(**artifacts)
-
-    assert report.commercial_v1_ready is False
     assert report.status is LiveCommercialGateStatus.FAIL
     assert report.gates[0].status is LiveCommercialGateStatus.FAIL
 
@@ -138,9 +147,17 @@ def test_vendor_artifact_requires_real_current_evidence_for_each_vendor(tmp_path
     payload = _vendor_payload()
     payload["vendors"][1]["definitive_current_evidence"] = 0
     _write(artifacts["vendor_qualification_path"], payload)
-
     report = evaluate_live_commercial_readiness(**artifacts)
+    assert report.status is LiveCommercialGateStatus.FAIL
+    assert report.gates[1].status is LiveCommercialGateStatus.FAIL
 
+
+def test_malformed_vendor_counter_fails_instead_of_raising(tmp_path: Path):
+    artifacts = _all_artifacts(tmp_path)
+    payload = _vendor_payload()
+    payload["vendors"][0]["complete_plcs"] = "unknown"
+    _write(artifacts["vendor_qualification_path"], payload)
+    report = evaluate_live_commercial_readiness(**artifacts)
     assert report.status is LiveCommercialGateStatus.FAIL
     assert report.gates[1].status is LiveCommercialGateStatus.FAIL
 
@@ -150,9 +167,7 @@ def test_doctor_requires_exact_dr001_through_dr008(tmp_path: Path):
     payload = _doctor_payload()
     payload["checks"][-1]["check_id"] = "DR-001"
     _write(artifacts["doctor_path"], payload)
-
     report = evaluate_live_commercial_readiness(**artifacts)
-
     assert report.status is LiveCommercialGateStatus.FAIL
     assert report.gates[4].status is LiveCommercialGateStatus.FAIL
 
@@ -162,8 +177,17 @@ def test_soak_shorter_than_eight_hours_fails_commercial_gate(tmp_path: Path):
         **_all_artifacts(tmp_path, soak_hours=7.99),
         min_soak_hours=8.0,
     )
-
     assert report.commercial_v1_ready is False
+    assert report.status is LiveCommercialGateStatus.FAIL
+    assert report.gates[4].status is LiveCommercialGateStatus.FAIL
+
+
+def test_setup_time_cannot_satisfy_eight_hour_soak_gate(tmp_path: Path):
+    artifacts = _all_artifacts(tmp_path)
+    payload = _soak_payload(duration_hours=7.5, total_hours=8.5)
+    payload["requested_duration_seconds"] = 8.5 * 3600.0
+    _write(artifacts["soak_path"], payload)
+    report = evaluate_live_commercial_readiness(**artifacts, min_soak_hours=8.0)
     assert report.status is LiveCommercialGateStatus.FAIL
     assert report.gates[4].status is LiveCommercialGateStatus.FAIL
 
@@ -173,9 +197,7 @@ def test_soak_requires_each_plc_row_to_pass(tmp_path: Path):
     payload = _soak_payload()
     payload["plcs"][2]["status"] = "FAIL"
     _write(artifacts["soak_path"], payload)
-
     report = evaluate_live_commercial_readiness(**artifacts)
-
     assert report.status is LiveCommercialGateStatus.FAIL
     assert report.gates[4].status is LiveCommercialGateStatus.FAIL
 
@@ -183,9 +205,7 @@ def test_soak_requires_each_plc_row_to_pass(tmp_path: Path):
 def test_commercial_artifact_hash_binds_report(tmp_path: Path):
     report = evaluate_live_commercial_readiness(**_all_artifacts(tmp_path))
     output = tmp_path / "commercial"
-
     written = write_live_commercial_readiness_artifacts(output, report)
-
     assert written == output.resolve()
     payload = json.loads((output / "live_commercial_readiness.json").read_text())
     manifest = json.loads((output / "manifest.json").read_text())
@@ -199,7 +219,6 @@ def test_commercial_artifact_refuses_overwrite(tmp_path: Path):
     report = evaluate_live_commercial_readiness(**_all_artifacts(tmp_path))
     output = tmp_path / "commercial"
     output.mkdir()
-
     try:
         write_live_commercial_readiness_artifacts(output, report)
     except FileExistsError:
