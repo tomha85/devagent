@@ -51,12 +51,25 @@ class LiveEngineeringTag:
     external_access: str | None
     alias_for: str | None
 
+    @property
+    def scoped_name(self) -> str:
+        """Canonical human-readable tag reference for Live-owned semantic adapters.
+
+        Program-scoped tags keep the explicit ``Program:<name>.Tag`` identity so
+        similarly named tags in different programs cannot be accidentally grouped.
+        Controller/global/unknown scopes retain the canonical tag name.
+        """
+        program = _program_from_scope(self.scope)
+        if program:
+            return f"Program:{program}.{self.name}"
+        return self.name
+
     def identity_forms(self) -> tuple[str, ...]:
         forms = {normalize_engineering_identifier(self.name)}
         program = _program_from_scope(self.scope)
         if program:
             forms.add(normalize_engineering_identifier(f"{program}.{self.name}"))
-            forms.add(normalize_engineering_identifier(f"Program:{program}.{self.name}"))
+            forms.add(normalize_engineering_identifier(self.scoped_name))
         return tuple(sorted(item for item in forms if item))
 
 
