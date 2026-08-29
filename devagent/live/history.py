@@ -48,7 +48,7 @@ class LiveHistoricalDiagnosis:
     def render_text(self) -> str:
         if self.transition is None:
             return (
-                f"Historical diagnosis: no trusted transition for {self.target_output} "
+                f"Historical diagnosis: no matching trusted transition for {self.target_output} "
                 f"was captured in the last {self.lookback_seconds:g} seconds."
             )
         lines = [
@@ -68,7 +68,9 @@ class LiveHistoricalDiagnosis:
                     f"{delta:.3f}s before target transition"
                 )
         else:
-            lines.append("- No trusted dependency transition was captured before the target transition in this window.")
+            lines.append(
+                "- No trusted dependency transition was captured before the target transition in this window."
+            )
         if self.limitations:
             lines.append("- Limitations:")
             lines.extend(f"  - {item}" for item in self.limitations)
@@ -78,6 +80,111 @@ class LiveHistoricalDiagnosis:
         return "\n".join(lines)
 
 
+_TIME_RE = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b",
+    re.IGNORECASE,
+)
+
+
+def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
+    """Return the requested historical age, bounded to one day."""
+    match = _TIME_RE.search(str(question or ""))
+    if match is None:
+        return default
+    value = float(match.group("value"))
+    unit = match.group("unit").casefold()
+    if unit.startswith("m"):
+        value *= 60.0
+    elif unit.startswith("h"):
+        value *= 3600.0
+    return max(1.0, min(value, 86400.0))
+
+
+def requested_transition_direction(question: str) -> str | None:
+    """Return STOP/START intent when the question explicitly asks for one."""
+    text = " " + re.sub(r"[_-]+", " ", str(question or "").casefold()) + " "
+    stop_terms = (
+        " stop ",
+        " stopped ",
+        " turn off ",
+        " turned off ",
+        " went false ",
+        " became false ",
+        " dropped ",
+        " deenergized ",
+        " de energized ",
+    )
+    start_terms = (
+        " start ",
+        " started ",
+        " turn on ",
+        " turned on ",
+        " went true ",
+        " became true ",
+        " energized ",
+        " resumed ",
+        " restart ",
+        " restarted ",
+    )
+    if any(term in text for term in stop_terms):
+        return "STOP"
+    if any(term in text for term in start_terms):
+        return "START"
+    return None
+
+
+def is_historical_question(question: str) -> bool:
+    text = " " + str(question or "").casefold() + " "
+    phrases = (
+        " ago ",
+        " before ",
+        " earlier ",
+        " what happened ",
+        " why did ",
+        " when did ",
+        " fault occurred ",
+        " fault happen ",
+        " last time ",
+    )
+    return any(item in text for item in phrases)
+
+
+def _truthy_state(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().casefold()
+        if text in {"true", "on", "run", "running", "active", "energized", "1"}:
+            return True
+        if text in {
+            "false",
+            "off",
+            "stop",
+            "stopped",
+            "inactive",
+            "deenergized",
+            "0",
+        }:
+            return False
+    return None
+
+
+def _matches_direction(item: LiveSignalTransition, direction: str | None) -> bool:
+    if direction is None:
+        return True
+    old = _truthy_state(item.old_value)
+    new = _truthy_state(item.new_value)
+    if old is None or new is None:
+        return False
+    if direction == "STOP":
+        return old and not new
+    if direction == "START":
+        return (not old) and new
+    return True
+
+
 class LiveTimelineStore:
     def __init__(
         self,
@@ -85,12 +192,16 @@ class LiveTimelineStore:
         retention_seconds: float = 900.0,
         max_samples: int = 20000,
         max_transitions: int = 10000,
+        continuity_seconds: float = 5.0,
     ) -> None:
         if retention_seconds <= 0:
             raise ValueError("retention_seconds must be > 0")
         if max_samples < 1 or max_transitions < 1:
             raise ValueError("history bounds must be >= 1")
+        if continuity_seconds <= 0:
+            raise ValueError("continuity_seconds must be > 0")
         self.retention_seconds = float(retention_seconds)
+        self.continuity_seconds = float(continuity_seconds)
         self._samples: deque[LiveHistoricalSample] = deque(maxlen=max_samples)
         self._transitions: deque[LiveSignalTransition] = deque(maxlen=max_transitions)
         self._latest_by_tag: dict[str, LiveHistoricalSample] = {}
@@ -105,13 +216,25 @@ class LiveTimelineStore:
             self._samples.popleft()
         while self._transitions and self._transitions[0].timestamp < cutoff:
             self._transitions.popleft()
+        stale_ids = [
+            tag_id
+            for tag_id, sample in self._latest_by_tag.items()
+            if sample.timestamp < cutoff
+        ]
+        for tag_id in stale_ids:
+            self._latest_by_tag.pop(tag_id, None)
 
     def append(self, sample: LiveHistoricalSample) -> None:
+        self._trim(sample.timestamp)
         previous = self._latest_by_tag.get(sample.tag_id)
         self._samples.append(sample)
         self._latest_by_tag[sample.tag_id] = sample
+        if previous is None:
+            return
+        gap = (sample.timestamp - previous.timestamp).total_seconds()
+        continuous = 0.0 <= gap <= self.continuity_seconds
         if (
-            previous is not None
+            continuous
             and previous.definitive_current
             and sample.definitive_current
             and previous.value != sample.value
@@ -127,7 +250,6 @@ class LiveTimelineStore:
                     new_value=sample.value,
                 )
             )
-        self._trim(sample.timestamp)
 
     def append_many(self, samples: Iterable[LiveHistoricalSample]) -> None:
         for sample in samples:
@@ -149,9 +271,15 @@ class LiveTimelineStore:
         now: datetime | None = None,
         preceding_seconds: float = 10.0,
         max_preceding: int = 12,
+        target_age_seconds: float | None = None,
+        direction: str | None = None,
     ) -> LiveHistoricalDiagnosis:
         if lookback_seconds <= 0 or preceding_seconds <= 0:
             raise ValueError("history windows must be > 0")
+        if target_age_seconds is not None and target_age_seconds < 0:
+            raise ValueError("target_age_seconds must be >= 0")
+        if direction not in {None, "STOP", "START"}:
+            raise ValueError("direction must be STOP, START, or None")
         tag = context.unique_tag_for_reference(target_output)
         if tag is None:
             return LiveHistoricalDiagnosis(
@@ -165,82 +293,66 @@ class LiveTimelineStore:
             )
         current = now or self._now()
         cutoff = current - timedelta(seconds=lookback_seconds)
-        target_transitions = [
+        candidates = [
             item
             for item in self._transitions
-            if item.tag_id == tag.id and item.timestamp >= cutoff
+            if item.tag_id == tag.id
+            and cutoff <= item.timestamp <= current
+            and _matches_direction(item, direction)
         ]
-        if not target_transitions:
+        if not candidates:
+            direction_text = f" {direction.lower()}" if direction else ""
             return LiveHistoricalDiagnosis(
                 target_output=target_output,
                 transition=None,
                 preceding_changes=(),
                 lookback_seconds=lookback_seconds,
                 limitations=(
+                    f"No trusted{direction_text} transition matching the requested event was captured.",
                     "The timeline only contains data observed after this Live session started; earlier controller history is not reconstructed.",
                 ),
             )
-        target_transition = target_transitions[-1]
-        dependency_ids = set(str(item) for item in dependency_tag_ids)
+        if target_age_seconds is None:
+            target_transition = max(candidates, key=lambda item: item.timestamp)
+        else:
+            target_transition = min(
+                candidates,
+                key=lambda item: abs(
+                    (current - item.timestamp).total_seconds() - target_age_seconds
+                ),
+            )
+
+        dependency_ids = {str(item) for item in dependency_tag_ids}
         dependency_ids.discard(tag.id)
         before = target_transition.timestamp
         after = before - timedelta(seconds=preceding_seconds)
-        candidates = [
+        preceding = [
             item
             for item in self._transitions
             if item.tag_id in dependency_ids and after <= item.timestamp <= before
         ]
-        candidates.sort(
+        preceding.sort(
             key=lambda item: (
                 (before - item.timestamp).total_seconds(),
                 item.tag_name.casefold(),
             )
         )
+        limitations = [
+            "Only trusted CURRENT transitions with continuous observations are considered.",
+            "A preceding change is a temporal candidate; deterministic PLC logic and engineer evidence are still required to prove causation.",
+        ]
+        if target_age_seconds is not None:
+            actual_age = (current - target_transition.timestamp).total_seconds()
+            limitations.append(
+                f"Selected the matching transition nearest requested age {target_age_seconds:g}s; observed age={actual_age:.3f}s."
+            )
         return LiveHistoricalDiagnosis(
             target_output=target_output,
             transition=target_transition,
-            preceding_changes=tuple(candidates[:max_preceding]),
+            preceding_changes=tuple(preceding[:max_preceding]),
             lookback_seconds=lookback_seconds,
-            limitations=(
-                "Only trusted CURRENT transitions captured by this Live session are considered.",
-                "A preceding change is a temporal candidate; deterministic PLC logic and engineer evidence are still required to prove causation.",
-            ),
+            limitations=tuple(limitations),
         )
-
-
-_TIME_RE = re.compile(
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b",
-    re.IGNORECASE,
-)
-
-
-def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
-    match = _TIME_RE.search(str(question or ""))
-    if match is None:
-        return default
-    value = float(match.group("value"))
-    unit = match.group("unit").casefold()
-    if unit.startswith("m"):
-        value *= 60.0
-    elif unit.startswith("h"):
-        value *= 3600.0
-    return max(1.0, min(value, 86400.0))
-
-
-def is_historical_question(question: str) -> bool:
-    text = " " + str(question or "").casefold() + " "
-    phrases = (
-        " ago ",
-        " before ",
-        " earlier ",
-        " what happened ",
-        " why did ",
-        " when did ",
-        " fault occurred ",
-        " fault happen ",
-        " last time ",
-    )
-    return any(item in text for item in phrases)
 
 
 class LiveHistoryCollector:
@@ -265,28 +377,31 @@ class LiveHistoryCollector:
         self.reconciliation = reconciliation
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.max_tags = max_tags
-        self.store = store or LiveTimelineStore(retention_seconds=retention_seconds)
+        self.store = store or LiveTimelineStore(
+            retention_seconds=retention_seconds,
+            continuity_seconds=max(2.0, poll_interval_seconds * 3.0),
+        )
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self.last_error: str | None = None
         self.cycles = 0
 
-        preferred = {
-            str(tag_id).strip(): index
-            for index, tag_id in enumerate(preferred_tag_ids)
-            if str(tag_id).strip()
-        }
+        priorities = [
+            str(item).strip()
+            for item in preferred_tag_ids
+            if str(item).strip()
+        ]
+        order = {tag_id: index for index, tag_id in enumerate(priorities)}
         accepted = list(reconciliation.accepted_mappings())
         accepted.sort(
             key=lambda mapping: (
-                0 if mapping.tag_id in preferred else 1,
-                preferred.get(mapping.tag_id, len(preferred)),
+                0 if mapping.tag_id in order else 1,
+                order.get(mapping.tag_id, 10**9),
                 mapping.tag_name.casefold(),
                 mapping.tag_id,
             )
         )
-        accepted = accepted[:max_tags]
-        self._mappings = tuple(accepted)
+        self._mappings = tuple(accepted[:max_tags])
         self._node_to_mapping = {
             mapping.selected_node_id: mapping
             for mapping in self._mappings
@@ -313,7 +428,9 @@ class LiveHistoryCollector:
         if task is None:
             return
         try:
-            await asyncio.wait_for(task, timeout=max(1.0, self.poll_interval_seconds * 2.0))
+            await asyncio.wait_for(
+                task, timeout=max(1.0, self.poll_interval_seconds * 2.0)
+            )
         except asyncio.TimeoutError:
             task.cancel()
             try:
@@ -342,7 +459,11 @@ class LiveHistoryCollector:
                         plc_name=status.plc_name,
                         value=value,
                     )
-                    stamp = value.source_timestamp or value.server_timestamp or value.received_at
+                    stamp = (
+                        value.source_timestamp
+                        or value.server_timestamp
+                        or value.received_at
+                    )
                     samples.append(
                         LiveHistoricalSample(
                             timestamp=stamp,
@@ -363,7 +484,9 @@ class LiveHistoryCollector:
             except Exception as exc:
                 self.last_error = str(exc)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.poll_interval_seconds)
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=self.poll_interval_seconds
+                )
             except asyncio.TimeoutError:
                 pass
 
@@ -375,5 +498,6 @@ __all__ = [
     "LiveTimelineStore",
     "LiveHistoryCollector",
     "requested_history_seconds",
+    "requested_transition_direction",
     "is_historical_question",
 ]
