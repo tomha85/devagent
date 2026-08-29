@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from devagent.live.agent_integration import (
     LiveAgentEvidencePack,
     LiveEvidenceDisposition,
@@ -96,7 +98,14 @@ def _production_result(readiness_status: str = "CONDITIONALLY_READY"):
     )
     metadata = SimpleNamespace(source_sha256="project-sha")
     engineering = SimpleNamespace(project=SimpleNamespace(metadata=metadata))
-    return SimpleNamespace(readiness=readiness, engineering=engineering)
+    return SimpleNamespace(
+        readiness=readiness,
+        engineering=engineering,
+        verification_context_sha256="verification-sha",
+        execution_results_sha256="execution-sha",
+        release_policy_sha256="policy-sha",
+        trust_store_sha256="trust-sha",
+    )
 
 
 def _install_fake_renderer(monkeypatch, text: str) -> None:
@@ -175,7 +184,7 @@ def test_augmented_report_falls_back_to_append_when_marker_missing(monkeypatch) 
     )
 
 
-def test_write_artifacts_are_sanitized_and_manifest_preserves_readiness(monkeypatch, tmp_path) -> None:
+def test_write_artifacts_are_sanitized_and_bound_to_production_context(monkeypatch, tmp_path) -> None:
     _install_fake_renderer(
         monkeypatch,
         "# Base Report\n\n## Release Readiness\n\n**Status: CONDITIONALLY_READY**\n",
@@ -190,10 +199,27 @@ def test_write_artifacts_are_sanitized_and_manifest_preserves_readiness(monkeypa
     assert "SECRET-STALE-RAW" not in report_text
     assert "SECRET-STALE-RAW" not in evidence_text
     assert manifest["production_readiness"] == "CONDITIONALLY_READY"
+    assert manifest["production_readiness_score"] == 80
     assert manifest["production_readiness_modified_by_live_evidence"] is False
     assert manifest["project_sha256"] == "project-sha"
+    assert manifest["production_verification_context_sha256"] == "verification-sha"
+    assert manifest["production_execution_results_sha256"] == "execution-sha"
+    assert manifest["production_release_policy_sha256"] == "policy-sha"
+    assert manifest["production_trust_store_sha256"] == "trust-sha"
+    assert len(manifest["binding_sha256"]) == 64
     assert artifacts.report_sha256 == manifest["artifacts"][artifacts.report_path.name]
     assert artifacts.evidence_sha256 == manifest["artifacts"][artifacts.evidence_path.name]
+
+
+def test_writer_refuses_to_overwrite_existing_commissioning_artifacts(monkeypatch, tmp_path) -> None:
+    _install_fake_renderer(
+        monkeypatch,
+        "# Base Report\n\n## Release Readiness\n\n**Status: CONDITIONALLY_READY**\n",
+    )
+    result = _production_result()
+    write_live_production_artifacts(tmp_path, result, _pack())
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        write_live_production_artifacts(tmp_path, result, _pack())
 
 
 def test_artifact_hashes_change_when_current_observation_changes(monkeypatch, tmp_path) -> None:
