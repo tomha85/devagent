@@ -12,18 +12,9 @@ from .advanced_assistant import (
     resolve_advanced_target,
 )
 from .advanced_semantics import LiveAdvancedKind, build_live_advanced_coverage
-from .assistant import (
-    LiveAssistantReply,
-    LiveAssistantReplyKind,
-    LiveCommissioningAssistant,
-)
+from .assistant import LiveAssistantReply, LiveAssistantReplyKind, LiveCommissioningAssistant
 from .control_guard import is_plc_control_request
-from .diagnosis import (
-    LiveDiagnosisStatus,
-    LiveObservedTag,
-    observations_from_reconciled,
-    resolve_question_target,
-)
+from .diagnosis import LiveDiagnosisStatus, LiveObservedTag, observations_from_reconciled, resolve_question_target
 from .diagnosis_guard import diagnose_output
 from .engineering_context import LiveLoadedEngineering, ProjectLoader, load_live_engineering_context
 from .errors import LiveConfigurationError
@@ -197,7 +188,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         if output is None and self._can_reuse_last_target(text):
             output = self._last_target
         if output is None:
-            if resolve_advanced_target(self.advanced_coverage, text).found:
+            if resolve_advanced_target(self.advanced_coverage, text, context=self.context).found:
                 return None
             return self._target_limitation_reply(
                 text,
@@ -262,7 +253,7 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
         )
 
     async def _advanced_reply(self, text: str) -> LiveAssistantReply | None:
-        target = resolve_advanced_target(self.advanced_coverage, text)
+        target = resolve_advanced_target(self.advanced_coverage, text, context=self.context)
         if not target.found:
             return None
         if is_historical_question(text):
@@ -318,22 +309,18 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             return self._control_refusal_reply(text)
         if not self.connected or self.reconciliation is None:
             await self.start()
-
         if self._is_overview_question(text):
             return LiveAssistantReply(
                 question=text,
                 kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
                 text=self._overview_text(),
             )
-
         historical = await self._historical_reply(text)
         if historical is not None:
             return historical
-
         stateful = await self._stateful_reply(text)
         if stateful is not None:
             return stateful
-
         advanced = await self._advanced_reply(text)
         if advanced is not None:
             return advanced
@@ -381,19 +368,16 @@ class RecursiveLiveCommissioningAssistant(LiveCommissioningAssistant):
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
-
         combined = answer.render_text()
         if diagnosis.source_locators:
             combined += "\n\nTarget PLC source:"
             combined += "".join(f"\n- {locator}" for locator in diagnosis.source_locators)
         if recursive.roots or recursive.limitations:
             combined += "\n\n" + recursive.render_text()
-
         if len(recursive.roots) == 1:
             immediate = recursive.roots[0].signal
             if self.context.rules_for_output(immediate):
                 self._last_target = immediate
-
         return LiveAssistantReply(
             question=text,
             kind=LiveAssistantReplyKind.DIAGNOSIS,
@@ -437,7 +421,4 @@ def create_recursive_live_commissioning_assistant(
     )
 
 
-__all__ = [
-    "RecursiveLiveCommissioningAssistant",
-    "create_recursive_live_commissioning_assistant",
-]
+__all__ = ["RecursiveLiveCommissioningAssistant", "create_recursive_live_commissioning_assistant"]
