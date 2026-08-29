@@ -230,7 +230,9 @@ def test_subscription_survives_transient_bad_status_during_reconnect(
         raw.subscription = FakeSubscription(
             raw,
             [
-                ("reconnecting", StatusChangeEvent(FakeStatus("BadShutdown", bad=True))),
+                # A graceful server shutdown can notify BadShutdown before the
+                # client's public state has transitioned away from CONNECTED.
+                ("connected", StatusChangeEvent(FakeStatus("BadShutdown", bad=True))),
                 ("connected", DataChangeEvent("ns=2;s=RunCmd", True, replayed=True)),
             ],
         )
