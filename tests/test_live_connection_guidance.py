@@ -44,14 +44,14 @@ def test_anonymous_no_security_does_not_require_certificate() -> None:
 
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "Certificate required to connect: NO" in rendered
-    assert "Client certificate: NOT REQUIRED" in rendered
+    assert "Client application certificate: NOT REQUIRED" in rendered
 
 
 def test_mixed_server_reports_certificate_not_required_but_recommends_secure_profile() -> None:
     insecure = _endpoint(mode="None_", policy="None", tokens=("Anonymous",))
     secure = _endpoint(
         mode="SignAndEncrypt",
-        policy="Aes256Sha256RsaPss",
+        policy="Aes256_Sha256_RsaPss",
         tokens=("Anonymous", "UserName"),
         url="opc.tcp://192.168.10.20:4840/secure",
     )
@@ -70,10 +70,10 @@ def test_mixed_server_reports_certificate_not_required_but_recommends_secure_pro
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "Certificate required to connect: NO" in rendered
     assert "Recommended production profile:" in rendered
-    assert "Client certificate: REQUIRED" in rendered
+    assert "Client application certificate: REQUIRED" in rendered
 
 
-def test_secure_username_only_profile_requires_certificate_and_signandencrypt() -> None:
+def test_secure_username_signandencrypt_profile_is_supported() -> None:
     endpoint = _endpoint(
         mode="SignAndEncrypt",
         policy="Basic256Sha256",
@@ -84,6 +84,7 @@ def test_secure_username_only_profile_requires_certificate_and_signandencrypt() 
     guidance = analyze_connection_guidance([endpoint])
 
     assert assessment.supported is True
+    assert assessment.support_status == "SUPPORTED"
     assert assessment.secure_channel is True
     assert assessment.certificate_required is True
     assert assessment.username_password_available is True
@@ -96,7 +97,7 @@ def test_secure_username_only_profile_requires_certificate_and_signandencrypt() 
     assert "Password: provide through --password-env" in rendered
 
 
-def test_username_over_sign_only_is_not_recommended() -> None:
+def test_username_over_sign_is_supported_on_secure_channel() -> None:
     endpoint = _endpoint(
         mode="Sign",
         policy="Basic256Sha256",
@@ -106,13 +107,39 @@ def test_username_over_sign_only_is_not_recommended() -> None:
     assessment = assess_endpoint(endpoint)
     guidance = analyze_connection_guidance([endpoint])
 
+    assert assessment.supported is True
+    assert assessment.username_password_available is True
+    assert assessment.mode_name == "Sign"
+    assert guidance.recommended is not None
+
+
+def test_username_over_no_security_is_blocked_by_policy() -> None:
+    endpoint = _endpoint(mode="None_", policy="None", tokens=("UserName",))
+    assessment = assess_endpoint(endpoint)
+
     assert assessment.supported is False
-    assert "requires SignAndEncrypt" in assessment.reason
-    assert guidance.recommended is None
-    assert guidance.certificate_required_to_connect is None
+    assert assessment.support_status == "BLOCKED_BY_POLICY"
+    assert "NoSecurity" in assessment.reason
 
 
-def test_unsupported_security_policy_fails_closed() -> None:
+def test_x509_user_certificate_profile_is_supported() -> None:
+    endpoint = _endpoint(
+        mode="SignAndEncrypt",
+        policy="Basic256Sha256",
+        tokens=("Certificate",),
+    )
+    assessment = assess_endpoint(endpoint)
+    guidance = analyze_connection_guidance([endpoint])
+
+    assert assessment.supported is True
+    assert assessment.user_certificate_available is True
+    assert guidance.user_certificate_available is True
+    rendered = "\n".join(format_connection_guidance(guidance))
+    assert "X.509 user-certificate authentication available: YES" in rendered
+    assert "--user-certificate" in rendered
+
+
+def test_legacy_policy_is_deprecated_compatibility_not_unsupported() -> None:
     endpoint = _endpoint(
         mode="SignAndEncrypt",
         policy="Basic128Rsa15",
@@ -122,10 +149,45 @@ def test_unsupported_security_policy_fails_closed() -> None:
     assessment = assess_endpoint(endpoint)
     guidance = analyze_connection_guidance([endpoint])
 
-    assert assessment.supported is False
-    assert "not in DevAgent Live's supported policy set" in assessment.reason
-    assert guidance.recommended is None
+    assert assessment.supported is True
+    assert assessment.deprecated_policy is True
+    assert assessment.support_status == "DEPRECATED_COMPATIBILITY"
+    assert guidance.recommended is not None
 
     rendered = "\n".join(format_connection_guidance(guidance))
-    assert "Certificate required to connect: UNKNOWN" in rendered
-    assert "Recommended profile: NONE" in rendered
+    assert "deprecated by OPC UA" in rendered
+
+
+def test_ecc_profile_is_recognized_as_runtime_unavailable() -> None:
+    endpoint = _endpoint(
+        mode="SignAndEncrypt",
+        policy="ECC_nistP256",
+        tokens=("Anonymous",),
+    )
+
+    assessment = assess_endpoint(endpoint)
+    guidance = analyze_connection_guidance([endpoint])
+
+    assert assessment.supported is False
+    assert assessment.support_status == "RUNTIME_UNAVAILABLE"
+    assert "ECC" in assessment.reason
+    assert guidance.recommended is None
+
+
+def test_issued_token_only_profile_is_recognized_as_runtime_unavailable() -> None:
+    endpoint = _endpoint(
+        mode="SignAndEncrypt",
+        policy="Basic256Sha256",
+        tokens=("IssuedToken",),
+    )
+
+    assessment = assess_endpoint(endpoint)
+    guidance = analyze_connection_guidance([endpoint])
+
+    assert assessment.supported is False
+    assert assessment.issued_token_available is True
+    assert assessment.support_status == "RUNTIME_UNAVAILABLE"
+    assert guidance.issued_token_advertised is True
+
+    rendered = "\n".join(format_connection_guidance(guidance))
+    assert "IssuedToken/JWT advertised: YES (runtime unavailable)" in rendered
