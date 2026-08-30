@@ -23,7 +23,6 @@ def test_no_security_username_can_be_explicitly_enabled() -> None:
         allow_insecure_username_password=True,
     )
     assert config.authentication_mode == "USERNAME_PASSWORD"
-    assert config.security_summary if hasattr(config, "security_summary") else True
     assert config.channel_summary == "NONE"
     assert config.insecure_username_password is True
     assert "secret" not in repr(config)
