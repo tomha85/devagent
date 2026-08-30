@@ -37,6 +37,7 @@ class EndpointConnectionAssessment:
     user_certificate_required: bool
     anonymous_available: bool
     username_password_available: bool
+    username_password_requires_insecure_opt_in: bool
     user_certificate_available: bool
     issued_token_available: bool
     policy_name: str
@@ -50,7 +51,10 @@ class EndpointConnectionAssessment:
         if self.user_certificate_available:
             options.append("X509_USER_CERTIFICATE")
         if self.username_password_available:
-            options.append("USERNAME_PASSWORD")
+            if self.username_password_requires_insecure_opt_in:
+                options.append("USERNAME_PASSWORD[EXPLICIT_INSECURE_OPT_IN]")
+            else:
+                options.append("USERNAME_PASSWORD")
         if self.anonymous_available:
             options.append("ANONYMOUS")
         if self.issued_token_available:
@@ -78,6 +82,13 @@ class OpcUaConnectionGuidance:
     @property
     def username_password_available(self) -> bool:
         return any(item.supported and item.username_password_available for item in self.assessments)
+
+    @property
+    def insecure_username_password_advertised(self) -> bool:
+        return any(
+            item.supported and item.username_password_requires_insecure_opt_in
+            for item in self.assessments
+        )
 
     @property
     def user_certificate_available(self) -> bool:
@@ -122,19 +133,26 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
     )
 
     if mode_is_none and policy_is_none:
-        supported_identity = anonymous or user_certificate
-        x509_required = user_certificate and not anonymous
-        if supported_identity:
+        direct_supported_identity = anonymous or user_certificate
+        username_supported = username
+        supported_identity = direct_supported_identity or username_supported
+        x509_required = user_certificate and not anonymous and not username_supported
+
+        if direct_supported_identity:
             status = "SUPPORTED"
+            if username_supported:
+                reason = (
+                    "NoSecurity endpoint has a directly supported Anonymous/X.509 identity and also advertises "
+                    "username/password, which requires explicit --allow-insecure-username-password opt-in."
+                )
+            else:
+                reason = "NoSecurity endpoint is usable with an advertised supported identity."
+        elif username_supported:
+            status = "INSECURE_EXPLICIT_OPT_IN"
             reason = (
-                "NoSecurity endpoint is usable with an advertised supported identity. "
-                "Username/password remains blocked on a NoSecurity channel."
-            )
-        elif username:
-            status = "BLOCKED_BY_POLICY"
-            reason = (
-                "Endpoint advertises username/password over NoSecurity; DevAgent blocks this "
-                "because it cannot prove credential confidentiality from the endpoint summary."
+                "Endpoint advertises username/password over NoSecurity. DevAgent can use this existing server "
+                "profile only when the operator explicitly supplies --allow-insecure-username-password; "
+                "it is never enabled or selected silently."
             )
         elif issued_token:
             status = "RUNTIME_UNAVAILABLE"
@@ -155,7 +173,8 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             application_certificate_required=False,
             user_certificate_required=x509_required,
             anonymous_available=anonymous,
-            username_password_available=False,
+            username_password_available=username_supported,
+            username_password_requires_insecure_opt_in=username_supported,
             user_certificate_available=user_certificate,
             issued_token_available=issued_token,
             policy_name="None",
@@ -175,6 +194,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             user_certificate_required=False,
             anonymous_available=anonymous,
             username_password_available=False,
+            username_password_requires_insecure_opt_in=False,
             user_certificate_available=user_certificate,
             issued_token_available=issued_token,
             policy_name=policy_name,
@@ -240,6 +260,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
         user_certificate_required=x509_required,
         anonymous_available=anonymous,
         username_password_available=username_supported,
+        username_password_requires_insecure_opt_in=False,
         user_certificate_available=x509_supported,
         issued_token_available=issued_token,
         policy_name=policy_name,
@@ -249,7 +270,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
     )
 
 
-def _recommendation_rank(item: EndpointConnectionAssessment) -> tuple[int, int, int, int, int]:
+def _recommendation_rank(item: EndpointConnectionAssessment) -> tuple[int, int, int, int, int, int]:
     policy_rank = {
         "Basic128Rsa15": -2,
         "Basic256": -1,
@@ -259,6 +280,7 @@ def _recommendation_rank(item: EndpointConnectionAssessment) -> tuple[int, int, 
     }.get(item.policy_name, 0)
     mode_rank = {"Sign": 1, "SignAndEncrypt": 2}.get(item.mode_name, 0)
     return (
+        1 if not item.username_password_requires_insecure_opt_in else 0,
         1 if not item.deprecated_policy else 0,
         1 if item.secure_channel else 0,
         mode_rank,
@@ -291,6 +313,10 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         f"Secure supported profile available: {'YES' if guidance.secure_connection_available else 'NO'}",
         f"Anonymous authentication available: {'YES' if guidance.anonymous_available else 'NO'}",
         f"Username/password available: {'YES' if guidance.username_password_available else 'NO'}",
+        (
+            "Username/password NoSecurity profile: "
+            + ("YES — explicit insecure opt-in required" if guidance.insecure_username_password_advertised else "NO")
+        ),
         f"X.509 user-certificate authentication available: {'YES' if guidance.user_certificate_available else 'NO'}",
         f"IssuedToken/JWT advertised: {'YES (runtime unavailable)' if guidance.issued_token_advertised else 'NO'}",
     ]
@@ -326,6 +352,14 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
     if recommended.deprecated_policy:
         lines.append(
             "  Warning: this security policy is deprecated by OPC UA and is provided for older-server compatibility."
+        )
+    if recommended.username_password_requires_insecure_opt_in:
+        lines.extend(
+            [
+                "  WARNING: username/password would be used on a NoSecurity endpoint.",
+                "  Required explicit opt-in: --allow-insecure-username-password",
+                "  DevAgent will never select or enable this profile silently.",
+            ]
         )
     if recommended.application_certificate_required:
         lines.extend(
