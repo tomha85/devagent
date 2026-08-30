@@ -462,67 +462,269 @@ ENGINEERING APPROVAL
         ↓
 SITE COMMISSIONING / RELEASE PROCESS
 ```
-
 For signed runtime-result, policy, trust-store, and approval workflows, and a complete explanation of Rockwell/Siemens/Schneider evidence boundaries, see **[PLC Engineer Guide](docs/plc-engineer-guide.md)**.
 
 ## DevAgent Live onsite commissioning quick start
 
-Use **DevAgent Live** as the separate onsite product branch when the engineer needs to understand the running controller/system, inspect trusted runtime state, diagnose a blocked condition, trace modeled logic upstream, inspect recent trusted transitions, or identify the next evidence-backed check.
-
-DevAgent Live is intentionally separate from DevAgent PLC:
+Use **DevAgent Live** when an onsite controls engineer needs to understand the running controller/system, inspect trusted current state, diagnose why an output is blocked, trace modeled PLC logic upstream, inspect recent trusted transitions, or identify the next evidence-backed check. Live is a separate read-only product branch: the LLM may understand the engineer's wording, but **deterministic PLC logic plus trusted OPC UA evidence decide the engineering result**.
 
 ```text
 DevAgent PLC  = Product Branch #2 — offline engineering / FAT authority
 DevAgent Live = Product Branch #3 — onsite read-only commissioning
 ```
 
-For the strongest commissioning diagnosis, provide both the supported PLC engineering export/context and the OPC UA endpoint:
+For the strongest diagnosis, provide both the supported PLC engineering export/context and a read-only OPC UA endpoint:
 
 ```text
-Read-only engineering context
-            +
-      OPC UA endpoint
-            ↓
-       DevAgent Live
-            ↓
-commissioning diagnosis
+Supported PLC engineering export
+              +
+      OPC UA runtime endpoint
+              ↓
+         DevAgent Live
+              ↓
+  reconcile engineering ↔ runtime
+              ↓
+ deterministic diagnosis + evidence
 ```
 
-Install Live runtime support:
+### 1. Install Live support
+
+From PyPI:
 
 ```bash
 python -m pip install "devagent-ai[live]"
 ```
 
-Start the interactive commissioning assistant with bounded history:
+From a source checkout:
 
 ```bash
-devagent live assist /path/to/project-export \
-  --endpoint opc.tcp://10.0.0.20:4840/ \
-  --history-seconds 900 \
-  --history-poll-seconds 1 \
-  --history-max-tags 128
+git clone https://github.com/tomha85/devagent.git
+cd devagent
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-Example onsite questions:
+If AI language routing is enabled, configure a provider and keep its API key in an environment variable. Example with OpenAI:
+
+```bash
+export OPENAI_API_KEY=...
+devagent setup --provider openai --model YOUR_OPENAI_MODEL
+```
+
+Do not paste API keys into prompts, command history, issue comments, or logs.
+
+### 2. Run the included Rockwell + OPC UA demo
+
+The repository includes a small commissioning handoff package:
 
 ```text
-Why is Conveyor7_Run not active?
-Which permissive is blocking it?
-Why is that permissive false?
-Why is SequenceState not advancing?
-Why is Timer1 not done?
-Why did Conveyor7_Run stop 30 seconds ago?
-What is the current fault code?
-Is Speed above the configured limit?
-What should I check next?
+examples/live/
+├── warehouse_commissioning_demo.L5X   # authoritative Rockwell engineering export
+├── IO_List.csv                        # supplemental context
+├── Tag_Descriptions.csv               # supplemental context
+├── requirements.md                    # supplemental context
+└── FAT_tests.csv                      # supplemental context
 ```
 
-The Live diagnosis stack can use supported canonical engineering evidence for Boolean logic, recursive dependencies, timers/counters/state machines, numeric/analog comparisons, one-shot/latch context, handshakes, AOI/FB context, fault-code observations, sequencers, motion/PID context, and UDT/array structure context. Coverage is evidence-bounded: unsupported, partial, source-protected, ambiguous, stateful-history-dependent, or untrusted regions remain `INDETERMINATE`/limited instead of being guessed.
+Terminal 1 — start the built-in read-only OPC UA simulator in a healthy state:
 
-Runtime evidence is also fail-closed. BAD, stale, replayed, uncertain, missing, or ambiguously reconciled OPC UA values are not accepted as definitive current-state proof.
+```bash
+cd ~/devagent
+source .venv/bin/activate
 
-The Live control boundary is strict:
+devagent live sim \
+  --endpoint opc.tcp://127.0.0.1:4841/devagent/simulator/ \
+  --scenario healthy
+```
+
+Useful simulator scenarios include:
+
+```text
+healthy             steady healthy operation
+idle                intentional inactivity; not a proven machine fault
+drive_fault         DriveFault=True, DriveReady=False, FaultCode=101
+downstream_blocker  downstream permissive blocks RunCmd
+safety_trip         safety chain fault
+multi_blocker       multiple missing permissives
+logic_conflict      modeled logic expects RunCmd=True but runtime is False
+stuck_on_conflict   modeled logic expects RunCmd=False but runtime is True
+normal              dynamic test mode with changing DownstreamReady/RunCmd
+```
+
+The simulator is for development and qualification of the software path. It does **not** certify a real PLC/vendor endpoint for commercial field readiness.
+
+### 3. Start the interactive Live assistant
+
+Terminal 2:
+
+```bash
+cd ~/devagent
+source .venv/bin/activate
+
+devagent live assist \
+  --project-folder examples/live \
+  --primary-project warehouse_commissioning_demo.L5X \
+  --endpoint opc.tcp://127.0.0.1:4841/devagent/simulator/ \
+  --history-seconds 60 \
+  --ai \
+  --provider openai \
+  --model YOUR_OPENAI_MODEL
+```
+
+For customer/site work, prefer an explicit `--primary-project` so the authoritative PLC source is unambiguous. If AI is not needed, omit `--ai`, `--provider`, and `--model`; deterministic exact-tag/current-state diagnosis remains available.
+
+A successful session prints the selected engineering project, vendor/controller, endpoint, `Mode: READ ONLY`, mapping counts, recursive-trace limits, and history status. If the OPC UA server prints a negotiated session timeout such as:
+
+```text
+Requested session timeout to be 3600000ms, got 600000ms instead
+```
+
+that is informational when the session continues successfully; the server accepted a lower timeout.
+
+### 4. Ask normal commissioning questions
+
+With `--ai`, engineers can use natural wording rather than memorizing fixed command phrases:
+
+```text
+is system ok?
+are there any errors?
+anything I should worry about?
+what is RunCmd?
+why is RunCmd false?
+is motor fault?
+what is DriveReady?
+what error do we have now?
+why did RunCmd stop 20 seconds ago?
+what should I check next?
+```
+
+Example healthy result:
+
+```text
+> is system ok
+DEVAGENT LIVE SYSTEM HEALTH
+Status: NO_CURRENT_PROVEN_FAULT
+...
+DriveFault = False
+FaultCode = 0
+MachineState = RUNNING
+```
+
+Example drive-fault result when Terminal 1 uses `--scenario drive_fault`:
+
+```text
+> are there any errors
+DEVAGENT LIVE SYSTEM HEALTH
+Status: ATTENTION_REQUIRED
+...
+DriveFault = True
+DriveReady = False
+FaultCode = 101
+RunCmd = False
+```
+
+A question such as `is motor fault?` may resolve to the exact engineering signal `DriveFault`. DevAgent can prove the **current PLC signal value** when trusted evidence exists, but it will not claim a physical motor/device root cause unless that deeper cause is actually supported by imported engineering or device/runtime evidence.
+
+### 5. Current state is refreshed when you ask again
+
+Current-state answers are query-driven and evidence-bounded. Each new current-state question reads fresh trusted OPC UA evidence for the required signals. DevAgent does not keep an old fault as current truth just because it appeared earlier in the conversation.
+
+Example:
+
+```text
+10:00  DriveFault=True, DriveReady=False, FaultCode=101
+       engineer asks: "is system ok?"
+       → ATTENTION_REQUIRED
+
+10:03  fault is cleared in the PLC/device
+       DriveFault=False, DriveReady=True, FaultCode=0
+       engineer asks again: "is system ok now?"
+       → current status is evaluated from the new OPC UA values
+```
+
+Conversation context can help interpret follow-ups such as `why?`, but it does not override trusted current PLC evidence.
+
+Historical questions are separate. Enable a positive retention window such as `--history-seconds 60` or `--history-seconds 900` so Live can retain a bounded rolling timeline of trusted transitions. `--history-seconds 0` disables historical capture.
+
+The `normal` simulator scenario is useful for proving that repeated questions see changing runtime values because `DownstreamReady` and `RunCmd` transition over time.
+
+### 6. Inspect workspace, mapping, connection, and history
+
+Inside `devagent live assist`:
+
+```text
+:workspace     show the project-folder inventory and authoritative PLC input
+:status        show OPC UA connection/security state
+:mappings      show accepted and unresolved engineering ↔ OPC UA mappings
+:refresh       re-browse OPC UA and rebuild reconciliation
+:overview      show engineering, mapping, trace, stateful, and history coverage
+:help          show interactive help
+:disconnect    close the read-only session
+```
+
+Unresolved, stale, BAD, replayed, uncertain, missing, type-incompatible, or ambiguous runtime evidence is not silently trusted as definitive current-state proof.
+
+### 7. Browse limits and diagnosis-trace limits are different
+
+These options control OPC UA browse/reconciliation:
+
+```text
+--max-depth
+--max-nodes
+```
+
+These separate options control recursive deterministic PLC root-cause tracing:
+
+```text
+--trace-max-depth
+--trace-max-nodes
+```
+
+Therefore a command using `--max-depth 5 --max-nodes 500` may still print a banner such as `Recursive root-cause trace: ENABLED (depth=6, nodes=64)` if the trace options were left at their defaults. That is expected.
+
+### 8. Connect to a real customer/site project
+
+A typical handoff workspace can contain one authoritative PLC engineering export plus supplemental engineering files:
+
+```text
+customer-line1/
+├── plc/
+│   └── Line1.L5X
+├── io/
+│   └── IO_List.csv
+├── tags/
+│   └── Tag_Descriptions.xlsx
+├── requirements/
+│   └── FDS.md
+├── fat/
+│   └── FAT_tests.csv
+└── drawings/
+    └── conveyor_layout.pdf
+```
+
+Example real-site command:
+
+```bash
+devagent live assist \
+  --project-folder /path/to/customer-line1 \
+  --primary-project plc/Line1.L5X \
+  --endpoint opc.tcp://192.168.10.20:4840/ \
+  --history-seconds 900 \
+  --history-poll-seconds 1 \
+  --history-max-tags 128 \
+  --ai \
+  --provider openai \
+  --model YOUR_OPENAI_MODEL
+```
+
+Supported authoritative engineering surfaces remain vendor-specific: Rockwell Studio 5000 `.L5X`, supported Siemens TIA exported source/XML bundles, and supported Schneider Control Expert/Unity Pro XML exchange exports with `.XEF` preferred. Supplemental files help provide auditable engineering context but do not silently override canonical PLC logic.
+
+For project-folder behavior and authority boundaries, see **[DevAgent Live Project Folder Intake V1](docs/live/project-folder-intake-v1.md)**.
+
+### 9. Read-only safety boundary
+
+DevAgent Live is deliberately read only:
 
 ```text
 READ ONLY
@@ -534,6 +736,10 @@ no download
 no mode change
 no start / stop control
 ```
+
+The LLM is used only for bounded language interpretation/explanation. It cannot turn model confidence into PLC truth, invent a valid target, or authorize a PLC control action. Deterministic control/write guards execute before semantic routing.
+
+The Live diagnosis stack can use supported canonical engineering evidence for Boolean logic, recursive dependencies, timers/counters/state machines, numeric/analog comparisons, one-shot/latch context, handshakes, AOI/FB context, fault-code observations, sequencers, motion/PID context, and UDT/array structure context. Unsupported, partial, source-protected, ambiguous, stateful-history-dependent, or untrusted regions remain limited/indeterminate instead of being guessed.
 
 Useful Live commands include:
 
