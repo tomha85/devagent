@@ -337,6 +337,27 @@ def test_historical_metadata_is_bound_to_validated_target_clause() -> None:
     assert metadata.lookback_seconds == 45.0
 
 
+def test_historical_target_reference_does_not_match_inside_another_signal() -> None:
+    metadata = _historical_metadata_for_target(
+        "Why did DriveReady stop 45 seconds ago before Ready started 10 seconds ago?",
+        "Ready",
+    )
+
+    assert metadata is not None
+    assert metadata.direction == "START"
+    assert metadata.target_age_seconds == 10.0
+    assert metadata.lookback_seconds == 10.0
+
+
+def test_multiple_exact_historical_target_clauses_fail_closed() -> None:
+    metadata = _historical_metadata_for_target(
+        "Why did Ready stop 45 seconds ago before Ready started 10 seconds ago?",
+        "Ready",
+    )
+
+    assert metadata is None
+
+
 def test_implicit_historical_target_with_multiple_events_fails_closed() -> None:
     metadata = _historical_metadata_for_target(
         "it started 45 seconds ago after DriveReady stopped",
