@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -66,6 +67,29 @@ _TARGET_REQUIRED = {
 }
 
 
+def _unique_unqualified_tag_names(context: LiveEngineeringContext) -> set[str]:
+    """Return only unqualified tag names that identify one canonical scoped tag.
+
+    Program-scoped PLC tags can legally repeat the same short name. The semantic
+    router must never expose that ambiguous short form as an exact selectable target.
+    """
+    scoped_by_name: dict[str, set[str]] = {}
+    display_by_key: dict[str, str] = {}
+    for tag in context.tags:
+        name = str(getattr(tag, "name", "") or "").strip()
+        scoped = str(getattr(tag, "scoped_name", "") or "").strip()
+        if not name or not scoped:
+            continue
+        key = name.casefold()
+        scoped_by_name.setdefault(key, set()).add(scoped.casefold())
+        display_by_key.setdefault(key, name)
+    return {
+        display_by_key[key]
+        for key, scoped_names in scoped_by_name.items()
+        if len(scoped_names) == 1
+    }
+
+
 def _canonical_targets(context: LiveEngineeringContext) -> tuple[str, ...]:
     result: list[str] = []
 
@@ -76,9 +100,14 @@ def _canonical_targets(context: LiveEngineeringContext) -> tuple[str, ...]:
 
     for output in context.output_names():
         add(output)
+
+    unique_short_names = {item.casefold() for item in _unique_unqualified_tag_names(context)}
     for tag in context.tags:
-        add(tag.scoped_name)
-        add(tag.name)
+        scoped = str(getattr(tag, "scoped_name", "") or "").strip()
+        name = str(getattr(tag, "name", "") or "").strip()
+        add(scoped)
+        if name and name.casefold() in unique_short_names:
+            add(name)
     return tuple(result)
 
 
