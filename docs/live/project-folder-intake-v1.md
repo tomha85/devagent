@@ -32,6 +32,56 @@ devagent live assist \
 
 When exactly one supported authoritative PLC engineering source is found, Live selects it automatically. Supported authoritative inputs remain the existing vendor surfaces: Rockwell Studio 5000 `.L5X`, Siemens TIA exported source/XML bundles, and Schneider Control Expert `.XEF`/X* exchange exports.
 
+## Repository demo package
+
+`examples/live/` is now a complete small engineering handoff package:
+
+```text
+examples/live/
+├── warehouse_commissioning_demo.L5X
+├── IO_List.csv
+├── Tag_Descriptions.csv
+├── requirements.md
+└── FAT_tests.csv
+```
+
+Run it against the deterministic simulator.
+
+Terminal 1:
+
+```bash
+devagent live sim \
+  --endpoint opc.tcp://127.0.0.1:4841/devagent/simulator/ \
+  --scenario drive_fault
+```
+
+Terminal 2:
+
+```bash
+ENDPOINT="opc.tcp://127.0.0.1:4841/devagent/simulator/"
+
+devagent live assist \
+  --project-folder examples/live \
+  --endpoint "$ENDPOINT" \
+  --max-depth 5 \
+  --max-nodes 500 \
+  --history-seconds 0
+```
+
+Then inspect the setup:
+
+```text
+:workspace
+```
+
+and ask normal commissioning questions:
+
+```text
+Does the system have any faults?
+What is wrong with the system?
+Why is RunCmd false?
+```
+
 ## Ambiguous workspaces
 
 Live fails closed when a folder contains more than one plausible authoritative engineering project. It does not guess which PLC project should control diagnosis.
@@ -65,6 +115,8 @@ Use the interactive command:
 ```
 
 to inspect the selected authoritative PLC input, detected vendor, file classifications, and authority boundary.
+
+V1 treats these supporting files as an auditable supplemental context inventory. Deterministic PLC causal reasoning continues to use the canonical parsed engineering export; supplemental documents do not silently rewrite or override ladder/ST/FBD semantics.
 
 ## Authority boundary
 
