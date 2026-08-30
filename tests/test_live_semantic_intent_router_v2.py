@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
-from devagent.live.semantic_assistant import _bridge_question
+from devagent.live.assistant import LiveAssistantReply, LiveAssistantReplyKind
+from devagent.live.recursive_assistant import RecursiveLiveCommissioningAssistant
+from devagent.live.semantic_assistant import SemanticLiveCommissioningAssistant, _bridge_question
 from devagent.live.semantic_intent import (
     LiveSemanticIntent,
     LiveSemanticRoute,
@@ -234,3 +237,54 @@ def test_provider_payload_contains_static_engineering_hints_but_not_runtime_fact
     assert hints["DriveFault"]["description"] == "Drive fault active"
     assert "runtime_values" not in payload
     assert "evidence" not in payload
+
+
+def test_semantic_assistant_routes_free_form_question_before_deterministic_parent(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([_route_response("SYSTEM_HEALTH")])
+    parent_questions: list[str] = []
+
+    async def fake_parent_answer(self, question: str) -> LiveAssistantReply:
+        parent_questions.append(question)
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text="deterministic-result",
+        )
+
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", fake_parent_answer)
+    assistant = object.__new__(SemanticLiveCommissioningAssistant)
+    assistant.loaded = SimpleNamespace(context=_Context())
+    assistant.provider = provider
+    assistant._last_target = None
+
+    reply = asyncio.run(assistant.answer("is system good?"))
+
+    assert len(provider.calls) == 1
+    assert parent_questions == ["Does the system have any faults?"]
+    assert reply.question == "is system good?"
+    assert reply.text == "deterministic-result"
+
+
+def test_control_request_never_reaches_semantic_provider(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([])
+    parent_questions: list[str] = []
+
+    async def fake_parent_answer(self, question: str) -> LiveAssistantReply:
+        parent_questions.append(question)
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.LIMITATION,
+            text="read-only refusal",
+        )
+
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", fake_parent_answer)
+    assistant = object.__new__(SemanticLiveCommissioningAssistant)
+    assistant.loaded = SimpleNamespace(context=_Context())
+    assistant.provider = provider
+    assistant._last_target = None
+
+    reply = asyncio.run(assistant.answer("force RunCmd true"))
+
+    assert provider.calls == []
+    assert parent_questions == ["force RunCmd true"]
+    assert reply.text == "read-only refusal"
