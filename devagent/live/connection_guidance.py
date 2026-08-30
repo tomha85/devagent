@@ -85,10 +85,7 @@ class OpcUaConnectionGuidance:
 
     @property
     def insecure_username_password_advertised(self) -> bool:
-        return any(
-            item.supported and item.username_password_requires_insecure_opt_in
-            for item in self.assessments
-        )
+        return any(item.username_password_requires_insecure_opt_in for item in self.assessments)
 
     @property
     def user_certificate_available(self) -> bool:
@@ -134,25 +131,23 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
 
     if mode_is_none and policy_is_none:
         direct_supported_identity = anonymous or user_certificate
-        username_supported = username
-        supported_identity = direct_supported_identity or username_supported
-        x509_required = user_certificate and not anonymous and not username_supported
+        x509_required = user_certificate and not anonymous
 
         if direct_supported_identity:
             status = "SUPPORTED"
-            if username_supported:
+            if username:
                 reason = (
                     "NoSecurity endpoint has a directly supported Anonymous/X.509 identity and also advertises "
-                    "username/password, which requires explicit --allow-insecure-username-password opt-in."
+                    "username/password, which requires explicit --allow-insecure-username-password opt-in when selected."
                 )
             else:
                 reason = "NoSecurity endpoint is usable with an advertised supported identity."
-        elif username_supported:
-            status = "INSECURE_EXPLICIT_OPT_IN"
+        elif username:
+            status = "BLOCKED_BY_POLICY"
             reason = (
-                "Endpoint advertises username/password over NoSecurity. DevAgent can use this existing server "
-                "profile only when the operator explicitly supplies --allow-insecure-username-password; "
-                "it is never enabled or selected silently."
+                "Endpoint advertises username/password over NoSecurity. DevAgent blocks this profile by default; "
+                "the operator may use the existing customer/server profile only by explicitly supplying "
+                "--allow-insecure-username-password. It is never enabled or selected silently."
             )
         elif issued_token:
             status = "RUNTIME_UNAVAILABLE"
@@ -166,15 +161,15 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
 
         return EndpointConnectionAssessment(
             endpoint=endpoint,
-            supported=supported_identity,
+            supported=direct_supported_identity,
             support_status=status,
             secure_channel=False,
             certificate_required=x509_required,
             application_certificate_required=False,
             user_certificate_required=x509_required,
             anonymous_available=anonymous,
-            username_password_available=username_supported,
-            username_password_requires_insecure_opt_in=username_supported,
+            username_password_available=username,
+            username_password_requires_insecure_opt_in=username,
             user_certificate_available=user_certificate,
             issued_token_available=issued_token,
             policy_name="None",
@@ -301,7 +296,7 @@ def analyze_connection_guidance(
 def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
     required = guidance.certificate_required_to_connect
     if required is None:
-        certificate_text = "UNKNOWN — no DevAgent-supported advertised profile was found"
+        certificate_text = "UNKNOWN — no default DevAgent-supported advertised profile was found"
     else:
         certificate_text = "YES" if required else "NO"
 
@@ -312,7 +307,7 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         f"Certificate-free profile available: {'YES' if guidance.certificate_free_connection_available else 'NO'}",
         f"Secure supported profile available: {'YES' if guidance.secure_connection_available else 'NO'}",
         f"Anonymous authentication available: {'YES' if guidance.anonymous_available else 'NO'}",
-        f"Username/password available: {'YES' if guidance.username_password_available else 'NO'}",
+        f"Username/password available by default policy: {'YES' if guidance.username_password_available else 'NO'}",
         (
             "Username/password NoSecurity profile: "
             + ("YES — explicit insecure opt-in required" if guidance.insecure_username_password_advertised else "NO")
@@ -323,12 +318,19 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
 
     recommended = guidance.recommended
     if recommended is None:
-        lines.extend(
-            [
-                "Recommended profile: NONE",
-                "Action: review the advertised security policy, security mode, and identity-token requirements.",
-            ]
-        )
+        lines.append("Recommended profile: NONE")
+        if guidance.insecure_username_password_advertised:
+            lines.extend(
+                [
+                    "Action: this server advertises username/password only on a NoSecurity profile.",
+                    "If that is the customer's intentional existing configuration, supply --username, --password-env, and --allow-insecure-username-password explicitly.",
+                    "DevAgent will never enable or select the insecure username profile silently.",
+                ]
+            )
+        else:
+            lines.append(
+                "Action: review the advertised security policy, security mode, and identity-token requirements."
+            )
         return lines
 
     heading = (
