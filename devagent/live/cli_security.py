@@ -26,6 +26,14 @@ def add_security_args(parser: argparse.ArgumentParser) -> None:
         help="Environment variable containing the OPC UA password; the password is never accepted on argv.",
     )
     group.add_argument(
+        "--allow-insecure-username-password",
+        action="store_true",
+        help=(
+            "Explicitly allow username/password on an OPC UA NoSecurity endpoint. "
+            "Use only when the existing customer/server profile requires it; DevAgent never enables this implicitly."
+        ),
+    )
+    group.add_argument(
         "--security-policy",
         metavar="POLICY",
         help=(
@@ -105,6 +113,9 @@ def security_from_args(args: argparse.Namespace) -> LiveSecurityConfig:
     return LiveSecurityConfig(
         username=getattr(args, "username", None),
         password=password,
+        allow_insecure_username_password=bool(
+            getattr(args, "allow_insecure_username_password", False)
+        ),
         security_policy=getattr(args, "security_policy", None),
         security_mode=getattr(args, "security_mode", None),
         client_certificate=getattr(args, "client_certificate", None),
