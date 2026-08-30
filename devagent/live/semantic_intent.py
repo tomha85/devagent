@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -67,47 +66,58 @@ _TARGET_REQUIRED = {
 }
 
 
-def _unique_unqualified_tag_names(context: LiveEngineeringContext) -> set[str]:
-    """Return only unqualified tag names that identify one canonical scoped tag.
-
-    Program-scoped PLC tags can legally repeat the same short name. The semantic
-    router must never expose that ambiguous short form as an exact selectable target.
-    """
-    scoped_by_name: dict[str, set[str]] = {}
-    display_by_key: dict[str, str] = {}
+def _tag_scopes_by_short_name(context: LiveEngineeringContext) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
     for tag in context.tags:
         name = str(getattr(tag, "name", "") or "").strip()
         scoped = str(getattr(tag, "scoped_name", "") or "").strip()
         if not name or not scoped:
             continue
-        key = name.casefold()
-        scoped_by_name.setdefault(key, set()).add(scoped.casefold())
-        display_by_key.setdefault(key, name)
-    return {
-        display_by_key[key]
-        for key, scoped_names in scoped_by_name.items()
-        if len(scoped_names) == 1
-    }
+        result.setdefault(name.casefold(), set()).add(scoped.casefold())
+    return result
 
 
 def _canonical_targets(context: LiveEngineeringContext) -> tuple[str, ...]:
-    result: list[str] = []
+    """Return only exact targets that are safe for model selection.
 
-    def add(value: str | None) -> None:
+    Program-scoped PLC tags can legally repeat the same short name. If a short name
+    maps to more than one canonical scoped tag, that short form is excluded entirely
+    from model-selectable targets, including when it also appears in output_names().
+    Fully scoped names remain available.
+    """
+    result: list[str] = []
+    scopes_by_short = _tag_scopes_by_short_name(context)
+    ambiguous_short = {
+        key for key, scoped_names in scopes_by_short.items() if len(scoped_names) > 1
+    }
+    unique_short = {
+        key for key, scoped_names in scopes_by_short.items() if len(scoped_names) == 1
+    }
+
+    def add(value: str | None, *, short_name: str | None = None) -> None:
         normalized = str(value or "").strip()
-        if normalized and normalized not in result:
+        if not normalized:
+            return
+        if short_name is not None and short_name.casefold() in ambiguous_short:
+            return
+        if normalized.casefold() in ambiguous_short:
+            return
+        if normalized not in result:
             result.append(normalized)
 
     for output in context.output_names():
         add(output)
 
-    unique_short_names = {item.casefold() for item in _unique_unqualified_tag_names(context)}
     for tag in context.tags:
         scoped = str(getattr(tag, "scoped_name", "") or "").strip()
         name = str(getattr(tag, "name", "") or "").strip()
-        add(scoped)
-        if name and name.casefold() in unique_short_names:
-            add(name)
+        # A genuinely scoped form such as ProgramA.Ready remains safe even when the
+        # short name Ready is ambiguous. A bare scoped form equal to the ambiguous
+        # short name is withheld to keep the language boundary fail-closed.
+        if scoped and scoped.casefold() not in ambiguous_short:
+            add(scoped)
+        if name and name.casefold() in unique_short:
+            add(name, short_name=name)
     return tuple(result)
 
 
@@ -169,7 +179,11 @@ def _router_payload(
     *,
     previous_target: str | None,
 ) -> dict[str, Any]:
-    outputs = list(context.output_names()[:64])
+    outputs = [
+        item
+        for item in context.output_names()[:64]
+        if item in _canonical_targets(context)
+    ]
     tags = list(_canonical_targets(context)[:160])
     return {
         "instruction": (
