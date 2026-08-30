@@ -37,17 +37,10 @@ class LiveProjectFolderIntake:
 
     @property
     def supplemental_files(self) -> tuple[LiveProjectFolderFile, ...]:
-        primary_relative = None
-        try:
-            if self.primary_project.is_file():
-                primary_relative = self.primary_project.relative_to(self.root).as_posix()
-        except ValueError:
-            primary_relative = None
         return tuple(
             item
             for item in self.files
-            if item.relative_path != primary_relative
-            and item.kind is not LiveProjectFileKind.PLC_ENGINEERING
+            if item.kind is not LiveProjectFileKind.PLC_ENGINEERING
         )
 
     def counts_by_kind(self) -> dict[LiveProjectFileKind, int]:
@@ -119,6 +112,18 @@ _SUPPLEMENTAL_SUFFIXES = {
     ".docx",
     ".pdf",
 }
+_PLC_COMPONENT_SUFFIXES = {
+    ".l5x",
+    ".xef",
+    ".xsy",
+    ".xst",
+    ".xcr",
+    ".xml",
+    ".scl",
+    ".awl",
+    ".db",
+    ".udt",
+}
 
 
 def _name_tokens(path: Path) -> set[str]:
@@ -130,21 +135,30 @@ def _name_tokens(path: Path) -> set[str]:
 
 
 def _classify_file(path: Path, *, primary_project: Path) -> LiveProjectFileKind:
+    suffix = path.suffix.casefold()
     try:
-        if primary_project.is_file() and path.resolve() == primary_project.resolve():
+        resolved_path = path.resolve()
+        resolved_primary = primary_project.resolve()
+        if primary_project.is_file() and resolved_path == resolved_primary:
+            return LiveProjectFileKind.PLC_ENGINEERING
+        if (
+            primary_project.is_dir()
+            and resolved_path.is_relative_to(resolved_primary)
+            and suffix in _PLC_COMPONENT_SUFFIXES
+        ):
             return LiveProjectFileKind.PLC_ENGINEERING
     except OSError:
         pass
 
     tokens = _name_tokens(path)
-    compact = "".join(sorted(tokens))
-    suffix = path.suffix.casefold()
 
     if (
         "io" in tokens
-        or "iolist" in compact
+        or "iolist" in tokens
+        or {"io", "list"}.issubset(tokens)
         or {"input", "output"}.issubset(tokens)
-        or "pointlist" in compact
+        or "pointlist" in tokens
+        or {"point", "list"}.issubset(tokens)
     ):
         return LiveProjectFileKind.IO_LIST
     if (
@@ -243,7 +257,7 @@ def _auto_primary(root: Path, files: tuple[Path, ...]) -> tuple[Path, str]:
     # Last bounded attempt for a single supported file export such as a nested .XEF.
     detected: list[tuple[Path, str]] = []
     for path in files:
-        if path.suffix.casefold() in _SUPPLEMENTAL_SUFFIXES and path.suffix.casefold() not in {".xml"}:
+        if path.suffix.casefold() in _SUPPLEMENTAL_SUFFIXES and path.suffix.casefold() != ".xml":
             continue
         try:
             vendor = detect_plc_vendor(path)
