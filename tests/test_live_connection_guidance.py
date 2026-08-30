@@ -41,10 +41,44 @@ def test_anonymous_no_security_does_not_require_certificate() -> None:
     assert guidance.username_password_available is False
     assert guidance.recommended is not None
     assert guidance.recommended.certificate_required is False
+    assert guidance.recommended.application_certificate_required is False
+    assert guidance.recommended.user_certificate_required is False
 
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "Certificate required to connect: NO" in rendered
     assert "Client application certificate: NOT REQUIRED" in rendered
+
+
+def test_no_security_x509_only_requires_user_certificate_not_application_certificate() -> None:
+    guidance = analyze_connection_guidance(
+        [_endpoint(mode="None_", policy="None", tokens=("Certificate",))]
+    )
+
+    assert guidance.certificate_required_to_connect is True
+    assert guidance.certificate_free_connection_available is False
+    assert guidance.secure_connection_available is False
+    assert guidance.user_certificate_available is True
+    assert guidance.recommended is not None
+    assert guidance.recommended.certificate_required is True
+    assert guidance.recommended.application_certificate_required is False
+    assert guidance.recommended.user_certificate_required is True
+
+    rendered = "\n".join(format_connection_guidance(guidance))
+    assert "Certificate required to connect: YES" in rendered
+    assert "Client application certificate: NOT REQUIRED" in rendered
+    assert "X.509 user identity: REQUIRED" in rendered
+
+
+def test_no_security_anonymous_plus_x509_has_certificate_free_path() -> None:
+    guidance = analyze_connection_guidance(
+        [_endpoint(mode="None_", policy="None", tokens=("Anonymous", "Certificate"))]
+    )
+
+    assert guidance.certificate_required_to_connect is False
+    assert guidance.certificate_free_connection_available is True
+    assert guidance.recommended is not None
+    assert guidance.recommended.user_certificate_available is True
+    assert guidance.recommended.user_certificate_required is False
 
 
 def test_mixed_server_reports_certificate_not_required_but_recommends_secure_profile() -> None:
@@ -66,6 +100,7 @@ def test_mixed_server_reports_certificate_not_required_but_recommends_secure_pro
     assert guidance.recommended.endpoint.endpoint_url.endswith("/secure")
     assert guidance.recommended.policy_name == "Aes256Sha256RsaPss"
     assert guidance.recommended.certificate_required is True
+    assert guidance.recommended.application_certificate_required is True
 
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "Certificate required to connect: NO" in rendered
@@ -87,6 +122,7 @@ def test_secure_username_signandencrypt_profile_is_supported() -> None:
     assert assessment.support_status == "SUPPORTED"
     assert assessment.secure_channel is True
     assert assessment.certificate_required is True
+    assert assessment.application_certificate_required is True
     assert assessment.username_password_available is True
     assert assessment.anonymous_available is False
     assert guidance.certificate_required_to_connect is True
@@ -110,6 +146,7 @@ def test_username_over_sign_is_supported_on_secure_channel() -> None:
     assert assessment.supported is True
     assert assessment.username_password_available is True
     assert assessment.mode_name == "Sign"
+    assert assessment.application_certificate_required is True
     assert guidance.recommended is not None
 
 
@@ -133,9 +170,12 @@ def test_x509_user_certificate_profile_is_supported() -> None:
 
     assert assessment.supported is True
     assert assessment.user_certificate_available is True
+    assert assessment.user_certificate_required is True
+    assert assessment.application_certificate_required is True
     assert guidance.user_certificate_available is True
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "X.509 user-certificate authentication available: YES" in rendered
+    assert "X.509 user identity: REQUIRED" in rendered
     assert "--user-certificate" in rendered
 
 
