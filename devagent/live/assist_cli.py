@@ -14,8 +14,8 @@ from .engineering_context import load_live_engineering_context
 from .errors import LiveError
 from .manager import PlcConnectionSpec
 from .project_folder import LiveProjectFolderIntake, inspect_live_project_folder
-from .recursive_assistant import RecursiveLiveCommissioningAssistant
 from .recursive_diagnosis import DEFAULT_TRACE_MAX_DEPTH, DEFAULT_TRACE_MAX_NODES
+from .semantic_assistant import SemanticLiveCommissioningAssistant
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -120,8 +120,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ai",
         action="store_true",
         help=(
-            "Enable optional evidence-bounded AI explanations. Deterministic commissioning "
-            "diagnosis remains authoritative and works without AI."
+            "Enable provider-neutral natural-language intent routing plus evidence-bounded AI explanations. "
+            "PLC diagnosis remains deterministic and authoritative; Live still works without AI."
         ),
     )
     parser.add_argument(
@@ -189,9 +189,12 @@ def _print_help() -> None:
     print(":help         Show this help")
     print(":disconnect   End the read-only commissioning session")
     print()
-    print("Or ask a commissioning question, for example:")
-    print("  Does the system have any faults?")
+    print("Ask commissioning questions naturally. With --ai, the configured LLM interprets free-form wording into a bounded intent/target; deterministic PLC logic and trusted OPC UA evidence still decide the result.")
+    print("Examples:")
+    print("  Is the system good?")
+    print("  Anything I should worry about?")
     print("  What is wrong with the system?")
+    print("  Why won't the conveyor run?")
     print("  Why is Conveyor7_Run not active?")
     print("  Which permissive is blocking Conveyor7_Run?")
     print("  Why is that permissive false?")
@@ -244,7 +247,7 @@ async def _run_session(args: argparse.Namespace) -> int:
         endpoint=args.endpoint,
         security=security_from_args(args),
     )
-    assistant = RecursiveLiveCommissioningAssistant(
+    assistant = SemanticLiveCommissioningAssistant(
         loaded,
         connection,
         browse_max_depth=args.max_depth,
@@ -273,9 +276,9 @@ async def _run_session(args: argparse.Namespace) -> int:
         print("Mode: READ ONLY")
         print("PLC write capability: NOT AVAILABLE")
         print(
-            "AI explanations: ENABLED"
+            "AI language routing + explanations: ENABLED"
             if provider is not None
-            else "AI explanations: OFF (deterministic diagnosis remains available)"
+            else "AI language routing + explanations: OFF (deterministic question routing and diagnosis remain available)"
         )
         print(
             f"Recursive root-cause trace: ENABLED "
