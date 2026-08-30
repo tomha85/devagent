@@ -208,13 +208,12 @@ def test_semantic_bridge_only_supplies_intent_or_validated_target_to_determinist
     )
 
     assert _bridge_question("is system good?", health) == "Does the system have any faults?"
-    bridged = _bridge_question("why won't it go?", root)
-    assert "why won't it go?" in bridged
-    assert "Exact engineering target: RunCmd" in bridged
+    bridged = _bridge_question("why won't it go and does the system have any faults?", root)
+    assert bridged == "Why is RunCmd in its current state?"
+    assert "system have any faults" not in bridged
 
-    historical_bridge = _bridge_question("it quit about 90 seconds back, what caused that?", historical)
-    assert historical_bridge.startswith("Why did RunCmd change?")
-    assert "90 seconds" in historical_bridge
+    historical_bridge = _bridge_question("it stopped about 90 seconds back, what caused that?", historical)
+    assert historical_bridge == "Why did RunCmd stop 90 seconds ago?"
 
 
 def test_provider_payload_contains_static_engineering_hints_but_not_runtime_facts() -> None:
