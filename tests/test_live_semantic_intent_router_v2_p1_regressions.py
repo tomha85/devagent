@@ -23,10 +23,17 @@ class _BaseContext:
                 data_type="BOOL",
                 scope="Controller",
             ),
+            SimpleNamespace(
+                name="DriveReady",
+                scoped_name="DriveReady",
+                description="Drive ready feedback",
+                data_type="BOOL",
+                scope="Controller",
+            ),
         )
 
     def output_names(self) -> tuple[str, ...]:
-        return ("RunCmd",)
+        return ("RunCmd", "DriveReady")
 
 
 class _AmbiguousScopedContext:
@@ -92,6 +99,37 @@ def test_ambiguous_unqualified_program_tag_is_neither_exposed_nor_accepted() -> 
     assert "ProgramB.Ready" in payload["known_targets"]
 
 
+def test_current_validated_target_cannot_be_preempted_by_health_phrase(monkeypatch) -> None:
+    provider = ScriptedFakeProvider(
+        [_response("TAG_STATUS", target="RunCmd")]
+    )
+    parent_questions: list[str] = []
+
+    async def fake_parent(self, question: str) -> LiveAssistantReply:
+        parent_questions.append(question)
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text="target-status",
+            target_output="RunCmd",
+        )
+
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", fake_parent)
+
+    assistant = object.__new__(SemanticLiveCommissioningAssistant)
+    assistant.loaded = SimpleNamespace(context=_BaseContext())
+    assistant.provider = provider
+    assistant._last_target = None
+
+    original = "Is RunCmd false, and does the system have any faults?"
+    reply = asyncio.run(assistant.answer(original))
+
+    assert parent_questions == ["What is the current value of RunCmd?"]
+    assert "system have any faults" not in parent_questions[0]
+    assert reply.question == original
+    assert reply.target_output == "RunCmd"
+
+
 def test_historical_route_bypasses_current_system_health_preemption(monkeypatch) -> None:
     provider = ScriptedFakeProvider(
         [
@@ -141,9 +179,8 @@ def test_historical_route_bypasses_current_system_health_preemption(monkeypatch)
     original = "Why did RunCmd stop 30 seconds ago - does the system have any faults?"
     reply = asyncio.run(assistant.answer(original))
 
-    assert len(historical_questions) == 1
-    assert historical_questions[0].startswith("Why did RunCmd change?")
-    assert "30 seconds" in historical_questions[0]
+    assert historical_questions == ["Why did RunCmd stop 30 seconds ago?"]
+    assert "system have any faults" not in historical_questions[0]
     assert reply.question == original
     assert reply.text == "historical-result"
 
@@ -190,8 +227,52 @@ def test_historical_follow_up_preserves_historical_scope(monkeypatch) -> None:
 
     reply = asyncio.run(assistant.answer("why?"))
 
-    assert len(historical_questions) == 1
-    assert historical_questions[0].startswith("Why did RunCmd change?")
-    assert "Original engineer question: why?" in historical_questions[0]
+    assert historical_questions == ["Why did RunCmd change earlier?"]
     assert reply.question == "why?"
     assert reply.text == "historical-follow-up"
+
+
+def test_historical_validated_target_cannot_be_overridden_by_other_signal_name(monkeypatch) -> None:
+    provider = ScriptedFakeProvider(
+        [
+            _response(
+                "HISTORICAL_ROOT_CAUSE",
+                target="RunCmd",
+                time_scope="HISTORICAL",
+            )
+        ]
+    )
+    historical_questions: list[str] = []
+
+    async def fake_historical(self, question: str) -> LiveAssistantReply:
+        historical_questions.append(question)
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.DIAGNOSIS,
+            text="historical-run-cmd",
+            target_output="RunCmd",
+        )
+
+    monkeypatch.setattr(
+        SemanticLiveCommissioningAssistant,
+        "connected",
+        property(lambda self: True),
+    )
+    monkeypatch.setattr(
+        SemanticLiveCommissioningAssistant,
+        "_historical_reply",
+        fake_historical,
+    )
+
+    assistant = object.__new__(SemanticLiveCommissioningAssistant)
+    assistant.loaded = SimpleNamespace(context=_BaseContext())
+    assistant.provider = provider
+    assistant._last_target = None
+    assistant.reconciliation = object()
+
+    original = "Why did RunCmd stop 45 seconds ago after DriveReady changed?"
+    reply = asyncio.run(assistant.answer(original))
+
+    assert historical_questions == ["Why did RunCmd stop 45 seconds ago?"]
+    assert "DriveReady" not in historical_questions[0]
+    assert reply.target_output == "RunCmd"
