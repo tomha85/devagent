@@ -9,11 +9,14 @@ An engineer can reuse the same OPC UA connection information already known from 
 | User identity | DevAgent status | CLI |
 | --- | --- | --- |
 | Anonymous | `SUPPORTED` | no identity flags |
-| UserName / password | `SUPPORTED` on a secure OPC UA channel | `--username`, `--password-env` |
+| UserName / password on `Sign` or `SignAndEncrypt` | `SUPPORTED` | `--username`, `--password-env` |
+| UserName / password on `NoSecurity` | `BLOCKED_BY_DEFAULT`; explicit legacy/customer compatibility opt-in available | `--username`, `--password-env`, `--allow-insecure-username-password` |
 | X.509 user certificate | `SUPPORTED` | `--user-certificate`, `--user-private-key`, optional `--user-private-key-password-env` |
 | IssuedToken / JWT | `RUNTIME_UNAVAILABLE` with the supported `asyncua>=2,<3` runtime | detected by `devagent live probe`; connection fails closed |
 
-DevAgent intentionally blocks username/password on a completely `NoSecurity` channel. Passwords are accepted only through environment-variable references and are never accepted as literal CLI arguments.
+Passwords are accepted only through environment-variable references and are never accepted as literal CLI arguments.
+
+DevAgent does **not** silently downgrade to a NoSecurity username/password profile. If a customer's existing OPC UA server intentionally uses that profile, the operator must opt in explicitly with `--allow-insecure-username-password`. When a supported secure profile is also advertised, `probe` continues to prefer the secure profile.
 
 ## Secure-channel policies
 
@@ -94,6 +97,40 @@ devagent live assist \
   --password-env PLC_OPCUA_PASSWORD
 ```
 
+`Sign` is also accepted when that is the customer's configured secure endpoint:
+
+```bash
+devagent live assist \
+  --project-folder ./Line1 \
+  --primary-project Line1.L5X \
+  --endpoint opc.tcp://192.168.10.20:4840/ \
+  --security-policy Basic256Sha256 \
+  --security-mode Sign \
+  --client-certificate ./pki/devagent-app.der \
+  --client-private-key ./pki/devagent-app-key.pem \
+  --server-certificate ./pki/plc-server.der \
+  --username devagent_reader \
+  --password-env PLC_OPCUA_PASSWORD
+```
+
+### Existing NoSecurity username/password profile
+
+Use this only when the customer's existing OPC UA server is intentionally configured that way:
+
+```bash
+export PLC_OPCUA_PASSWORD='...'
+
+devagent live assist \
+  --project-folder ./Line1 \
+  --primary-project Line1.L5X \
+  --endpoint opc.tcp://192.168.10.20:4840/ \
+  --username devagent_reader \
+  --password-env PLC_OPCUA_PASSWORD \
+  --allow-insecure-username-password
+```
+
+The explicit opt-in prevents DevAgent from accidentally sending username/password over a NoSecurity endpoint because of a missing security flag.
+
 ### X.509 user identity
 
 ```bash
@@ -109,6 +146,41 @@ devagent live assist \
   --user-certificate ./pki/devagent-user.der \
   --user-private-key ./pki/devagent-user-key.pem
 ```
+
+## Multi-PLC commissioning JSON
+
+The same security surface is accepted by `devagent live commission`, `vendor-qualify`, and other workflows that load `devagent-live-commission-v1` JSON.
+
+Example X.509 user identity:
+
+```json
+{
+  "security": {
+    "security_policy": "Basic256Sha256",
+    "security_mode": "SignAndEncrypt",
+    "client_certificate": "./pki/devagent-app.der",
+    "client_private_key": "./pki/devagent-app-key.pem",
+    "server_certificate": "./pki/plc-server.der",
+    "user_certificate": "./pki/devagent-user.der",
+    "user_private_key": "./pki/devagent-user-key.pem",
+    "user_private_key_password_env": "PLC_USER_KEY_PASSWORD"
+  }
+}
+```
+
+Example explicit NoSecurity username compatibility:
+
+```json
+{
+  "security": {
+    "username": "devagent_reader",
+    "password_env": "PLC_OPCUA_PASSWORD",
+    "allow_insecure_username_password": true
+  }
+}
+```
+
+Secret values themselves are forbidden in commissioning JSON; use environment-variable names.
 
 ## Safety boundary
 
