@@ -52,7 +52,9 @@ class _AmbiguousScopedContext:
         )
 
     def output_names(self) -> tuple[str, ...]:
-        return ()
+        # Simulate a downstream/project view that also exposes the ambiguous short
+        # form as an output. The semantic boundary must still withhold it.
+        return ("Ready",)
 
 
 def _response(
@@ -84,6 +86,7 @@ def test_ambiguous_unqualified_program_tag_is_neither_exposed_nor_accepted() -> 
 
     assert route is None
     payload = provider.calls[0]["payload"]
+    assert "Ready" not in payload["known_outputs"]
     assert "Ready" not in payload["known_targets"]
     assert "ProgramA.Ready" in payload["known_targets"]
     assert "ProgramB.Ready" in payload["known_targets"]
