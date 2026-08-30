@@ -1,0 +1,6 @@
+test_id,precondition,expected
+FAT-001,All run permissives true,RunCmd true
+FAT-002,DownstreamReady false,RunCmd false
+FAT-003,DriveFault true,RunCmd false and fault reported
+FAT-004,SafetyTrip true,RunCmd false and safety fault reported
+FAT-005,All modeled conditions true but RunCmd false,Logic conflict reported without invented blocker

@@ -62,7 +62,7 @@ def test_release_version_is_semver_and_consistent() -> None:
     version = match.group(1)
     assert re.fullmatch(r"\d+\.\d+\.\d+", version)
     assert version == __version__
-    assert version == "0.8.9"
+    assert version == "0.8.11"
 
 
 def test_release_workflow_requires_green_exact_main_revision() -> None:
