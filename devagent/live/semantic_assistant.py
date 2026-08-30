@@ -18,6 +18,11 @@ def _bridge_question(original: str, route: LiveSemanticRoute) -> str:
         return "Does the system have any faults?"
     if route.intent is LiveSemanticIntent.SYSTEM_OVERVIEW:
         return "What is this system?"
+    if route.intent is LiveSemanticIntent.HISTORICAL_ROOT_CAUSE and route.target:
+        # Preserve the original wording so existing bounded time-window and
+        # transition-direction parsing can still use any explicit engineer detail,
+        # while guaranteeing that the deterministic historical path is selected.
+        return f"Why did {route.target} change?\nOriginal engineer question: {original}"
     if route.target:
         return f"{original}\nExact engineering target: {route.target}"
     return original
