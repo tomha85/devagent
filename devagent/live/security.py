@@ -81,6 +81,7 @@ def validate_opcua_endpoint(endpoint: str) -> str:
 class LiveSecurityConfig:
     username: str | None = None
     password: str | None = field(default=None, repr=False)
+    allow_insecure_username_password: bool = False
     security_policy: str | None = None
     security_mode: str | None = None
     client_certificate: str | None = None
@@ -102,6 +103,10 @@ class LiveSecurityConfig:
         if (self.username is None) != (self.password is None):
             raise LiveConfigurationError(
                 "OPC UA username and password must be configured together"
+            )
+        if self.allow_insecure_username_password and self.username is None:
+            raise LiveConfigurationError(
+                "--allow-insecure-username-password requires OPC UA username/password configuration"
             )
         if (self.user_certificate is None) != (self.user_private_key is None):
             raise LiveConfigurationError(
@@ -131,11 +136,16 @@ class LiveSecurityConfig:
                 raise LiveConfigurationError(
                     "A private-key password requires secure-channel certificate configuration"
                 )
-            if self.username is not None:
+            if self.username is not None and not self.allow_insecure_username_password:
                 raise LiveConfigurationError(
-                    "Username/password authentication over a NoSecurity channel is blocked by DevAgent policy"
+                    "Username/password authentication over a NoSecurity channel is blocked by default; "
+                    "use --allow-insecure-username-password only when the existing OPC UA server profile requires it"
                 )
         else:
+            if self.allow_insecure_username_password:
+                raise LiveConfigurationError(
+                    "--allow-insecure-username-password is only valid when no secure-channel policy is configured"
+                )
             if self.security_policy in ECC_SECURITY_POLICIES:
                 raise LiveConfigurationError(
                     f"OPC UA security policy {self.security_policy!r} is recognized by the standard "
@@ -180,6 +190,10 @@ class LiveSecurityConfig:
     @property
     def deprecated_policy(self) -> bool:
         return self.security_policy in DEPRECATED_SECURITY_POLICIES
+
+    @property
+    def insecure_username_password(self) -> bool:
+        return self.username is not None and not self.secure_channel
 
     @property
     def authentication_mode(self) -> str:
