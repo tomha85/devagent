@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from .assistant import LiveAssistantReply
 from .control_guard import is_plc_control_request
 from .recursive_assistant import RecursiveLiveCommissioningAssistant
@@ -54,7 +56,8 @@ class SemanticLiveCommissioningAssistant(RecursiveLiveCommissioningAssistant):
         if not text or is_plc_control_request(text) or self.provider is None:
             return await super().answer(question)
 
-        route = resolve_semantic_intent(
+        route = await asyncio.to_thread(
+            resolve_semantic_intent,
             text,
             self.context,
             self.provider,
