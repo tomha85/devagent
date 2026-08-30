@@ -13,12 +13,39 @@ from devagent.providers import ScriptedFakeProvider
 
 
 class _Context:
+    vendor = "ROCKWELL"
+    controller_name = "WarehouseCommissioningDemo"
+
     def __init__(self) -> None:
         self.tags = (
-            SimpleNamespace(name="RunCmd", scoped_name="RunCmd"),
-            SimpleNamespace(name="DriveFault", scoped_name="DriveFault"),
-            SimpleNamespace(name="DriveReady", scoped_name="DriveReady"),
-            SimpleNamespace(name="MachineState", scoped_name="MachineState"),
+            SimpleNamespace(
+                name="RunCmd",
+                scoped_name="RunCmd",
+                description="Conveyor run command",
+                data_type="BOOL",
+                scope="Controller",
+            ),
+            SimpleNamespace(
+                name="DriveFault",
+                scoped_name="DriveFault",
+                description="Drive fault active",
+                data_type="BOOL",
+                scope="Controller",
+            ),
+            SimpleNamespace(
+                name="DriveReady",
+                scoped_name="DriveReady",
+                description="Drive ready feedback",
+                data_type="BOOL",
+                scope="Controller",
+            ),
+            SimpleNamespace(
+                name="MachineState",
+                scoped_name="MachineState",
+                description="High-level machine operating state",
+                data_type="STRING",
+                scope="Controller",
+            ),
         )
 
     def output_names(self) -> tuple[str, ...]:
@@ -140,6 +167,20 @@ def test_follow_up_does_not_reuse_unknown_previous_target() -> None:
     assert route is None
 
 
+def test_historical_intent_requires_historical_time_scope() -> None:
+    provider = ScriptedFakeProvider(
+        [_route_response("HISTORICAL_ROOT_CAUSE", target="RunCmd", time_scope="CURRENT")]
+    )
+
+    route = resolve_semantic_intent(
+        "why did the conveyor quit earlier?",
+        _Context(),
+        provider,
+    )
+
+    assert route is None
+
+
 def test_semantic_bridge_only_supplies_intent_or_validated_target_to_deterministic_engine() -> None:
     health = LiveSemanticRoute(
         intent=LiveSemanticIntent.SYSTEM_HEALTH,
@@ -155,14 +196,25 @@ def test_semantic_bridge_only_supplies_intent_or_validated_target_to_determinist
         confidence=0.99,
         reason="root cause",
     )
+    historical = LiveSemanticRoute(
+        intent=LiveSemanticIntent.HISTORICAL_ROOT_CAUSE,
+        target="RunCmd",
+        time_scope=LiveSemanticTimeScope.HISTORICAL,
+        confidence=0.99,
+        reason="history",
+    )
 
     assert _bridge_question("is system good?", health) == "Does the system have any faults?"
     bridged = _bridge_question("why won't it go?", root)
     assert "why won't it go?" in bridged
     assert "Exact engineering target: RunCmd" in bridged
 
+    historical_bridge = _bridge_question("it quit about 90 seconds back, what caused that?", historical)
+    assert historical_bridge.startswith("Why did RunCmd change?")
+    assert "90 seconds" in historical_bridge
 
-def test_provider_payload_contains_bounded_known_targets_not_runtime_facts() -> None:
+
+def test_provider_payload_contains_static_engineering_hints_but_not_runtime_facts() -> None:
     provider = ScriptedFakeProvider(
         [_route_response("TAG_STATUS", target="DriveFault")]
     )
@@ -177,5 +229,8 @@ def test_provider_payload_contains_bounded_known_targets_not_runtime_facts() -> 
     payload = provider.calls[0]["payload"]
     assert "RunCmd" in payload["known_outputs"]
     assert "DriveFault" in payload["known_targets"]
+    assert payload["engineering_context"]["controller_name"] == "WarehouseCommissioningDemo"
+    hints = {item["target"]: item for item in payload["engineering_target_hints"]}
+    assert hints["DriveFault"]["description"] == "Drive fault active"
     assert "runtime_values" not in payload
     assert "evidence" not in payload
