@@ -47,6 +47,7 @@ _CLAUSE_BOUNDARY_RE = re.compile(
     r"[,;]|\b(?:after|before|while|whereas|but|then)\b",
     re.IGNORECASE,
 )
+_REFERENCE_IDENTIFIER_CHARS = r"A-Za-z0-9_.:\[\]"
 
 
 @dataclass(frozen=True)
@@ -63,17 +64,20 @@ def _bounded_error_text(value: object, *, limit: int = 360) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
-def _target_event_clause(original: str, target: str) -> str | None:
-    """Return the bounded clause that explicitly contains the validated target."""
-    text = str(original or "")
+def _exact_target_matches(text: str, target: str) -> tuple[re.Match[str], ...]:
+    """Match a canonical target as a whole PLC reference, never as a substring."""
     target_text = str(target or "").strip()
-    if not text or not target_text:
-        return None
+    if not target_text:
+        return ()
+    pattern = re.compile(
+        rf"(?<![{_REFERENCE_IDENTIFIER_CHARS}]){re.escape(target_text)}"
+        rf"(?![{_REFERENCE_IDENTIFIER_CHARS}])",
+        re.IGNORECASE,
+    )
+    return tuple(pattern.finditer(str(text or "")))
 
-    match = re.search(re.escape(target_text), text, flags=re.IGNORECASE)
-    if match is None:
-        return None
 
+def _clause_for_match(text: str, match: re.Match[str]) -> str | None:
     start = 0
     for boundary in _CLAUSE_BOUNDARY_RE.finditer(text, 0, match.start()):
         start = boundary.end()
@@ -87,13 +91,30 @@ def _target_event_clause(original: str, target: str) -> str | None:
     return clause or None
 
 
+def _target_event_clause(original: str, target: str) -> str | None:
+    """Return one bounded clause containing one exact validated target reference."""
+    text = str(original or "")
+    matches = _exact_target_matches(text, target)
+    if len(matches) != 1:
+        return None
+    return _clause_for_match(text, matches[0])
+
+
 def _historical_metadata_for_target(
     original: str,
     target: str,
 ) -> _HistoricalRouteMetadata | None:
     """Parse only safely attributable historical metadata for a validated target."""
     text = str(original or "").strip()
-    clause = _target_event_clause(text, target)
+    target_matches = _exact_target_matches(text, target)
+    if len(target_matches) > 1:
+        return None
+
+    clause = (
+        _clause_for_match(text, target_matches[0])
+        if len(target_matches) == 1
+        else None
+    )
     candidate = clause if clause is not None else text
 
     time_matches = tuple(_TIME_TOKEN_RE.finditer(candidate))
