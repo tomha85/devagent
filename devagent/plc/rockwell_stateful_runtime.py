@@ -185,7 +185,7 @@ def stateful_models_for_rung(project, rung) -> list[RockwellStatefulModel]:
 
 def stateful_models(project) -> list[RockwellStatefulModel]:
     result: list[RockwellStatefulModel] = []
-    for rung in project.rungs:
+    for rung in tuple(getattr(project, "rungs", ()) or ()):
         result.extend(stateful_models_for_rung(project, rung))
     return result
 
