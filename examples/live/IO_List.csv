@@ -1,0 +1,8 @@
+address,tag,direction,description
+Local:1:I.Data.0,StartRequest,INPUT,Operator start request
+Local:1:I.Data.1,SafetyOK,INPUT,Safety chain healthy
+Local:1:I.Data.2,SafetyTrip,INPUT,Safety trip active
+Local:1:I.Data.3,DriveReady,INPUT,Drive ready feedback
+Local:1:I.Data.4,DriveFault,INPUT,Drive fault feedback
+Local:1:I.Data.5,DownstreamReady,INPUT,Downstream equipment ready
+Local:2:O.Data.0,RunCmd,OUTPUT,Conveyor run command
