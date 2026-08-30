@@ -82,6 +82,31 @@ def _canonical_targets(context: LiveEngineeringContext) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _engineering_target_hints(context: LiveEngineeringContext) -> list[dict[str, str | None]]:
+    hints: list[dict[str, str | None]] = []
+    seen: set[str] = set()
+    for tag in context.tags:
+        target = str(tag.scoped_name).strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        hints.append(
+            {
+                "target": target,
+                "description": (
+                    str(tag.description).strip()
+                    if getattr(tag, "description", None)
+                    else None
+                ),
+                "data_type": str(getattr(tag, "data_type", "") or "").strip() or None,
+                "scope": str(getattr(tag, "scope", "") or "").strip() or None,
+            }
+        )
+        if len(hints) >= 160:
+            break
+    return hints
+
+
 def _canonical_target(
     context: LiveEngineeringContext,
     value: object,
@@ -123,6 +148,7 @@ def _router_payload(
             "Do not answer the engineering question and do not decide whether the machine is healthy. "
             "Translate the engineer's wording into exactly one supported intent and, when needed, one exact target from known_targets. "
             "Engineers may use slang, shorthand, typos, incomplete sentences, or languages other than English. Interpret meaning rather than matching fixed phrases. "
+            "Use engineering_target_hints only to understand what a known tag/output represents; those hints are static engineering metadata, not runtime truth. "
             "SYSTEM_HEALTH means a whole-system current-health/fault/problem question such as whether things are good, normal, healthy, wrong, alarming, or need attention. "
             "SYSTEM_OVERVIEW means asking what the system is, what it does, or what is available. "
             "ROOT_CAUSE means asking why a known output/signal is in its current state or what blocks it. "
@@ -130,15 +156,20 @@ def _router_payload(
             "HISTORICAL_ROOT_CAUSE means asking why a known signal changed or failed in the past. "
             "FOLLOW_UP means a contextual follow-up about last_target. "
             "UNKNOWN means the request cannot be mapped safely to these intents. "
-            "Never invent a PLC tag, output, controller state, fault, cause, or evidence. "
+            "Never invent a PLC tag, output, controller state, fault, cause, runtime value, or evidence. "
             "For target, return an exact string from known_targets or null. "
             "If the user names no target but clearly refers to last_target, use FOLLOW_UP. "
             "When uncertain, use UNKNOWN instead of guessing."
         ),
         "question": question,
         "last_target": previous_target,
+        "engineering_context": {
+            "vendor": str(getattr(context, "vendor", "") or "") or None,
+            "controller_name": str(getattr(context, "controller_name", "") or "") or None,
+        },
         "known_outputs": outputs,
         "known_targets": tags,
+        "engineering_target_hints": _engineering_target_hints(context),
         "allowed_intents": [item.value for item in LiveSemanticIntent],
     }
 
@@ -197,6 +228,12 @@ def resolve_semantic_intent(
         LiveSemanticIntent.UNKNOWN,
     }:
         target = None
+
+    if intent is LiveSemanticIntent.HISTORICAL_ROOT_CAUSE:
+        if time_scope is not LiveSemanticTimeScope.HISTORICAL:
+            return None
+    elif time_scope is LiveSemanticTimeScope.HISTORICAL and intent is not LiveSemanticIntent.FOLLOW_UP:
+        return None
 
     return LiveSemanticRoute(
         intent=intent,
