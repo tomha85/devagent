@@ -9,6 +9,7 @@ from devagent.providers import ModelProvider, ProviderError
 
 from .assistant import LiveAssistantReply, LiveAssistantReplyKind
 from .control_guard import is_plc_control_request
+from .history import requested_history_seconds
 from .recursive_assistant import RecursiveLiveCommissioningAssistant
 from .semantic_intent import (
     LiveSemanticIntent,
@@ -18,25 +19,49 @@ from .semantic_intent import (
 )
 
 
-def _bridge_question(original: str, route: LiveSemanticRoute) -> str:
-    """Bridge a validated semantic route into the existing deterministic Live engine.
+def _historical_bridge_question(original: str, target: str) -> str:
+    """Create target-only historical wording while preserving bounded time intent.
 
-    The bridge is intentionally narrow: the model never supplies PLC facts. It only
-    selects an intent and an exact engineering target already validated against the
-    loaded project. The existing deterministic assistant still resolves logic and
-    reads trusted OPC UA evidence.
+    The original engineer sentence is never forwarded to deterministic target
+    resolution after the semantic router has validated a target. Only the parsed
+    historical age and STOP/START direction are retained, preventing another signal
+    name or a current-health phrase in the original wording from overriding the
+    validated route.
+    """
+    window = requested_history_seconds(original)
+    direction = getattr(window, "direction", None)
+    age_seconds = getattr(window, "age_seconds", None)
+
+    if direction == "STOP":
+        base = f"Why did {target} stop"
+    elif direction == "START":
+        base = f"Why did {target} start"
+    else:
+        base = f"Why did {target} change"
+
+    if age_seconds is not None:
+        return f"{base} {age_seconds:g} seconds ago?"
+    return f"{base} earlier?"
+
+
+def _bridge_question(original: str, route: LiveSemanticRoute) -> str:
+    """Bridge a validated semantic route into the deterministic Live engine.
+
+    Once an exact target has been validated, current and historical dispatch use
+    target-only canonical wording. The original sentence is intentionally not fed
+    back into generic deterministic intent classifiers because it may contain other
+    valid signal names or health phrases that conflict with the validated route.
     """
     if route.intent is LiveSemanticIntent.SYSTEM_HEALTH:
         return "Does the system have any faults?"
     if route.intent is LiveSemanticIntent.SYSTEM_OVERVIEW:
         return "What is this system?"
     if route.time_scope is LiveSemanticTimeScope.HISTORICAL and route.target:
-        # Preserve original wording for bounded time-window parsing, but the caller
-        # dispatches this directly to the historical engine so current-health phrase
-        # detection can never preempt the validated historical intent.
-        return f"Why did {route.target} change?\nOriginal engineer question: {original}"
+        return _historical_bridge_question(original, route.target)
+    if route.intent is LiveSemanticIntent.TAG_STATUS and route.target:
+        return f"What is the current value of {route.target}?"
     if route.target:
-        return f"{original}\nExact engineering target: {route.target}"
+        return f"Why is {route.target} in its current state?"
     return original
 
 
@@ -132,12 +157,7 @@ class SemanticLiveCommissioningAssistant(RecursiveLiveCommissioningAssistant):
         original: str,
         route: LiveSemanticRoute,
     ) -> LiveAssistantReply:
-        """Dispatch validated historical scope without passing current-state classifiers.
-
-        This is intentionally direct. A historical semantic route must never be
-        reclassified as current system health merely because the engineer's original
-        wording also contains a health/fault phrase.
-        """
+        """Dispatch validated historical scope without current-state reclassification."""
         if not self.connected or self.reconciliation is None:
             await self.start()
         bridged = _bridge_question(original, route)
@@ -205,4 +225,5 @@ __all__ = [
     "SemanticLiveCommissioningAssistant",
     "_DiagnosticProvider",
     "_bridge_question",
+    "_historical_bridge_question",
 ]
