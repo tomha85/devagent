@@ -79,19 +79,22 @@ def validate_opcua_endpoint(endpoint: str) -> str:
 
 @dataclass(frozen=True)
 class LiveSecurityConfig:
+    # Keep the original positional constructor order stable. New V1 profile
+    # fields are appended after application_uri so existing positional callers
+    # do not silently bind old arguments to new meanings.
     username: str | None = None
     password: str | None = field(default=None, repr=False)
-    allow_insecure_username_password: bool = False
     security_policy: str | None = None
     security_mode: str | None = None
     client_certificate: str | None = None
     client_private_key: str | None = None
     private_key_password: str | None = field(default=None, repr=False)
     server_certificate: str | None = None
+    application_uri: str = "urn:devagent:live:client"
     user_certificate: str | None = None
     user_private_key: str | None = None
     user_private_key_password: str | None = field(default=None, repr=False)
-    application_uri: str = "urn:devagent:live:client"
+    allow_insecure_username_password: bool = False
 
     def __post_init__(self) -> None:
         canonical_policy = canonical_security_policy_name(self.security_policy)
