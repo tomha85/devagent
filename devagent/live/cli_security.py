@@ -27,10 +27,12 @@ def add_security_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--security-policy",
-        choices=STANDARD_SECURITY_POLICIES,
+        metavar="POLICY",
         help=(
-            "OPC UA secure-channel policy. Legacy Basic128Rsa15/Basic256 are deprecated "
-            "compatibility profiles; ECC profiles are recognized but require runtime support."
+            "OPC UA secure-channel policy. Canonical names and standard URI-fragment aliases are accepted. "
+            "Recognized profiles: " + ", ".join(STANDARD_SECURITY_POLICIES) + ". "
+            "Basic128Rsa15/Basic256 are deprecated compatibility profiles; ECC profiles are recognized "
+            "but fail closed when the installed asyncua runtime cannot implement them."
         ),
     )
     group.add_argument(
