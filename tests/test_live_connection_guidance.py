@@ -129,7 +129,7 @@ def test_secure_username_signandencrypt_profile_is_supported() -> None:
 
     rendered = "\n".join(format_connection_guidance(guidance))
     assert "Certificate required to connect: YES" in rendered
-    assert "Username/password available: YES" in rendered
+    assert "Username/password available by default policy: YES" in rendered
     assert "Password: provide through --password-env" in rendered
 
 
@@ -156,7 +156,8 @@ def test_username_over_no_security_is_blocked_by_policy() -> None:
 
     assert assessment.supported is False
     assert assessment.support_status == "BLOCKED_BY_POLICY"
-    assert "NoSecurity" in assessment.reason
+    assert assessment.username_password_requires_insecure_opt_in is True
+    assert "--allow-insecure-username-password" in assessment.reason
 
 
 def test_x509_user_certificate_profile_is_supported() -> None:
