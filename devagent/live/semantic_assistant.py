@@ -7,10 +7,15 @@ from typing import Any
 
 from devagent.providers import ModelProvider, ProviderError
 
-from .assistant import LiveAssistantReply
+from .assistant import LiveAssistantReply, LiveAssistantReplyKind
 from .control_guard import is_plc_control_request
 from .recursive_assistant import RecursiveLiveCommissioningAssistant
-from .semantic_intent import LiveSemanticIntent, LiveSemanticRoute, resolve_semantic_intent
+from .semantic_intent import (
+    LiveSemanticIntent,
+    LiveSemanticRoute,
+    LiveSemanticTimeScope,
+    resolve_semantic_intent,
+)
 
 
 def _bridge_question(original: str, route: LiveSemanticRoute) -> str:
@@ -25,10 +30,10 @@ def _bridge_question(original: str, route: LiveSemanticRoute) -> str:
         return "Does the system have any faults?"
     if route.intent is LiveSemanticIntent.SYSTEM_OVERVIEW:
         return "What is this system?"
-    if route.intent is LiveSemanticIntent.HISTORICAL_ROOT_CAUSE and route.target:
-        # Preserve the original wording so existing bounded time-window and
-        # transition-direction parsing can still use any explicit engineer detail,
-        # while guaranteeing that the deterministic historical path is selected.
+    if route.time_scope is LiveSemanticTimeScope.HISTORICAL and route.target:
+        # Preserve original wording for bounded time-window parsing, but the caller
+        # dispatches this directly to the historical engine so current-health phrase
+        # detection can never preempt the validated historical intent.
         return f"Why did {route.target} change?\nOriginal engineer question: {original}"
     if route.target:
         return f"{original}\nExact engineering target: {route.target}"
@@ -79,10 +84,9 @@ class SemanticLiveCommissioningAssistant(RecursiveLiveCommissioningAssistant):
 
     Safety/control detection remains deterministic and executes before the language
     model. When AI is disabled, unavailable, low-confidence, or invalid, behavior
-    falls back to the existing deterministic question resolver. Unlike the original
-    V2 draft, AI fallback is never silent: the session records and renders a bounded
-    reason so engineers can distinguish deterministic fallback from successful LLM
-    interpretation.
+    falls back to the existing deterministic question resolver. AI fallback is never
+    silent: the session records and renders a bounded reason so engineers can
+    distinguish deterministic fallback from successful LLM interpretation.
     """
 
     _last_semantic_router_status: str = "NOT_RUN"
@@ -123,6 +127,33 @@ class SemanticLiveCommissioningAssistant(RecursiveLiveCommissioningAssistant):
             answer=reply.answer,
         )
 
+    async def _dispatch_historical_route(
+        self,
+        original: str,
+        route: LiveSemanticRoute,
+    ) -> LiveAssistantReply:
+        """Dispatch validated historical scope without passing current-state classifiers.
+
+        This is intentionally direct. A historical semantic route must never be
+        reclassified as current system health merely because the engineer's original
+        wording also contains a health/fault phrase.
+        """
+        if not self.connected or self.reconciliation is None:
+            await self.start()
+        bridged = _bridge_question(original, route)
+        reply = await self._historical_reply(bridged)
+        if reply is None:
+            return LiveAssistantReply(
+                question=original,
+                kind=LiveAssistantReplyKind.LIMITATION,
+                text=(
+                    "A historical semantic intent was accepted, but the deterministic historical engine could not safely dispatch the request. "
+                    "DevAgent will not substitute current OPC UA state for the requested past event."
+                ),
+                target_output=route.target,
+            )
+        return _restore_original_question(original, reply)
+
     async def answer(self, question: str) -> LiveAssistantReply:
         text = str(question or "").strip()
 
@@ -159,8 +190,12 @@ class SemanticLiveCommissioningAssistant(RecursiveLiveCommissioningAssistant):
 
         self._last_semantic_router_status = (
             f"ROUTED intent={route.intent.value} target={route.target or '-'} "
-            f"confidence={route.confidence:.2f}"
+            f"confidence={route.confidence:.2f} scope={route.time_scope.value}"
         )
+
+        if route.time_scope is LiveSemanticTimeScope.HISTORICAL and route.target:
+            return await self._dispatch_historical_route(text, route)
+
         bridged = _bridge_question(text, route)
         reply = await super().answer(bridged)
         return _restore_original_question(text, reply)
