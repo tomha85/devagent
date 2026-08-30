@@ -33,6 +33,8 @@ class EndpointConnectionAssessment:
     support_status: str
     secure_channel: bool
     certificate_required: bool
+    application_certificate_required: bool
+    user_certificate_required: bool
     anonymous_available: bool
     username_password_available: bool
     user_certificate_available: bool
@@ -121,6 +123,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
 
     if mode_is_none and policy_is_none:
         supported_identity = anonymous or user_certificate
+        x509_required = user_certificate and not anonymous
         if supported_identity:
             status = "SUPPORTED"
             reason = (
@@ -135,7 +138,10 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             )
         elif issued_token:
             status = "RUNTIME_UNAVAILABLE"
-            reason = "Endpoint requires IssuedToken/JWT identity, which asyncua >=2,<3 does not expose as a DevAgent client login path."
+            reason = (
+                "Endpoint requires IssuedToken/JWT identity, which asyncua >=2,<3 "
+                "does not expose as a DevAgent client login path."
+            )
         else:
             status = "UNSUPPORTED"
             reason = "NoSecurity endpoint does not advertise a currently supported user identity."
@@ -145,7 +151,9 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             supported=supported_identity,
             support_status=status,
             secure_channel=False,
-            certificate_required=False,
+            certificate_required=x509_required,
+            application_certificate_required=False,
+            user_certificate_required=x509_required,
             anonymous_available=anonymous,
             username_password_available=False,
             user_certificate_available=user_certificate,
@@ -163,6 +171,8 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             support_status="UNSUPPORTED",
             secure_channel=not mode_is_none,
             certificate_required=not mode_is_none,
+            application_certificate_required=not mode_is_none,
+            user_certificate_required=False,
             anonymous_available=anonymous,
             username_password_available=False,
             user_certificate_available=user_certificate,
@@ -170,7 +180,10 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             policy_name=policy_name,
             mode_name=mode_name or "-",
             deprecated_policy=False,
-            reason="Endpoint advertises inconsistent security mode/policy metadata; refusing to infer a connection profile.",
+            reason=(
+                "Endpoint advertises inconsistent security mode/policy metadata; "
+                "refusing to infer a connection profile."
+            ),
         )
 
     deprecated = policy_name in DEPRECATED_SECURITY_POLICIES
@@ -179,6 +192,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
     username_supported = username and mode_supported
     x509_supported = user_certificate and mode_supported
     authentication_supported = anonymous or username_supported or x509_supported
+    x509_required = x509_supported and not anonymous and not username_supported
 
     if policy_name in ECC_SECURITY_POLICIES:
         status = "RUNTIME_UNAVAILABLE"
@@ -202,7 +216,10 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             "Endpoint only advertises IssuedToken/JWT identity, which the supported asyncua runtime "
             "does not expose as a DevAgent client login path."
             if issued_token
-            else "Endpoint does not advertise a currently supported Anonymous, UserName, or X.509 Certificate identity token."
+            else (
+                "Endpoint does not advertise a currently supported Anonymous, UserName, "
+                "or X.509 Certificate identity token."
+            )
         )
     else:
         supported = True
@@ -219,6 +236,8 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
         support_status=status,
         secure_channel=True,
         certificate_required=True,
+        application_certificate_required=True,
+        user_certificate_required=x509_required,
         anonymous_available=anonymous,
         username_password_available=username_supported,
         user_certificate_available=x509_supported,
@@ -298,12 +317,17 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
             f"  Security: {recommended.policy_name} / {recommended.mode_name}",
             f"  Profile status: {recommended.support_status}",
             f"  Authentication: {recommended.authentication_summary}",
-            f"  Client application certificate: {'REQUIRED' if recommended.certificate_required else 'NOT REQUIRED'}",
+            (
+                "  Client application certificate: "
+                + ("REQUIRED" if recommended.application_certificate_required else "NOT REQUIRED")
+            ),
         ]
     )
     if recommended.deprecated_policy:
-        lines.append("  Warning: this security policy is deprecated by OPC UA and is provided for older-server compatibility.")
-    if recommended.certificate_required:
+        lines.append(
+            "  Warning: this security policy is deprecated by OPC UA and is provided for older-server compatibility."
+        )
+    if recommended.application_certificate_required:
         lines.extend(
             [
                 "  Required secure-channel files:",
@@ -315,16 +339,17 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
     if recommended.username_password_available:
         lines.append("  Password: provide through --password-env; never place it directly on argv.")
     if recommended.user_certificate_available:
+        prefix = "REQUIRED" if recommended.user_certificate_required else "AVAILABLE"
         lines.extend(
             [
-                "  X.509 user identity: provide --user-certificate and --user-private-key.",
+                f"  X.509 user identity: {prefix}; provide --user-certificate and --user-private-key when selected.",
                 "  User-key password, when needed: provide through --user-private-key-password-env.",
             ]
         )
     if not recommended.secure_channel:
         lines.extend(
             [
-                "  Next step: browse/read can be attempted directly when the chosen identity needs no additional material.",
+                "  Next step: browse/read can be attempted directly after supplying any required user-identity material.",
                 "  Note: NoSecurity is appropriate for lab/legacy use; production should prefer a supported secure endpoint when available.",
             ]
         )
