@@ -4,9 +4,9 @@ import asyncio
 from typing import Iterable
 
 # Backward-compatible production import surface. The evidence/timeline implementation
-# remains in commercial_realtime; the production manager below adds the final
-# fail-closed runtime barriers required by the default commercial CLI path.
-from .commercial_realtime import (
+# lives in the internal commercial implementation module; the production manager below
+# adds the final fail-closed runtime barriers required by the default commercial CLI.
+from ._commercial_realtime_impl import (
     EvidenceIntegrityTimelineStore,
     LiveEvidenceGap,
     LiveEvidenceIntegrityStatus,
