@@ -4,9 +4,13 @@ import time
 from typing import Any
 
 from .assistant import LiveAssistantReply, LiveAssistantReplyKind
-from .diagnosis import LiveCommissioningDiagnosis, observations_from_reconciled
+from .diagnosis import (
+    LiveCommissioningDiagnosis,
+    LiveDiagnosisStatus,
+    observations_from_reconciled,
+)
 from .diagnosis_guard import diagnose_output
-from .errors import LiveConfigurationError
+from .errors import LiveError
 from .qa import answer_commissioning_question
 from .reconciled_evidence import build_reconciled_live_agent_evidence
 from .recursive_diagnosis import (
@@ -40,14 +44,16 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
     Natural-language routing and AI explanation can take long enough for a running
     machine to change state. For modeled current-output diagnoses, this wrapper
     performs one final trusted evidence capture when answer preparation exceeded the
-    configured latency threshold. If the deterministic diagnosis changed, the stale
-    AI wording is discarded and a refreshed deterministic answer is returned.
+    configured latency threshold. If deterministic truth changed, stale AI wording is
+    discarded. If final truth cannot be established because the session/evidence path
+    is unavailable, the original current-state claim is also discarded and Live fails
+    closed with an explicit evidence gap.
     """
 
     def __init__(
         self,
         *args: Any,
-        final_revalidation_after_seconds: float = 0.5,
+        final_revalidation_after_seconds: float = 0.25,
         **kwargs: Any,
     ) -> None:
         if final_revalidation_after_seconds < 0:
@@ -57,16 +63,85 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             final_revalidation_after_seconds
         )
 
+    def _revalidation_gap_reply(
+        self,
+        question: str,
+        original: LiveCommissioningDiagnosis,
+        detail: str,
+    ) -> LiveAssistantReply:
+        target = original.target_output
+        summary = (
+            f"Current state for {target} could not be revalidated before this answer was displayed. "
+            "DevAgent discarded the earlier current-state wording rather than presenting potentially stale PLC truth."
+        )
+        limitation = f"Final current-state revalidation unavailable: {detail}"
+        diagnosis = LiveCommissioningDiagnosis(
+            target_output=target,
+            status=LiveDiagnosisStatus.INDETERMINATE,
+            expected_output=original.expected_output,
+            observed_output=None,
+            rule_ids=original.rule_ids,
+            source_locators=original.source_locators,
+            paths=(),
+            blockers=(),
+            evidence_ids=(),
+            limitations=(limitation,),
+            summary=summary,
+            next_checks=(
+                "Verify the read-only OPC UA session is CONNECTED with trusted CURRENT evidence, then ask the question again.",
+            ),
+        )
+        text = (
+            "DEVAGENT LIVE CURRENT STATE NOT REVALIDATED\n"
+            f"{summary}\n\n"
+            f"Diagnosis: {diagnosis.status.value}\n"
+            f"Target: {target}\n"
+            "Confidence: 0.35\n\n"
+            "Next checks:\n"
+            f"- {diagnosis.next_checks[0]}\n\n"
+            "Limitations:\n"
+            f"- {limitation}"
+        )
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.LIMITATION,
+            text=text,
+            target_output=target,
+            diagnosis=diagnosis,
+            answer=None,
+        )
+
     async def _refresh_current_diagnosis(
         self,
         question: str,
         original: LiveCommissioningDiagnosis,
     ) -> LiveAssistantReply | None:
-        if not self.connected or self.reconciliation is None:
-            return None
         target = original.target_output
-        if not target or not self.context.rules_for_output(target):
-            return None
+        if not target:
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                "the previous diagnosis has no canonical target",
+            )
+        if self.reconciliation is None:
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                "engineering-to-OPC-UA reconciliation is unavailable",
+            )
+        if not self.connected:
+            status = self.manager.status(self.connection.plc_id)
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                f"OPC UA session state is {status.state.value}",
+            )
+        if not self.context.rules_for_output(target):
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                "the modeled output rule is no longer available in the loaded engineering context",
+            )
 
         required_tag_ids = required_tag_ids_for_recursive_output(
             self.context,
@@ -75,7 +150,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             max_nodes=self.trace_max_nodes,
         )
         if not required_tag_ids:
-            return None
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                "no bounded dependency evidence set could be produced for the target",
+            )
         try:
             reconciled = await build_reconciled_live_agent_evidence(
                 self.manager,
@@ -83,8 +162,12 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                 required_tag_ids=required_tag_ids,
                 require_all=False,
             )
-        except LiveConfigurationError:
-            return None
+        except LiveError as exc:
+            return self._revalidation_gap_reply(
+                question,
+                original,
+                str(exc),
+            )
 
         observations = observations_from_reconciled(reconciled)
         refreshed = diagnose_output(self.context, target, observations)
