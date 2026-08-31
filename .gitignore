@@ -13,3 +13,15 @@ htmlcov/
 .idea/
 .vscode/
 .devagent/
+
+# Never commit local private/commercial/customer corpora into the public core.
+.devagent-private/
+commercial-private/
+customer-private/
+field-private/
+qualification-private/
+
+# Common private key / certificate bundle formats.
+*.key
+*.p12
+*.pfx
