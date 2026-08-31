@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 import ssl
 from tempfile import TemporaryDirectory
@@ -251,6 +252,7 @@ async def _build_trust_store(security: LiveSecurityConfig) -> Any:
             normalized_crl.mkdir()
 
         certificate_index = 0
+        seen_certificate_digests: set[bytes] = set()
         for source in trust_files:
             certificates = load_certificate_objects(
                 source,
@@ -258,10 +260,13 @@ async def _build_trust_store(security: LiveSecurityConfig) -> Any:
                 label=f"trust-store certificate {source.name}",
             )
             for certificate in certificates:
+                der = certificate_der(certificate)
+                digest = hashlib.sha256(der).digest()
+                if digest in seen_certificate_digests:
+                    continue
+                seen_certificate_digests.add(digest)
                 certificate_index += 1
-                (normalized_trust / f"trusted-{certificate_index:04d}.der").write_bytes(
-                    certificate_der(certificate)
-                )
+                (normalized_trust / f"trusted-{certificate_index:04d}.der").write_bytes(der)
 
         for index, source in enumerate(crl_files, start=1):
             crl = load_crl_object(source, label=f"CRL {source.name}")
