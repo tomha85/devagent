@@ -395,7 +395,7 @@ class LiveTimelineStore:
 
 
 class LiveHistoryCollector:
-    """Bounded read-only polling collector used by onsite historical diagnosis."""
+    """Bounded read-only collector using realtime events plus polling fallback."""
 
     def __init__(
         self,
@@ -458,6 +458,9 @@ class LiveHistoryCollector:
     async def start(self) -> None:
         if self.active or not self._mappings:
             return
+        monitor = getattr(self.manager, "monitor_node_ids", None)
+        if callable(monitor):
+            await monitor(self.reconciliation.plc_id, tuple(self._node_to_mapping))
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="devagent-live-history")
 
@@ -477,47 +480,80 @@ class LiveHistoryCollector:
             except asyncio.CancelledError:
                 pass
 
-    async def _run(self) -> None:
+    def _samples_from_values(
+        self,
+        values: Iterable[Any],
+        *,
+        plc_id: str,
+        plc_name: str,
+        trust_layer: LiveDataTrustLayer,
+    ) -> list[LiveHistoricalSample]:
+        samples: list[LiveHistoricalSample] = []
+        for value in values:
+            mapping = self._node_to_mapping.get(value.node_id)
+            if mapping is None:
+                continue
+            record = trust_layer.record(
+                plc_id=plc_id,
+                plc_name=plc_name,
+                value=value,
+            )
+            stamp = value.source_timestamp or value.server_timestamp or value.received_at
+            samples.append(
+                LiveHistoricalSample(
+                    timestamp=stamp,
+                    plc_id=plc_id,
+                    tag_id=mapping.tag_id,
+                    tag_name=mapping.tag_name,
+                    node_id=value.node_id,
+                    value=value.value,
+                    definitive_current=record.definitive_current,
+                    quality=record.quality,
+                    trust=record.trust,
+                )
+            )
+        return samples
+
+    async def _collect_once(self) -> None:
         plc_id = self.reconciliation.plc_id
-        trust_layer = LiveDataTrustLayer()
         node_ids = tuple(self._node_to_mapping)
-        while not self._stop.is_set():
-            try:
-                results = await self.manager.read_many({plc_id: node_ids})
-                batch = results[plc_id]
-                if batch.error:
-                    self.last_error = str(batch.error)
-                status = self.manager.status(plc_id)
-                samples: list[LiveHistoricalSample] = []
-                for value in batch.values:
-                    mapping = self._node_to_mapping.get(value.node_id)
-                    if mapping is None:
-                        continue
-                    record = trust_layer.record(
+        trust_layer = LiveDataTrustLayer()
+        status = self.manager.status(plc_id)
+
+        drain = getattr(self.manager, "drain_realtime_events", None)
+        if callable(drain):
+            events = drain(plc_id, node_ids=node_ids, max_events=5000)
+            if events:
+                self.store.append_many(
+                    self._samples_from_values(
+                        events,
                         plc_id=plc_id,
                         plc_name=status.plc_name,
-                        value=value,
+                        trust_layer=trust_layer,
                     )
-                    stamp = (
-                        value.source_timestamp
-                        or value.server_timestamp
-                        or value.received_at
-                    )
-                    samples.append(
-                        LiveHistoricalSample(
-                            timestamp=stamp,
-                            plc_id=plc_id,
-                            tag_id=mapping.tag_id,
-                            tag_name=mapping.tag_name,
-                            node_id=value.node_id,
-                            value=value.value,
-                            definitive_current=record.definitive_current,
-                            quality=record.quality,
-                            trust=record.trust,
-                        )
-                    )
-                self.store.append_many(samples)
-                self.cycles += 1
+                )
+
+        results = await self.manager.read_many({plc_id: node_ids})
+        batch = results[plc_id]
+        if batch.error:
+            self.last_error = str(batch.error)
+        else:
+            self.last_error = None
+        status = self.manager.status(plc_id)
+        self.store.append_many(
+            self._samples_from_values(
+                batch.values,
+                plc_id=plc_id,
+                plc_name=status.plc_name,
+                trust_layer=trust_layer,
+            )
+        )
+        self.cycles += 1
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._collect_once()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
