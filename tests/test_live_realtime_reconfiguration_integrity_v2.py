@@ -42,7 +42,10 @@ def test_real_exact_monitor_refresh_records_closed_reconfiguration_interval() ->
                 second = (simulator.node_ids.production_count,)
 
                 await manager.replace_monitored_node_ids("plc1", first)
-                await asyncio.sleep(0.20)
+                assert await manager.wait_for_active_monitoring(
+                    "plc1",
+                    timeout_seconds=5.0,
+                )
                 assert manager.integrity_status("plc1").active_monitored_nodes == 1
                 initial_gaps = manager.drain_evidence_gaps("plc1")
                 initial_reconfiguration = [
@@ -57,7 +60,10 @@ def test_real_exact_monitor_refresh_records_closed_reconfiguration_interval() ->
                 assert manager.integrity_status("plc1").evidence_gap_count == 0
 
                 await manager.replace_monitored_node_ids("plc1", second)
-                await asyncio.sleep(0.20)
+                assert await manager.wait_for_active_monitoring(
+                    "plc1",
+                    timeout_seconds=5.0,
+                )
                 assert manager.integrity_status("plc1").active_monitored_nodes == 1
                 assert manager._state("plc1").monitored_nodes == set(second)
                 assert not any(
