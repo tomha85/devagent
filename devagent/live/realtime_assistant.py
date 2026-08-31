@@ -288,8 +288,14 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         )
         if not answer:
             return authoritative
-        if _contains_forbidden_control_advice(answer) or any(
-            _contains_forbidden_control_advice(item) for item in next_checks
+        if (
+            is_plc_control_request(answer)
+            or _contains_forbidden_control_advice(answer)
+            or any(
+                is_plc_control_request(item)
+                or _contains_forbidden_control_advice(item)
+                for item in next_checks
+            )
         ):
             return authoritative
 
