@@ -10,6 +10,7 @@ from devagent.live.diagnosis import (
     LiveConditionState,
     LiveDiagnosisStatus,
 )
+from devagent.live.manager import PlcSessionState
 from devagent.live.realtime_assistant import (
     RealtimeSemanticLiveCommissioningAssistant,
     _diagnosis_signature,
@@ -93,6 +94,45 @@ def test_answer_replaces_stale_current_reply_after_threshold(monkeypatch) -> Non
     reply = asyncio.run(assistant.answer(original.question))
     assert reply.text == "refreshed deterministic result"
     assert reply.diagnosis is refreshed.diagnosis
+
+
+def test_slow_answer_fails_closed_when_final_revalidation_loses_session(
+    monkeypatch,
+) -> None:
+    original = LiveAssistantReply(
+        question="why is RunCmd false?",
+        kind=LiveAssistantReplyKind.DIAGNOSIS,
+        text="old current-state ai wording",
+        target_output="RunCmd",
+        diagnosis=_diagnosis(observed_output=False, blocker_value=False),
+    )
+
+    async def fake_parent(self, question: str):
+        return original
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_parent)
+
+    assistant = object.__new__(RealtimeSemanticLiveCommissioningAssistant)
+    assistant.final_revalidation_after_seconds = 0.0
+    assistant.reconciliation = object()
+    assistant.connection = SimpleNamespace(plc_id="plc1")
+    assistant.manager = SimpleNamespace(
+        status=lambda plc_id: SimpleNamespace(
+            connected=False,
+            state=PlcSessionState.RECONNECTING,
+        )
+    )
+
+    reply = asyncio.run(assistant.answer(original.question))
+
+    assert reply.kind is LiveAssistantReplyKind.LIMITATION
+    assert reply.diagnosis is not None
+    assert reply.diagnosis.status is LiveDiagnosisStatus.INDETERMINATE
+    assert reply.diagnosis.observed_output is None
+    assert reply.diagnosis.evidence_ids == ()
+    assert "CURRENT STATE NOT REVALIDATED" in reply.text
+    assert "RECONNECTING" in reply.text
+    assert "old current-state ai wording" not in reply.text
 
 
 def test_answer_keeps_fast_reply_without_extra_revalidation(monkeypatch) -> None:
