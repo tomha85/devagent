@@ -13,7 +13,8 @@ _REQUEST_CONTROL = re.compile(
     rf"(?:{_CONTROL_VERBS})\b",
     flags=re.IGNORECASE,
 )
-_TURN_TARGET = r"(?:the\s+)?[A-Za-z_][A-Za-z0-9_.:\[\]-]*"
+_TURN_TARGET_WORD = r"[A-Za-z_][A-Za-z0-9_.:\[\]-]*"
+_TURN_TARGET = rf"(?:the\s+)?{_TURN_TARGET_WORD}(?:\s+{_TURN_TARGET_WORD}){{0,5}}"
 _TURN_CONTROL = re.compile(
     rf"^\s*(?:please\s+)?turn\s+(?:(?:on|off)\b|{_TURN_TARGET}\s+(?:on|off)\b)",
     flags=re.IGNORECASE,
@@ -30,8 +31,9 @@ def is_plc_control_request(text: str) -> bool:
 
     Diagnostic wording such as "why did the motor stop?" is intentionally not
     blocked. Imperative/request wording such as "stop the motor", "turn the
-    machine off", or "how do I force this tag" is blocked before any provider
-    call.
+    main conveyor off", or "how do I force this tag" is blocked before any
+    provider call. Suffix-form turn requests accept a bounded multi-word target
+    so normal machine names cannot bypass the read-only guard.
     """
 
     value = str(text or "").strip()
