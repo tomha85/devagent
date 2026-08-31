@@ -165,27 +165,11 @@ def _provider_payload(
 
 
 # Generated prose needs a broader guard than the user-request control detector.
-# Phrase checks catch common indirect machine-control advice, while the reference
-# regexes reject control verbs applied to arbitrary canonical PLC/tag identifiers.
-# Diagnostic wording such as "turned off" and "start by inspecting" remains allowed.
+# The guard normalizes lightweight Markdown/quote delimiters, then requires an
+# actual PLC-like or machine action object before treating a control verb as
+# prohibited. This blocks quoted canonical references without rejecting safety
+# boundary prose such as "Write access is disabled" or "Reset commands are unavailable".
 _FORBIDDEN_CONTROL_PHRASES = (
-    "force the",
-    "force tag",
-    "force output",
-    "force coil",
-    "write the",
-    "write tag",
-    "write output",
-    "bypass the",
-    "bypass safety",
-    "bypass interlock",
-    "reset the",
-    "reset safety",
-    "reset fault",
-    "reset trip",
-    "reset plc",
-    "reset controller",
-    "reset drive",
     "download to plc",
     "download to the plc",
     "upload to plc",
@@ -194,71 +178,152 @@ _FORBIDDEN_CONTROL_PHRASES = (
     "change the plc mode",
     "change controller mode",
     "change the controller mode",
-    "set the output",
-    "set output",
-    "set the tag",
-    "set tag",
-    "start the line",
-    "start line",
-    "start the machine",
-    "start machine",
-    "start the motor",
-    "start motor",
-    "start the conveyor",
-    "start conveyor",
-    "start the equipment",
-    "start equipment",
-    "stop the line",
-    "stop line",
-    "stop the machine",
-    "stop machine",
-    "stop the motor",
-    "stop motor",
-    "stop the conveyor",
-    "stop conveyor",
-    "stop the equipment",
-    "stop equipment",
-    "jog the",
-    "jog axis",
-    "jog motor",
-    "override the",
-    "override interlock",
-    "override safety",
-    "command the motor",
-    "command the drive",
-    "command the output",
 )
 
 _PLC_REFERENCE_TOKEN = r"[A-Za-z_][A-Za-z0-9_.:\[\]]*"
+_REFERENCE_DELIMITER_RE = re.compile(r"[`\"'“”‘’()]", flags=re.UNICODE)
+
+_SAFE_CONTROL_META_TARGETS = frozenset(
+    {
+        "access",
+        "action",
+        "actions",
+        "advice",
+        "analysis",
+        "capability",
+        "capabilities",
+        "command",
+        "commands",
+        "diagnostic",
+        "diagnostics",
+        "documentation",
+        "docs",
+        "evidence",
+        "guidance",
+        "instruction",
+        "instructions",
+        "logging",
+        "logs",
+        "note",
+        "notes",
+        "operation",
+        "operations",
+        "permission",
+        "permissions",
+        "report",
+        "reports",
+        "request",
+        "requests",
+        "scope",
+        "support",
+    }
+)
+
+_GENERIC_MACHINE_CONTROL_TARGETS = frozenset(
+    {
+        "axis",
+        "bit",
+        "cell",
+        "coil",
+        "controller",
+        "conveyor",
+        "drive",
+        "equipment",
+        "fan",
+        "fault",
+        "feeder",
+        "interlock",
+        "line",
+        "machine",
+        "mode",
+        "motor",
+        "output",
+        "plc",
+        "pump",
+        "robot",
+        "safety",
+        "servo",
+        "system",
+        "tag",
+        "trip",
+        "valve",
+    }
+)
 
 _GENERATED_DIRECT_CONTROL_RE = re.compile(
-    rf"\b(?:force|write|set|reset|bypass|override|jog|command)\s+"
-    rf"(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b",
+    rf"\b(?P<verb>force|write|set|reset|bypass|override|jog|command)\s+"
+    rf"(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
     flags=re.IGNORECASE,
 )
 
 _GENERATED_START_STOP_CONTROL_RE = re.compile(
-    rf"\b(?:start|stop)\s+"
+    rf"\b(?P<verb>start|stop)\s+"
     rf"(?!by\b|with\b|after\b|before\b|when\b|if\b|because\b)"
-    rf"(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b",
+    rf"(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
     flags=re.IGNORECASE,
 )
 
-_GENERATED_TURN_CONTROL_RE = re.compile(
-    rf"(?:\bturn\s+(?:on|off)\s+(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b|"
-    rf"\bturn\s+(?:the\s+)?{_PLC_REFERENCE_TOKEN}\s+(?:on|off)\b)",
+_GENERATED_TURN_PREFIX_RE = re.compile(
+    rf"\bturn\s+(?:on|off)\s+(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
     flags=re.IGNORECASE,
 )
+
+_GENERATED_TURN_SUFFIX_RE = re.compile(
+    rf"\bturn\s+(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\s+(?:on|off)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_like_plc_action_object(value: str) -> bool:
+    token = str(value or "").strip()
+    lowered = token.casefold()
+    if not token or lowered in _SAFE_CONTROL_META_TARGETS:
+        return False
+    if lowered in _GENERIC_MACHINE_CONTROL_TARGETS:
+        return True
+    if any(char in token for char in "_.:[]"):
+        return True
+    if any(char.isdigit() for char in token):
+        return True
+    if len(token) > 1 and token.isupper():
+        return True
+    return any(char.isupper() for char in token[1:]) and any(
+        char.islower() for char in token
+    )
+
+
+def _has_generated_control_target_match(
+    pattern: re.Pattern[str],
+    text: str,
+) -> bool:
+    return any(
+        _looks_like_plc_action_object(match.group("target"))
+        for match in pattern.finditer(text)
+    )
 
 
 def _contains_forbidden_control_advice(text: str) -> bool:
     normalized = " ".join(str(text or "").split())
-    lowered = normalized.casefold()
+    comparable = _REFERENCE_DELIMITER_RE.sub("", normalized)
+    lowered = comparable.casefold()
     return (
         any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
-        or _GENERATED_DIRECT_CONTROL_RE.search(normalized) is not None
-        or _GENERATED_START_STOP_CONTROL_RE.search(normalized) is not None
-        or _GENERATED_TURN_CONTROL_RE.search(normalized) is not None
+        or _has_generated_control_target_match(
+            _GENERATED_DIRECT_CONTROL_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_START_STOP_CONTROL_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_TURN_PREFIX_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_TURN_SUFFIX_RE,
+            comparable,
+        )
     )
 
 
