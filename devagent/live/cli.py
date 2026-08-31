@@ -248,7 +248,6 @@ async def _connected_client(
     await client.connect()
     return client
 
-
 def _print_connection_security(client: ReadOnlyOpcUaClient) -> None:
     print(f"Authentication: {client.authentication_mode}")
     print(f"Security: {client.security_summary}")
@@ -271,7 +270,7 @@ async def _run_probe(args: argparse.Namespace) -> int:
         print(f"Security mode: {endpoint.security_mode or '-'}")
         print(f"Security policy: {endpoint.security_policy_uri or '-'}")
         print(f"User token types: {tokens}")
-        print(f"DevAgent profile: {'SUPPORTED' if assessment.supported else 'UNSUPPORTED'}")
+        print(f"DevAgent profile: {assessment.support_status}")
         print(f"Client certificate: {'REQUIRED' if assessment.certificate_required else 'NOT REQUIRED'}")
         print(f"Authentication: {assessment.authentication_summary}")
         print(f"Assessment: {assessment.reason}")
@@ -746,7 +745,3 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 130
     except (LiveError, OSError, ValueError) as exc:
         parser.exit(2, f"devagent live: {exc}\n")
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
