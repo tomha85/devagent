@@ -70,9 +70,16 @@ class _FakeTrustStore:
 
 
 class _FakeValidator:
+    instances: list["_FakeValidator"] = []
+
     def __init__(self, options, trust_store) -> None:
         self.options = options
         self.trust_store = trust_store
+        self.calls: list[tuple[object, object]] = []
+        type(self).instances.append(self)
+
+    async def __call__(self, certificate: object, app_description: object) -> None:
+        self.calls.append((certificate, app_description))
 
 
 class _FakeValidatorOptions:
@@ -154,11 +161,13 @@ def test_empty_trust_store_fails_closed(tmp_path: Path) -> None:
 def test_trust_store_is_wired_to_asyncua_validator(monkeypatch, tmp_path: Path) -> None:
     _FakeClient.instances.clear()
     _FakeTrustStore.instances.clear()
+    _FakeValidator.instances.clear()
     client_cert, client_key = _secure_files(tmp_path)
     trust_store = _trust_dir(tmp_path)
     crl_store = tmp_path / "crl"
     crl_store.mkdir()
     (crl_store / "factory.crl.der").write_text("crl", encoding="utf-8")
+    hostname_calls: list[tuple[object, str]] = []
 
     monkeypatch.setattr(
         opcua_client,
@@ -170,6 +179,11 @@ def test_trust_store_is_wired_to_asyncua_validator(monkeypatch, tmp_path: Path) 
         opcua_client,
         "_require_trust_runtime",
         lambda: (_FakeTrustStore, _FakeValidator, _FakeValidatorOptions),
+    )
+    monkeypatch.setattr(
+        opcua_client,
+        "_validate_server_certificate_hostname",
+        lambda certificate, endpoint: hostname_calls.append((certificate, endpoint)),
     )
 
     config = LiveSecurityConfig(
@@ -186,12 +200,18 @@ def test_trust_store_is_wired_to_asyncua_validator(monkeypatch, tmp_path: Path) 
         await client.connect()
         raw = _FakeClient.instances[-1]
         trust = _FakeTrustStore.instances[-1]
+        validator = _FakeValidator.instances[-1]
         assert trust.loaded is True
         assert trust.trust_locations == [trust_store]
         assert trust.crl_locations == [crl_store]
-        assert isinstance(raw.certificate_validator, _FakeValidator)
-        assert raw.certificate_validator.options == 3
-        assert raw.certificate_validator.trust_store is trust
+        assert validator.options == 3
+        assert validator.trust_store is trust
+        assert callable(raw.certificate_validator)
+        certificate = object()
+        app_description = object()
+        await raw.certificate_validator(certificate, app_description)
+        assert validator.calls == [(certificate, app_description)]
+        assert hostname_calls == [(certificate, "opc.tcp://127.0.0.1:4840/")]
         assert raw.security_call[1]["server_certificate"] is None
 
     asyncio.run(scenario())
