@@ -166,27 +166,25 @@ def test_timestamp_less_batch_replaces_subscription_when_order_is_unknowable() -
     assert state.cache_sources["n1"] == "BATCH_READ"
 
 
-def test_cached_value_is_rejected_after_source_timestamp_ages_stale() -> None:
+def test_cached_value_is_rejected_after_receipt_ages_out_of_cache_residency() -> None:
     async def scenario() -> None:
         manager = _manager()
         await manager.connect("plc1")
-        outer = manager._entry("plc1").client
-        assert outer is not None
-        outer.stale_after_seconds = 5.0
 
         now = datetime.now(timezone.utc)
+        observed = now - timedelta(seconds=0.30)
         state = manager._state("plc1")
         state.cache["n1"] = _runtime(
             "n1",
             True,
-            source_timestamp=now - timedelta(seconds=5.1),
-            server_timestamp=now - timedelta(seconds=5.1),
-            received_at=now,
+            source_timestamp=observed,
+            server_timestamp=observed,
+            received_at=observed,
         )
         state.cache_sources["n1"] = "SUBSCRIPTION"
 
-        # RuntimeValue.stale was False when constructed, but lookup-time source age
-        # has crossed the server freshness threshold and must force a new Read.
+        # Runtime trust was valid when received, but the local cache-residency
+        # window has expired. A current question must therefore issue a fresh Read.
         assert state.cache["n1"].stale is False
         assert manager._cached_snapshot("plc1", ("n1",)) is None
         await manager.disconnect("plc1")

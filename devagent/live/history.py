@@ -129,7 +129,11 @@ def requested_history_seconds(question: str, *, default: float = 60.0) -> float:
 
 def requested_transition_direction(question: str) -> str | None:
     """Return STOP/START intent when the question explicitly asks for one."""
-    text = " " + re.sub(r"[_-]+", " ", str(question or "").casefold()) + " "
+    text = (
+        " "
+        + re.sub(r"[_\W]+", " ", str(question or "").casefold(), flags=re.UNICODE)
+        + " "
+    )
     stop_terms = (
         " stop ",
         " stopped ",

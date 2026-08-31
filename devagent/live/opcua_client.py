@@ -4,8 +4,8 @@ import asyncio
 from collections import deque
 from datetime import datetime, timezone
 import hashlib
+import ipaddress
 from pathlib import Path
-import ssl
 from tempfile import TemporaryDirectory
 from typing import Any, Iterable
 from urllib.parse import urlsplit
@@ -74,40 +74,95 @@ def _require_trust_runtime() -> tuple[Any, Any, Any]:
     return TrustStore, CertificateValidator, CertificateValidatorOptions
 
 
-def _validate_server_certificate_hostname(certificate: x509.Certificate, endpoint: str) -> None:
-    """Require the OPC UA server certificate SAN to match the configured endpoint host.
+def _canonical_dns_name(value: str) -> str:
+    """Normalize a DNS SAN/host without relying on removed ssl.match_hostname()."""
+    raw = str(value or "").strip().rstrip(".")
+    labels = raw.split(".")
+    encoded: list[str] = []
+    for label in labels:
+        if label == "*":
+            encoded.append("*")
+        else:
+            encoded.append(label.encode("idna").decode("ascii"))
+    return ".".join(encoded).casefold()
 
-    asyncua 2.0.x validates trust, lifetime, ApplicationURI, key usage, and
-    revocation, but its hostname check is not active. DevAgent adds this check
-    for trust-store/CA mode so a different server certificate issued by the
-    same trusted CA cannot impersonate the configured PLC endpoint.
+
+def _dns_san_matches(pattern: str, host: str) -> bool:
+    try:
+        expected = _canonical_dns_name(pattern)
+        observed = _canonical_dns_name(host)
+    except UnicodeError:
+        return False
+
+    if "*" not in expected:
+        return expected == observed
+
+    expected_labels = expected.split(".")
+    observed_labels = observed.split(".")
+
+    # Permit only the conventional complete left-most wildcard and require it
+    # to match exactly one DNS label.
+    if (
+        not expected_labels
+        or expected_labels[0] != "*"
+        or any("*" in label for label in expected_labels[1:])
+    ):
+        return False
+
+    return (
+        len(observed_labels) == len(expected_labels)
+        and observed_labels[1:] == expected_labels[1:]
+    )
+
+
+def _validate_server_certificate_hostname(
+    certificate: x509.Certificate,
+    endpoint: str,
+) -> None:
+    """Require the OPC UA server certificate SAN to match the endpoint host.
+
+    asyncua validates trust/lifetime/ApplicationURI/key usage/revocation, but
+    DevAgent additionally binds a trusted certificate to the configured PLC
+    hostname/IP so another certificate from the same CA cannot impersonate it.
     """
 
     host = urlsplit(endpoint).hostname
     if not host:
-        raise LiveConnectionError("OPC UA endpoint host is unavailable for certificate validation")
+        raise LiveConnectionError(
+            "OPC UA endpoint host is unavailable for certificate validation"
+        )
+
     try:
-        san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        san = certificate.extensions.get_extension_for_class(
+            x509.SubjectAlternativeName
+        ).value
     except x509.ExtensionNotFound as exc:
         raise LiveConnectionError(
-            f"OPC UA server certificate has no SubjectAlternativeName for endpoint host {host!r}"
+            "OPC UA server certificate has no SubjectAlternativeName "
+            f"for endpoint host {host!r}"
         ) from exc
 
-    presented: list[tuple[str, str]] = []
-    presented.extend(("DNS", value) for value in san.get_values_for_type(x509.DNSName))
-    presented.extend(
-        ("IP Address", str(value)) for value in san.get_values_for_type(x509.IPAddress)
-    )
-    if not presented:
+    dns_names = tuple(san.get_values_for_type(x509.DNSName))
+    ip_addresses = tuple(san.get_values_for_type(x509.IPAddress))
+
+    if not dns_names and not ip_addresses:
         raise LiveConnectionError(
-            f"OPC UA server certificate has no DNS/IP SubjectAlternativeName for endpoint host {host!r}"
+            "OPC UA server certificate has no DNS/IP SubjectAlternativeName "
+            f"for endpoint host {host!r}"
         )
+
     try:
-        ssl.match_hostname({"subjectAltName": presented}, host)
-    except ssl.CertificateError as exc:
-        raise LiveConnectionError(
-            f"OPC UA server certificate does not match endpoint host {host!r}"
-        ) from exc
+        expected_ip = ipaddress.ip_address(host)
+    except ValueError:
+        if any(_dns_san_matches(name, host) for name in dns_names):
+            return
+    else:
+        if any(expected_ip == address for address in ip_addresses):
+            return
+
+    raise LiveConnectionError(
+        f"OPC UA server certificate does not match endpoint host {host!r}"
+    )
 
 
 def _standard_asyncua_certificate_path(path: str) -> bool:
@@ -666,12 +721,21 @@ class ReadOnlyOpcUaClient:
         client = self._require_connected()
         _Client, ua = _require_asyncua()
         root = client.nodes.objects
-        queue: deque[tuple[Any, str, int]] = deque([(root, "Objects", 0)])
+        # Prioritize application/vendor namespaces over the large standard
+        # namespace-0 Server tree. Otherwise a bounded browse can exhaust
+        # max_nodes before reaching PLC/application variables.
+        application_queue: deque[tuple[Any, str, int]] = deque(
+            [(root, "Objects", 0)]
+        )
+        standard_queue: deque[tuple[Any, str, int]] = deque()
         results: list[BrowseNode] = []
         visited: set[str] = set()
 
-        while queue and len(results) < max_nodes:
-            parent, parent_path, depth = queue.popleft()
+        while (application_queue or standard_queue) and len(results) < max_nodes:
+            if application_queue:
+                parent, parent_path, depth = application_queue.popleft()
+            else:
+                parent, parent_path, depth = standard_queue.popleft()
             if depth >= max_depth:
                 continue
             try:
@@ -733,7 +797,15 @@ class ReadOnlyOpcUaClient:
                 if len(results) >= max_nodes:
                     break
                 if depth + 1 < max_depth:
-                    queue.append((child, path, depth + 1))
+                    namespace_index = int(
+                        getattr(child.nodeid, "NamespaceIndex", 0) or 0
+                    )
+                    target_queue = (
+                        application_queue
+                        if namespace_index != 0
+                        else standard_queue
+                    )
+                    target_queue.append((child, path, depth + 1))
 
         return results
 

@@ -526,9 +526,17 @@ def build_live_advanced_coverage(project: Any, context: LiveEngineeringContext) 
     models.extend(_udt_array_models(project, context))
 
     deduped: list[LiveAdvancedModel] = []
-    seen: set[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = set()
+    seen: set[
+        tuple[str, str, str, tuple[str, ...], tuple[str, ...]]
+    ] = set()
     for item in models:
-        key = (item.kind.value, normalize_engineering_identifier(item.name), item.references, item.source_locators)
+        key = (
+            item.kind.value,
+            item.instruction.strip().casefold(),
+            normalize_engineering_identifier(item.name),
+            item.references,
+            item.source_locators,
+        )
         if key in seen:
             continue
         seen.add(key)
