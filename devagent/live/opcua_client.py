@@ -5,11 +5,24 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 import ssl
+from tempfile import TemporaryDirectory
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 
+from .certificate_material import (
+    certificate_der,
+    certificate_encoding,
+    crl_store_files,
+    is_pkcs12_path,
+    load_certificate_objects,
+    load_crl_object,
+    load_pkcs12_bundle,
+    private_key_der,
+    trust_store_files,
+)
 from .errors import LiveConnectionError, LiveDependencyError
 from .models import BrowseNode, EndpointSummary, Quality, RuntimeValue
 from .security import LiveSecurityConfig, validate_opcua_endpoint
@@ -35,6 +48,17 @@ def _require_security_policies() -> Any:
             'Install it with: python -m pip install "devagent-ai[live]"'
         ) from exc
     return security_policies
+
+
+def _require_uacrypto() -> Any:
+    try:
+        from asyncua.crypto import uacrypto
+    except ImportError as exc:  # pragma: no cover - optional dependency guard
+        raise LiveDependencyError(
+            'DevAgent Live certificate-format compatibility requires the optional OPC UA runtime. '
+            'Install it with: python -m pip install "devagent-ai[live]"'
+        ) from exc
+    return uacrypto
 
 
 def _require_trust_runtime() -> tuple[Any, Any, Any]:
@@ -83,6 +107,174 @@ def _validate_server_certificate_hostname(certificate: x509.Certificate, endpoin
         raise LiveConnectionError(
             f"OPC UA server certificate does not match endpoint host {host!r}"
         ) from exc
+
+
+def _standard_asyncua_certificate_path(path: str) -> bool:
+    return Path(path).suffix.lower() in {".der", ".pem"}
+
+
+def _prepare_certificate_input(
+    path: str,
+    *,
+    password: str | None,
+    label: str,
+) -> tuple[Any, tuple[Any, ...]]:
+    """Prepare a certificate for asyncua while preserving legacy .der/.pem behavior."""
+
+    if _standard_asyncua_certificate_path(path):
+        return str(path), ()
+
+    uacrypto = _require_uacrypto()
+    if is_pkcs12_path(path):
+        bundle = load_pkcs12_bundle(path, password=password, label=label)
+        if bundle.certificate is None:
+            raise LiveConnectionError(f"OPC UA {label} PKCS#12 bundle contains no certificate")
+        certificate = uacrypto.CertProperties(
+            certificate_der(bundle.certificate),
+            extension="der",
+        )
+        chain = tuple(
+            uacrypto.CertProperties(certificate_der(item), extension="der")
+            for item in bundle.additional_certificates
+        )
+        return certificate, chain
+
+    return uacrypto.CertProperties(path, extension=certificate_encoding(path)), ()
+
+
+def _prepare_private_key_input(
+    path: str,
+    *,
+    password: str | None,
+    label: str,
+) -> tuple[Any, str | None]:
+    if _standard_asyncua_certificate_path(path):
+        return str(path), password
+
+    uacrypto = _require_uacrypto()
+    if is_pkcs12_path(path):
+        bundle = load_pkcs12_bundle(path, password=password, label=label)
+        if bundle.private_key is None:
+            raise LiveConnectionError(f"OPC UA {label} PKCS#12 bundle contains no private key")
+        return (
+            uacrypto.CertProperties(private_key_der(bundle.private_key), extension="der"),
+            None,
+        )
+
+    # Private-key file-name extensions are not standardized. Detect PEM by
+    # content and otherwise let asyncua treat the input as DER.
+    content = Path(path).read_bytes()
+    extension = "pem" if b"-----BEGIN" in content[:4096] and b"PRIVATE KEY-----" in content[:4096] else "der"
+    return uacrypto.CertProperties(path, extension=extension, password=password), None
+
+
+def _prepare_application_identity(security: LiveSecurityConfig) -> tuple[Any, Any, str | None, tuple[Any, ...]]:
+    assert security.client_certificate is not None
+    if is_pkcs12_path(security.client_certificate):
+        bundle = load_pkcs12_bundle(
+            security.client_certificate,
+            password=security.private_key_password,
+            label="client application certificate",
+        )
+        if bundle.certificate is None:
+            raise LiveConnectionError(
+                "OPC UA client application PKCS#12 bundle contains no certificate"
+            )
+        if bundle.private_key is None:
+            raise LiveConnectionError(
+                "OPC UA client application PKCS#12 bundle contains no private key"
+            )
+        uacrypto = _require_uacrypto()
+        certificate = uacrypto.CertProperties(
+            certificate_der(bundle.certificate), extension="der"
+        )
+        private_key = uacrypto.CertProperties(
+            private_key_der(bundle.private_key), extension="der"
+        )
+        chain = tuple(
+            uacrypto.CertProperties(certificate_der(item), extension="der")
+            for item in bundle.additional_certificates
+        )
+        return certificate, private_key, None, chain
+
+    certificate, chain = _prepare_certificate_input(
+        security.client_certificate,
+        password=None,
+        label="client application certificate",
+    )
+    assert security.client_private_key is not None
+    private_key, private_key_password = _prepare_private_key_input(
+        security.client_private_key,
+        password=security.private_key_password,
+        label="client application private key",
+    )
+    return certificate, private_key, private_key_password, chain
+
+
+def _prepare_server_pin(security: LiveSecurityConfig) -> Any | None:
+    if security.server_certificate is None:
+        return None
+    certificate, _chain = _prepare_certificate_input(
+        security.server_certificate,
+        password=security.server_certificate_password,
+        label="server certificate",
+    )
+    return certificate
+
+
+async def _build_trust_store(security: LiveSecurityConfig) -> Any:
+    TrustStore, _CertificateValidator, _CertificateValidatorOptions = _require_trust_runtime()
+    assert security.trust_store is not None
+    trust_files = trust_store_files(security.trust_store)
+    crl_files = crl_store_files(security.crl_store) if security.crl_store is not None else ()
+
+    normalize_trust = any(
+        item.suffix.lower() not in {".der", ".pem"} for item in trust_files
+    )
+    normalize_crl = any(
+        item.suffix.lower() not in {".der", ".pem"} for item in crl_files
+    )
+    if not normalize_trust and not normalize_crl:
+        trust_store = TrustStore(
+            [Path(security.trust_store)],
+            [Path(security.crl_store)] if security.crl_store is not None else [],
+        )
+        await trust_store.load()
+        return trust_store
+
+    with TemporaryDirectory(prefix="devagent-opcua-trust-") as temporary:
+        root = Path(temporary)
+        normalized_trust = root / "trusted"
+        normalized_trust.mkdir()
+        normalized_crl = root / "crl"
+        if crl_files:
+            normalized_crl.mkdir()
+
+        certificate_index = 0
+        for source in trust_files:
+            certificates = load_certificate_objects(
+                source,
+                password=security.trust_store_password,
+                label=f"trust-store certificate {source.name}",
+            )
+            for certificate in certificates:
+                certificate_index += 1
+                (normalized_trust / f"trusted-{certificate_index:04d}.der").write_bytes(
+                    certificate_der(certificate)
+                )
+
+        for index, source in enumerate(crl_files, start=1):
+            crl = load_crl_object(source, label=f"CRL {source.name}")
+            (normalized_crl / f"crl-{index:04d}.der").write_bytes(
+                crl.public_bytes(serialization.Encoding.DER)
+            )
+
+        trust_store = TrustStore(
+            [normalized_trust],
+            [normalized_crl] if crl_files else [],
+        )
+        await trust_store.load()
+        return trust_store
 
 
 def _node_id_text(node_id: Any) -> str:
@@ -325,11 +517,7 @@ class ReadOnlyOpcUaClient:
 
             if self.security.trust_store is not None:
                 TrustStore, CertificateValidator, CertificateValidatorOptions = _require_trust_runtime()
-                trust_store = TrustStore(
-                    [Path(self.security.trust_store)],
-                    [Path(self.security.crl_store)] if self.security.crl_store is not None else [],
-                )
-                await trust_store.load()
+                trust_store = await _build_trust_store(self.security)
                 base_validator = CertificateValidator(
                     CertificateValidatorOptions.TRUSTED_VALIDATION
                     | CertificateValidatorOptions.PEER_SERVER,
@@ -343,32 +531,69 @@ class ReadOnlyOpcUaClient:
                 client.certificate_validator = validate_server_certificate
 
             client.application_uri = self.security.application_uri
-            await client.set_security(
-                policy,
-                certificate=str(self.security.client_certificate),
-                private_key=str(self.security.client_private_key),
-                private_key_password=self.security.private_key_password,
-                server_certificate=(
-                    str(self.security.server_certificate)
-                    if self.security.server_certificate is not None
-                    else None
-                ),
-                mode=mode,
+            certificate, private_key, private_key_password, certificate_chain = (
+                _prepare_application_identity(self.security)
             )
+            server_certificate = _prepare_server_pin(self.security)
+            security_kwargs: dict[str, Any] = {
+                "certificate": certificate,
+                "private_key": private_key,
+                "private_key_password": private_key_password,
+                "server_certificate": server_certificate,
+                "mode": mode,
+            }
+            if certificate_chain:
+                security_kwargs["certificate_chain"] = certificate_chain
+            await client.set_security(policy, **security_kwargs)
 
         if self.security.user_certificate is not None:
-            load_user_certificate = getattr(client, "load_client_certificate", None)
-            load_user_private_key = getattr(client, "load_private_key", None)
-            if not callable(load_user_certificate) or not callable(load_user_private_key):
-                raise LiveConnectionError(
-                    "Installed asyncua does not expose X.509 user-certificate authentication loaders"
+            if is_pkcs12_path(self.security.user_certificate):
+                bundle = load_pkcs12_bundle(
+                    self.security.user_certificate,
+                    password=self.security.user_private_key_password,
+                    label="X.509 user certificate",
                 )
-            assert self.security.user_private_key is not None
-            await load_user_certificate(str(self.security.user_certificate))
-            await load_user_private_key(
-                str(self.security.user_private_key),
-                password=self.security.user_private_key_password,
-            )
+                if bundle.certificate is None or bundle.private_key is None:
+                    raise LiveConnectionError(
+                        "OPC UA X.509 user PKCS#12 bundle must contain both certificate and private key"
+                    )
+                client.user_certificate = bundle.certificate
+                client.user_private_key = bundle.private_key
+                client.user_certificate_chain = list(bundle.additional_certificates)
+            else:
+                load_user_certificate = getattr(client, "load_client_certificate", None)
+                load_user_private_key = getattr(client, "load_private_key", None)
+                if not callable(load_user_certificate) or not callable(load_user_private_key):
+                    raise LiveConnectionError(
+                        "Installed asyncua does not expose X.509 user-certificate authentication loaders"
+                    )
+                assert self.security.user_private_key is not None
+                certificate_path = str(self.security.user_certificate)
+                certificate_extension = Path(certificate_path).suffix.lower()
+                if certificate_extension in {".cer", ".crt"}:
+                    await load_user_certificate(
+                        certificate_path,
+                        extension=certificate_encoding(certificate_path),
+                    )
+                else:
+                    await load_user_certificate(certificate_path)
+
+                if is_pkcs12_path(self.security.user_private_key):
+                    bundle = load_pkcs12_bundle(
+                        self.security.user_private_key,
+                        password=self.security.user_private_key_password,
+                        label="X.509 user private key",
+                    )
+                    if bundle.private_key is None:
+                        raise LiveConnectionError(
+                            "OPC UA X.509 user private-key PKCS#12 bundle contains no private key"
+                        )
+                    client.user_private_key = bundle.private_key
+                else:
+                    await load_user_private_key(
+                        str(self.security.user_private_key),
+                        password=self.security.user_private_key_password,
+                    )
 
     async def connect(self) -> None:
         if self._client is not None:
