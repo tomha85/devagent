@@ -88,6 +88,17 @@ def _is_system_health_reply(reply: LiveAssistantReply) -> bool:
     )
 
 
+def _system_health_signature(reply: LiveAssistantReply) -> tuple[str, ...]:
+    """Compare health truth while ignoring per-read evidence identifiers."""
+    if not _is_system_health_reply(reply):
+        return ()
+    return tuple(
+        line.strip()
+        for line in reply.text.splitlines()
+        if not line.strip().startswith("Evidence:")
+    )
+
+
 class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssistant):
     """Semantic Live assistant with bounded final-state revalidation.
 
@@ -104,8 +115,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
     When a validated SYSTEM_HEALTH answer was just produced, a later free-form follow-up
     such as "how do I fix this?" may be interpreted as a question about that health
     result. Before answering, DevAgent re-runs the deterministic current health check;
-    the LLM may explain only that freshly proven evidence. No stale runtime truth is
-    promoted into the next answer and the PLC control/write guard remains authoritative.
+    the LLM may explain only that freshly proven evidence. Whole-system AI explanations
+    are final-revalidated as well: if health truth changes while the explanation is
+    being prepared, the AI wording is discarded and fresh deterministic truth wins.
+    No stale runtime truth is promoted into the next answer and the PLC control/write
+    guard remains authoritative.
     """
 
     def __init__(
@@ -160,17 +174,76 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             return None
         return intent
 
+    async def _finalize_system_health_evidence(
+        self,
+        question: str,
+        deterministic: LiveAssistantReply,
+        *,
+        started: float | None,
+    ) -> tuple[LiveAssistantReply, bool]:
+        """Return final current health evidence and whether earlier AI wording must be discarded."""
+        if (
+            started is None
+            or time.monotonic() - started < self.final_revalidation_after_seconds
+        ):
+            self._last_system_health_reply = deterministic
+            return deterministic, False
+
+        refreshed = await RecursiveLiveCommissioningAssistant.answer(
+            self,
+            "Does the system have any faults?",
+        )
+        if not _is_system_health_reply(refreshed):
+            self._last_system_health_reply = None
+            return (
+                LiveAssistantReply(
+                    question=question,
+                    kind=LiveAssistantReplyKind.LIMITATION,
+                    text=(
+                        "DEVAGENT LIVE SYSTEM HEALTH NOT REVALIDATED\n"
+                        "Current whole-system health could not be revalidated after AI answer preparation. "
+                        "DevAgent discarded the earlier AI wording rather than presenting potentially stale machine truth.\n\n"
+                        f"Final read-only result:\n{refreshed.text}"
+                    ),
+                    target_output=None,
+                ),
+                True,
+            )
+
+        changed = _system_health_signature(refreshed) != _system_health_signature(
+            deterministic
+        )
+        self._last_system_health_reply = refreshed
+        if changed:
+            return (
+                LiveAssistantReply(
+                    question=question,
+                    kind=LiveAssistantReplyKind.DIAGNOSIS,
+                    text=(
+                        "DEVAGENT LIVE SYSTEM HEALTH REFRESHED\n"
+                        "The current PLC/system health changed while the AI explanation was being prepared. "
+                        "The earlier AI wording was discarded; fresh deterministic OPC UA evidence is shown below.\n\n"
+                        + refreshed.text
+                    ),
+                    target_output=None,
+                ),
+                True,
+            )
+        return refreshed, False
+
     async def _explain_system_health(
         self,
         question: str,
         deterministic: LiveAssistantReply,
         *,
         followup_intent: str | None = None,
+        started: float | None = None,
     ) -> LiveAssistantReply:
         provider = self.provider
         if provider is None or not _is_system_health_reply(deterministic):
             return deterministic
 
+        response: dict[str, Any] | None = None
         try:
             response = await asyncio.to_thread(
                 provider.request,
@@ -192,7 +265,15 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                 schema=_HEALTH_CONVERSATION_SCHEMA,
             )
         except ProviderError:
-            return deterministic
+            response = None
+
+        authoritative, discard_ai = await self._finalize_system_health_evidence(
+            question,
+            deterministic,
+            started=started,
+        )
+        if discard_ai or response is None:
+            return authoritative
 
         answer = str(response.get("answer", "")).strip()
         next_checks = tuple(
@@ -206,11 +287,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             if str(item).strip()
         )
         if not answer:
-            return deterministic
+            return authoritative
         if _contains_forbidden_control_advice(answer) or any(
             _contains_forbidden_control_advice(item) for item in next_checks
         ):
-            return deterministic
+            return authoritative
 
         lines = [answer]
         if next_checks:
@@ -223,16 +304,16 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             [
                 "",
                 "Deterministic current evidence:",
-                deterministic.text,
+                authoritative.text,
             ]
         )
         return LiveAssistantReply(
             question=question,
-            kind=deterministic.kind,
+            kind=authoritative.kind,
             text="\n".join(lines),
-            target_output=deterministic.target_output,
-            diagnosis=deterministic.diagnosis,
-            answer=deterministic.answer,
+            target_output=authoritative.target_output,
+            diagnosis=authoritative.diagnosis,
+            answer=authoritative.answer,
         )
 
     def _revalidation_gap_reply(
@@ -393,7 +474,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
 
         if _is_system_health_reply(raw_reply):
             self._last_system_health_reply = raw_reply
-            return await self._explain_system_health(question, raw_reply)
+            return await self._explain_system_health(
+                question,
+                raw_reply,
+                started=started,
+            )
 
         if (
             self._last_system_health_reply is not None
@@ -413,6 +498,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                         question,
                         fresh_health,
                         followup_intent=followup_intent,
+                        started=started,
                     )
 
         if (
@@ -441,4 +527,5 @@ __all__ = [
     "RealtimeSemanticLiveCommissioningAssistant",
     "_diagnosis_signature",
     "_is_system_health_reply",
+    "_system_health_signature",
 ]
