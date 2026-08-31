@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography import x509
@@ -11,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 
+from devagent.live import opcua_client
 from devagent.live.certificate_material import (
     certificate_encoding,
     load_certificate_objects,
@@ -18,7 +21,39 @@ from devagent.live.certificate_material import (
 from devagent.live.cli_security import add_security_args, security_from_args
 from devagent.live.commission import _security_from_json
 from devagent.live.errors import LiveConfigurationError
+from devagent.live.opcua_client import _build_trust_store, _prepare_server_pin
 from devagent.live.security import LiveSecurityConfig
+
+
+class _FakeCertProperties:
+    def __init__(self, path_or_content, extension=None, password=None) -> None:
+        self.path_or_content = path_or_content
+        self.extension = extension
+        self.password = password
+
+
+class _FakeTrustStore:
+    def __init__(self, trust_locations: list[Path], crl_locations: list[Path]) -> None:
+        self.trust_locations = trust_locations
+        self.crl_locations = crl_locations
+        self.loaded_trust_count = 0
+        self.loaded_crl_count = 0
+
+    async def load(self) -> None:
+        self.loaded_trust_count = sum(
+            1 for directory in self.trust_locations for item in directory.iterdir() if item.is_file()
+        )
+        self.loaded_crl_count = sum(
+            1 for directory in self.crl_locations for item in directory.iterdir() if item.is_file()
+        )
+
+
+class _UnusedValidator:
+    pass
+
+
+class _UnusedValidatorOptions:
+    pass
 
 
 def _certificate(common_name: str = "DevAgent Test") -> tuple[rsa.RSAPrivateKey, x509.Certificate]:
@@ -114,6 +149,46 @@ def test_separate_key_is_rejected_when_certificate_is_pkcs12_bundle(tmp_path: Pa
         )
 
 
+def test_pkcs12_server_pin_extracts_certificate_and_rejects_wrong_password(
+    monkeypatch, tmp_path: Path
+) -> None:
+    server_bundle = tmp_path / "server.pfx"
+    _write_pkcs12(server_bundle, password="server-secret")
+    client_cert = tmp_path / "client.der"
+    client_key = tmp_path / "client.pem"
+    client_cert.write_text("placeholder", encoding="utf-8")
+    client_key.write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setattr(
+        opcua_client,
+        "_require_uacrypto",
+        lambda: SimpleNamespace(CertProperties=_FakeCertProperties),
+    )
+    config = LiveSecurityConfig(
+        security_policy="Basic256Sha256",
+        security_mode="SignAndEncrypt",
+        client_certificate=str(client_cert),
+        client_private_key=str(client_key),
+        server_certificate=str(server_bundle),
+        server_certificate_password="server-secret",
+    )
+    pin = _prepare_server_pin(config)
+    assert isinstance(pin, _FakeCertProperties)
+    assert pin.extension == "der"
+    assert x509.load_der_x509_certificate(pin.path_or_content).subject
+
+    wrong_password = LiveSecurityConfig(
+        security_policy="Basic256Sha256",
+        security_mode="SignAndEncrypt",
+        client_certificate=str(client_cert),
+        client_private_key=str(client_key),
+        server_certificate=str(server_bundle),
+        server_certificate_password="wrong-secret",
+    )
+    with pytest.raises(LiveConfigurationError, match="verify the .pfx/.p12 file and password"):
+        _prepare_server_pin(wrong_password)
+
+
 def test_trust_store_accepts_all_customer_certificate_suffixes(tmp_path: Path) -> None:
     trusted = tmp_path / "trusted"
     trusted.mkdir()
@@ -146,6 +221,39 @@ def test_trust_store_accepts_all_customer_certificate_suffixes(tmp_path: Path) -
         trust_store_password="trust-secret",
     )
     config.validate_files()
+
+
+def test_normalized_trust_store_deduplicates_same_certificate_across_formats(
+    monkeypatch, tmp_path: Path
+) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    _key, certificate = _certificate("Factory CA")
+    (trusted / "factory-ca.cer").write_bytes(
+        certificate.public_bytes(serialization.Encoding.DER)
+    )
+    (trusted / "factory-ca.crt").write_bytes(
+        certificate.public_bytes(serialization.Encoding.PEM)
+    )
+    client_cert = tmp_path / "client.der"
+    client_key = tmp_path / "client.pem"
+    client_cert.write_text("placeholder", encoding="utf-8")
+    client_key.write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setattr(
+        opcua_client,
+        "_require_trust_runtime",
+        lambda: (_FakeTrustStore, _UnusedValidator, _UnusedValidatorOptions),
+    )
+    config = LiveSecurityConfig(
+        security_policy="Basic256Sha256",
+        security_mode="SignAndEncrypt",
+        client_certificate=str(client_cert),
+        client_private_key=str(client_key),
+        trust_store=str(trusted),
+    )
+    store = asyncio.run(_build_trust_store(config))
+    assert store.loaded_trust_count == 1
 
 
 def test_cli_maps_server_and_trust_bundle_passwords(monkeypatch, tmp_path: Path) -> None:
