@@ -273,6 +273,12 @@ _GENERATED_TURN_SUFFIX_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_GENERATED_PLC_TRANSFER_RE = re.compile(
+    r"\b(?:download|upload)\b[^.!?\n]{0,120}\b(?:to|into|onto)\s+"
+    r"(?:the\s+)?(?:plc|controller)\b",
+    flags=re.IGNORECASE,
+)
+
 
 def _looks_like_plc_action_object(value: str) -> bool:
     token = str(value or "").strip()
@@ -308,6 +314,7 @@ def _contains_forbidden_control_advice(text: str) -> bool:
     lowered = comparable.casefold()
     return (
         any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
+        or _GENERATED_PLC_TRANSFER_RE.search(comparable) is not None
         or _has_generated_control_target_match(
             _GENERATED_DIRECT_CONTROL_RE,
             comparable,
