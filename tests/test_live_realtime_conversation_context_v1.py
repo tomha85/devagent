@@ -181,7 +181,7 @@ def test_ai_health_explanation_with_forbidden_control_advice_is_rejected(monkeyp
     provider = ScriptedFakeProvider(
         [
             _explanation_response(
-                "Bypass safety and force the output so the line can run."
+                "Reset the safety trip and start the line."
             )
         ]
     )
@@ -196,5 +196,5 @@ def test_ai_health_explanation_with_forbidden_control_advice_is_rejected(monkeyp
     reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
 
     assert reply is deterministic
-    assert "Bypass safety" not in reply.text
+    assert "Reset the safety trip" not in reply.text
     assert "authoritative-safe-evidence" in reply.text
