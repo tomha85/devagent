@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 from .errors import LiveConnectionError, LiveDependencyError
@@ -30,6 +31,18 @@ def _require_security_policies() -> Any:
             'Install it with: python -m pip install "devagent-ai[live]"'
         ) from exc
     return security_policies
+
+
+def _require_trust_runtime() -> tuple[Any, Any, Any]:
+    try:
+        from asyncua.crypto.truststore import TrustStore
+        from asyncua.crypto.validator import CertificateValidator, CertificateValidatorOptions
+    except ImportError as exc:  # pragma: no cover - optional dependency guard
+        raise LiveDependencyError(
+            'DevAgent Live OPC UA trust-store validation requires the optional OPC UA runtime. '
+            'Install it with: python -m pip install "devagent-ai[live]"'
+        ) from exc
+    return TrustStore, CertificateValidator, CertificateValidatorOptions
 
 
 def _node_id_text(node_id: Any) -> str:
@@ -270,13 +283,30 @@ class ReadOnlyOpcUaClient:
                     f"Installed asyncua does not support security mode {self.security.security_mode}"
                 )
 
+            if self.security.trust_store is not None:
+                TrustStore, CertificateValidator, CertificateValidatorOptions = _require_trust_runtime()
+                trust_store = TrustStore(
+                    [Path(self.security.trust_store)],
+                    [Path(self.security.crl_store)] if self.security.crl_store is not None else [],
+                )
+                await trust_store.load()
+                client.certificate_validator = CertificateValidator(
+                    CertificateValidatorOptions.TRUSTED_VALIDATION
+                    | CertificateValidatorOptions.PEER_SERVER,
+                    trust_store,
+                )
+
             client.application_uri = self.security.application_uri
             await client.set_security(
                 policy,
                 certificate=str(self.security.client_certificate),
                 private_key=str(self.security.client_private_key),
                 private_key_password=self.security.private_key_password,
-                server_certificate=str(self.security.server_certificate),
+                server_certificate=(
+                    str(self.security.server_certificate)
+                    if self.security.server_certificate is not None
+                    else None
+                ),
                 mode=mode,
             )
 
