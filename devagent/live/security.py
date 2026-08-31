@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .certificate_material import (
+    CERTIFICATE_SUFFIXES,
+    CRL_SUFFIXES,
+    crl_store_files,
+    is_pkcs12_path,
+    trust_store_files,
+)
 from .errors import LiveConfigurationError
 
 MODERN_SECURITY_POLICIES = (
@@ -97,6 +104,8 @@ class LiveSecurityConfig:
     allow_insecure_username_password: bool = False
     trust_store: str | None = None
     crl_store: str | None = None
+    server_certificate_password: str | None = field(default=None, repr=False)
+    trust_store_password: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         canonical_policy = canonical_security_policy_name(self.security_policy)
@@ -113,23 +122,50 @@ class LiveSecurityConfig:
             raise LiveConfigurationError(
                 "--allow-insecure-username-password requires OPC UA username/password configuration"
             )
-        if (self.user_certificate is None) != (self.user_private_key is None):
+
+        user_bundle = is_pkcs12_path(self.user_certificate)
+        if self.user_certificate is None and self.user_private_key is not None:
             raise LiveConfigurationError(
-                "OPC UA X.509 user certificate and user private key must be configured together"
+                "OPC UA X.509 user private key requires a user certificate"
+            )
+        if self.user_certificate is not None and self.user_private_key is None and not user_bundle:
+            raise LiveConfigurationError(
+                "OPC UA X.509 user certificate and user private key must be configured together; "
+                "a .pfx/.p12 user-certificate bundle may contain both"
+            )
+        if user_bundle and self.user_private_key is not None:
+            raise LiveConfigurationError(
+                "Do not provide --user-private-key when --user-certificate is a .pfx/.p12 bundle"
             )
         if self.username is not None and self.user_certificate is not None:
             raise LiveConfigurationError(
                 "Choose exactly one OPC UA user identity: username/password or X.509 user certificate"
             )
-        if self.user_private_key_password is not None and self.user_private_key is None:
+        if (
+            self.user_private_key_password is not None
+            and self.user_private_key is None
+            and not user_bundle
+        ):
             raise LiveConfigurationError(
-                "A user private-key password requires X.509 user-certificate configuration"
+                "A user private-key password requires X.509 user-certificate/private-key configuration "
+                "or a .pfx/.p12 user bundle"
             )
         if not self.application_uri.strip():
             raise LiveConfigurationError("OPC UA application URI cannot be blank")
         if self.crl_store is not None and self.trust_store is None:
+            raise LiveConfigurationError("OPC UA --crl-store requires --trust-store")
+        if self.server_certificate_password is not None:
+            if self.server_certificate is None:
+                raise LiveConfigurationError(
+                    "A server-certificate password requires --server-certificate"
+                )
+            if not is_pkcs12_path(self.server_certificate):
+                raise LiveConfigurationError(
+                    "A server-certificate password is only valid for .pfx/.p12 server-certificate bundles"
+                )
+        if self.trust_store_password is not None and self.trust_store is None:
             raise LiveConfigurationError(
-                "OPC UA --crl-store requires --trust-store"
+                "A trust-store password requires --trust-store"
             )
 
         secure_fields = (
@@ -174,8 +210,16 @@ class LiveSecurityConfig:
                 )
             if not self.client_certificate:
                 raise LiveConfigurationError("Secure OPC UA requires a client application certificate")
-            if not self.client_private_key:
-                raise LiveConfigurationError("Secure OPC UA requires a client application private key")
+            client_bundle = is_pkcs12_path(self.client_certificate)
+            if client_bundle and self.client_private_key is not None:
+                raise LiveConfigurationError(
+                    "Do not provide --client-private-key when --client-certificate is a .pfx/.p12 bundle"
+                )
+            if not self.client_private_key and not client_bundle:
+                raise LiveConfigurationError(
+                    "Secure OPC UA requires a client application private key; "
+                    "a .pfx/.p12 client-certificate bundle may contain both certificate and key"
+                )
             if not self.server_certificate and not self.trust_store:
                 raise LiveConfigurationError(
                     "Secure OPC UA requires a pinned server certificate or a trust store"
@@ -236,21 +280,15 @@ class LiveSecurityConfig:
     def validate_files(self) -> None:
         required_files: list[tuple[str, str | None]] = []
         if self.secure_channel:
-            required_files.extend(
-                [
-                    ("client application certificate", self.client_certificate),
-                    ("client application private key", self.client_private_key),
-                ]
-            )
+            required_files.append(("client application certificate", self.client_certificate))
+            if self.client_private_key is not None:
+                required_files.append(("client application private key", self.client_private_key))
             if self.server_certificate is not None:
                 required_files.append(("server certificate", self.server_certificate))
         if self.user_certificate is not None:
-            required_files.extend(
-                [
-                    ("X.509 user certificate", self.user_certificate),
-                    ("X.509 user private key", self.user_private_key),
-                ]
-            )
+            required_files.append(("X.509 user certificate", self.user_certificate))
+            if self.user_private_key is not None:
+                required_files.append(("X.509 user private key", self.user_private_key))
 
         for label, value in required_files:
             assert value is not None
@@ -262,20 +300,22 @@ class LiveSecurityConfig:
             path = Path(self.trust_store)
             if not path.is_dir():
                 raise LiveConfigurationError(f"OPC UA trust store directory does not exist: {path}")
-            trusted = [item for item in path.iterdir() if item.is_file() and item.suffix.lower() in {".der", ".pem"}]
+            trusted = trust_store_files(path)
             if not trusted:
+                formats = ", ".join(sorted(CERTIFICATE_SUFFIXES))
                 raise LiveConfigurationError(
-                    f"OPC UA trust store contains no .der/.pem trusted certificates: {path}"
+                    f"OPC UA trust store contains no supported trusted certificates ({formats}): {path}"
                 )
 
         if self.crl_store is not None:
             path = Path(self.crl_store)
             if not path.is_dir():
                 raise LiveConfigurationError(f"OPC UA CRL store directory does not exist: {path}")
-            crls = [item for item in path.iterdir() if item.is_file() and item.suffix.lower() in {".der", ".pem"}]
+            crls = crl_store_files(path)
             if not crls:
+                formats = ", ".join(sorted(CRL_SUFFIXES))
                 raise LiveConfigurationError(
-                    f"OPC UA CRL store contains no .der/.pem revocation lists: {path}"
+                    f"OPC UA CRL store contains no supported revocation lists ({formats}): {path}"
                 )
 
     def redact(self, text: str) -> str:
@@ -284,6 +324,8 @@ class LiveSecurityConfig:
             self.password,
             self.private_key_password,
             self.user_private_key_password,
+            self.server_certificate_password,
+            self.trust_store_password,
         ):
             if secret:
                 redacted = redacted.replace(secret, "<redacted>")
