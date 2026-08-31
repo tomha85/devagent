@@ -160,6 +160,29 @@ def test_unknown_unrelated_followup_preserves_fail_closed_semantic_result(monkey
     ]
 
 
+def test_system_overview_replaces_previous_health_conversation_context(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([])
+    assistant = _bare_assistant(provider)
+    assistant._last_system_health_reply = _health_reply("prior")
+    overview = LiveAssistantReply(
+        question="what is this system?",
+        kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
+        text="DEVAGENT LIVE SYSTEM MASTER",
+        target_output=None,
+    )
+
+    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
+        return overview
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+
+    reply = asyncio.run(assistant.answer("what is this system?"))
+
+    assert reply is overview
+    assert assistant._last_system_health_reply is None
+    assert provider.calls == []
+
+
 def test_plc_control_request_never_uses_health_followup_recovery(monkeypatch) -> None:
     provider = ScriptedFakeProvider([])
     assistant = _bare_assistant(provider)
