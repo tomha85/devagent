@@ -48,7 +48,9 @@ _SECURITY_KEYS = {
     "client_private_key",
     "private_key_password_env",
     "server_certificate",
+    "server_certificate_password_env",
     "trust_store",
+    "trust_store_password_env",
     "crl_store",
     "user_certificate",
     "user_private_key",
@@ -58,6 +60,8 @@ _SECURITY_KEYS = {
 _FORBIDDEN_SECRET_KEYS = {
     "password",
     "private_key_password",
+    "server_certificate_password",
+    "trust_store_password",
     "user_private_key_password",
 }
 
@@ -211,7 +215,17 @@ def _security_from_json(
             label="OPC UA private-key password",
         ),
         server_certificate=optional_path("server_certificate"),
+        server_certificate_password=_secret_from_env(
+            env,
+            data.get("server_certificate_password_env"),
+            label="OPC UA server-certificate bundle password",
+        ),
         trust_store=optional_path("trust_store"),
+        trust_store_password=_secret_from_env(
+            env,
+            data.get("trust_store_password_env"),
+            label="OPC UA trust-store bundle password",
+        ),
         crl_store=optional_path("crl_store"),
         user_certificate=optional_path("user_certificate"),
         user_private_key=optional_path("user_private_key"),
