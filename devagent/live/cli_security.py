@@ -50,50 +50,74 @@ def add_security_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--client-certificate",
-        help="Path to the client application certificate (.der or .pem) used for the secure channel.",
+        help=(
+            "Path to the client application certificate. Supports DER/PEM content in .der/.pem/.cer/.crt, "
+            "or a .pfx/.p12 PKCS#12 bundle containing the certificate and private key."
+        ),
     )
     group.add_argument(
         "--client-private-key",
-        help="Path to the client application private key (.pem or .der) used for the secure channel.",
+        help=(
+            "Path to the client application private key. Omit when --client-certificate is a .pfx/.p12 bundle."
+        ),
     )
     group.add_argument(
         "--private-key-password-env",
         metavar="ENV_VAR",
-        help="Environment variable containing the client application private-key password, when encrypted.",
+        help=(
+            "Environment variable containing the client private-key password, or the password for a client .pfx/.p12 bundle."
+        ),
     )
     group.add_argument(
         "--server-certificate",
         help=(
-            "Path to an exact pinned OPC UA server certificate. For secure channels, use this or --trust-store."
+            "Path to an exact pinned OPC UA server certificate. Supports .der/.pem/.cer/.crt and .pfx/.p12. "
+            "For secure channels, use this or --trust-store."
         ),
+    )
+    group.add_argument(
+        "--server-certificate-password-env",
+        metavar="ENV_VAR",
+        help="Environment variable containing the password for a pinned server .pfx/.p12 bundle.",
     )
     group.add_argument(
         "--trust-store",
         metavar="DIR",
         help=(
-            "Directory containing trusted OPC UA server certificates and/or issuing CA certificates (.der/.pem). "
-            "Allows secure connections without a per-server --server-certificate pin."
+            "Directory containing trusted OPC UA server certificates and/or issuing CA certificates. "
+            "Supports .der/.pem/.cer/.crt/.pfx/.p12 and allows secure connections without a per-server pin."
+        ),
+    )
+    group.add_argument(
+        "--trust-store-password-env",
+        metavar="ENV_VAR",
+        help=(
+            "Optional environment variable containing the shared password used to open .pfx/.p12 files in --trust-store."
         ),
     )
     group.add_argument(
         "--crl-store",
         metavar="DIR",
         help=(
-            "Optional directory containing certificate revocation lists (.der/.pem) used with --trust-store."
+            "Optional directory containing certificate revocation lists (.der/.pem/.crl) used with --trust-store."
         ),
     )
     group.add_argument(
         "--user-certificate",
-        help="Path to an X.509 user-identity certificate when the server authenticates users by certificate.",
+        help=(
+            "Path to an X.509 user-identity certificate. Supports .der/.pem/.cer/.crt or a .pfx/.p12 bundle containing the user certificate and key."
+        ),
     )
     group.add_argument(
         "--user-private-key",
-        help="Path to the private key associated with --user-certificate.",
+        help="Path to the private key associated with --user-certificate; omit for a .pfx/.p12 user bundle.",
     )
     group.add_argument(
         "--user-private-key-password-env",
         metavar="ENV_VAR",
-        help="Environment variable containing the X.509 user private-key password, when encrypted.",
+        help=(
+            "Environment variable containing the X.509 user private-key password, or the password for a user .pfx/.p12 bundle."
+        ),
     )
     group.add_argument(
         "--application-uri",
@@ -123,6 +147,14 @@ def security_from_args(args: argparse.Namespace) -> LiveSecurityConfig:
         getattr(args, "private_key_password_env", None),
         label="OPC UA private-key password",
     )
+    server_certificate_password = _secret_from_env(
+        getattr(args, "server_certificate_password_env", None),
+        label="OPC UA server-certificate bundle password",
+    )
+    trust_store_password = _secret_from_env(
+        getattr(args, "trust_store_password_env", None),
+        label="OPC UA trust-store bundle password",
+    )
     user_private_key_password = _secret_from_env(
         getattr(args, "user_private_key_password_env", None),
         label="OPC UA user private-key password",
@@ -145,4 +177,6 @@ def security_from_args(args: argparse.Namespace) -> LiveSecurityConfig:
         user_private_key=getattr(args, "user_private_key", None),
         user_private_key_password=user_private_key_password,
         application_uri=getattr(args, "application_uri", "urn:devagent:live:client"),
+        server_certificate_password=server_certificate_password,
+        trust_store_password=trust_store_password,
     )

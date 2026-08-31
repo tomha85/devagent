@@ -154,7 +154,7 @@ def test_empty_trust_store_fails_closed(tmp_path: Path) -> None:
         client_private_key=client_key,
         trust_store=str(trust_store),
     )
-    with pytest.raises(LiveConfigurationError, match="contains no .der/.pem"):
+    with pytest.raises(LiveConfigurationError, match="contains no supported trusted certificates"):
         config.validate_files()
 
 
