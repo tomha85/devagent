@@ -167,10 +167,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--final-revalidate-ms",
         type=float,
-        default=500.0,
+        default=250.0,
         help=(
             "If current-target answer preparation takes at least this long, revalidate the "
-            "deterministic diagnosis before displaying it. Default: 500 ms."
+            "deterministic diagnosis before displaying it. Default: 250 ms."
         ),
     )
     parser.add_argument(
