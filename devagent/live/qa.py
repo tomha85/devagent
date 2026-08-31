@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -163,23 +164,183 @@ def _provider_payload(
     }
 
 
+# Generated prose needs a broader guard than the user-request control detector.
+# The guard normalizes lightweight Markdown/quote delimiters and then treats
+# action targets as unsafe by default unless they are explicitly bounded meta
+# nouns. This keeps lowercase engineering tags protected without relying on
+# capitalization heuristics, while allowing safety-boundary prose such as
+# "Write access is disabled" or "Reset commands are unavailable".
 _FORBIDDEN_CONTROL_PHRASES = (
-    "force the",
-    "force tag",
-    "write the",
-    "write tag",
-    "bypass the",
-    "bypass safety",
     "download to plc",
+    "download to the plc",
+    "upload to plc",
+    "upload to the plc",
     "change plc mode",
-    "set the output",
-    "set output",
+    "change the plc mode",
+    "change controller mode",
+    "change the controller mode",
+)
+
+_PLC_REFERENCE_TOKEN = r"[A-Za-z_][A-Za-z0-9_.:\[\]-]*"
+_TURN_TARGET_PHRASE = rf"{_PLC_REFERENCE_TOKEN}(?:\s+{_PLC_REFERENCE_TOKEN}){{0,5}}"
+_REFERENCE_DELIMITER_RE = re.compile(r"[`\"'“”‘’()]", flags=re.UNICODE)
+
+_SAFE_CONTROL_META_TARGETS = frozenset(
+    {
+        "access",
+        "action",
+        "actions",
+        "advice",
+        "analysis",
+        "capability",
+        "capabilities",
+        "command",
+        "commands",
+        "diagnostic",
+        "diagnostics",
+        "documentation",
+        "docs",
+        "evidence",
+        "explanation",
+        "explanations",
+        "guidance",
+        "instruction",
+        "instructions",
+        "logging",
+        "logs",
+        "message",
+        "messages",
+        "note",
+        "notes",
+        "operation",
+        "operations",
+        "permission",
+        "permissions",
+        "report",
+        "reports",
+        "request",
+        "requests",
+        "response",
+        "responses",
+        "scope",
+        "support",
+        "text",
+        "wording",
+    }
+)
+
+_GENERIC_MACHINE_CONTROL_TARGETS = frozenset(
+    {
+        "axis",
+        "bit",
+        "cell",
+        "coil",
+        "controller",
+        "conveyor",
+        "drive",
+        "equipment",
+        "fan",
+        "fault",
+        "feeder",
+        "interlock",
+        "line",
+        "machine",
+        "mode",
+        "motor",
+        "output",
+        "plc",
+        "pump",
+        "robot",
+        "safety",
+        "servo",
+        "system",
+        "tag",
+        "trip",
+        "valve",
+    }
+)
+
+_GENERATED_DIRECT_CONTROL_RE = re.compile(
+    rf"\b(?P<verb>force|write|set|reset|bypass|override|jog|command)\s+"
+    rf"(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
+    flags=re.IGNORECASE,
+)
+
+_GENERATED_START_STOP_CONTROL_RE = re.compile(
+    rf"\b(?P<verb>start|stop)\s+"
+    rf"(?!by\b|with\b|after\b|before\b|when\b|if\b|because\b)"
+    rf"(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
+    flags=re.IGNORECASE,
+)
+
+_GENERATED_TURN_PREFIX_RE = re.compile(
+    rf"\bturn\s+(?:on|off)\s+(?:the\s+)?(?P<target>{_TURN_TARGET_PHRASE})\b",
+    flags=re.IGNORECASE,
+)
+
+_GENERATED_TURN_SUFFIX_RE = re.compile(
+    rf"\bturn\s+(?:the\s+)?(?P<target>{_TURN_TARGET_PHRASE})\s+(?:on|off)\b",
+    flags=re.IGNORECASE,
+)
+
+_GENERATED_PLC_TRANSFER_RE = re.compile(
+    r"\b(?:download|upload)\b[^.!?\n]{0,120}\b(?:to|into|onto)\s+"
+    r"(?:the\s+)?(?:[A-Za-z][A-Za-z0-9_-]*\s+){0,4}(?:plc|controller)\b",
+    flags=re.IGNORECASE,
 )
 
 
+def _looks_like_plc_action_object(value: str) -> bool:
+    token = " ".join(str(value or "").split()).strip()
+    if not token:
+        return False
+    parts = tuple(part.casefold() for part in token.split())
+    if parts and all(part in _SAFE_CONTROL_META_TARGETS for part in parts):
+        return False
+    if any(part in _GENERIC_MACHINE_CONTROL_TARGETS for part in parts):
+        return True
+
+    # Safety-first: once a generated sentence applies a control verb to a
+    # concrete target that is not an explicitly safe meta noun, reject it.
+    # This intentionally covers valid all-lowercase canonical tags such as
+    # ``out`` or ``ready`` without guessing from capitalization.
+    return any(part not in _SAFE_CONTROL_META_TARGETS for part in parts)
+
+
+def _has_generated_control_target_match(
+    pattern: re.Pattern[str],
+    text: str,
+) -> bool:
+    return any(
+        _looks_like_plc_action_object(match.group("target"))
+        for match in pattern.finditer(text)
+    )
+
+
 def _contains_forbidden_control_advice(text: str) -> bool:
-    lowered = text.casefold()
-    return any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
+    normalized = " ".join(str(text or "").split())
+    comparable = _REFERENCE_DELIMITER_RE.sub("", normalized)
+    lowered = comparable.casefold()
+    return (
+        any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
+        or _GENERATED_PLC_TRANSFER_RE.search(comparable) is not None
+        or _has_generated_control_target_match(
+            _GENERATED_DIRECT_CONTROL_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_START_STOP_CONTROL_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_TURN_PREFIX_RE,
+            comparable,
+        )
+        or _has_generated_control_target_match(
+            _GENERATED_TURN_SUFFIX_RE,
+            comparable,
+        )
+    )
 
 
 def answer_commissioning_question(
@@ -241,11 +402,18 @@ def answer_commissioning_question(
         )
 
     answer = str(response["answer"]).strip()
-    next_checks = tuple(str(item).strip() for item in response.get("next_checks", ()) if str(item).strip())
-    if _contains_forbidden_control_advice(answer) or any(
-        _contains_forbidden_control_advice(item)
-        for item in next_checks
-    ):
+    next_checks = tuple(
+        str(item).strip()
+        for item in response.get("next_checks", ())
+        if str(item).strip()
+    )
+    provider_limitations = tuple(
+        str(item).strip()
+        for item in response.get("limitations", ())
+        if str(item).strip()
+    )
+    generated_text = (answer, *next_checks, *provider_limitations)
+    if any(_contains_forbidden_control_advice(item) for item in generated_text):
         return LiveCommissioningAnswer(
             question=deterministic.question,
             target_output=deterministic.target_output,
@@ -265,11 +433,6 @@ def answer_commissioning_question(
             ai_assisted=False,
         )
 
-    provider_limitations = tuple(
-        str(item).strip()
-        for item in response.get("limitations", ())
-        if str(item).strip()
-    )
     return LiveCommissioningAnswer(
         question=question,
         target_output=diagnosis.target_output,
