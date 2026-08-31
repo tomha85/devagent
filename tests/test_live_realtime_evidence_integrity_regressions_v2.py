@@ -53,8 +53,6 @@ def test_open_connection_gap_marks_later_window_incomplete_until_closed() -> Non
     )
     assert diagnosis.evidence_complete is False
 
-    # Close the same interval before the requested window. The closing record must
-    # replace the open marker rather than leaving an open-ended false positive.
     store.record_gap(
         LiveEvidenceGap(
             timestamp=start,
@@ -225,13 +223,10 @@ def test_real_asyncua_idle_subscription_timeout_is_not_evidence_gap() -> None:
         endpoint = f"opc.tcp://127.0.0.1:{port}/devagent/integrity-idle/"
         async with OpcUaSimulator(
             endpoint=endpoint,
-            scenario="healthy_running",
+            scenario="healthy",
             update_interval_seconds=0.20,
         ) as simulator:
             assert simulator.node_ids is not None
-            # LaneCounts is initialized by the simulator and is not rewritten by
-            # either fixed-state or dynamic update loops, so after the initial
-            # publish this monitored item is intentionally idle for >1 second.
             node = simulator.node_ids.lane_counts
             manager = ProductionRealtimeMultiPlcConnectionManager(
                 [PlcConnectionSpec("plc1", endpoint)],
