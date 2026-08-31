@@ -75,7 +75,7 @@ def load_pkcs12_bundle(
             content,
             _password_bytes(password),
         )
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         raise LiveConfigurationError(
             f"Unable to load OPC UA {label} PKCS#12 bundle {source}; verify the .pfx/.p12 file and password"
         ) from None
