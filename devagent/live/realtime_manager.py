@@ -57,7 +57,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
     control capability:
 
     * accepted nodes can be monitored continuously through OPC UA subscriptions;
-    * very fresh, coherent subscription values can satisfy a question immediately;
+    * very fresh, coherent realtime values can satisfy a question immediately;
     * otherwise all requested nodes are refreshed in one OPC UA Read service call;
     * cache/event state is invalidated whenever the subscription loses continuity;
     * subscription events are retained in a bounded queue for the historical layer.
@@ -106,7 +106,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         return datetime.now(timezone.utc)
 
     @staticmethod
-    def _freshness_timestamp(value: RuntimeValue) -> datetime:
+    def _evidence_timestamp(value: RuntimeValue) -> datetime:
         return value.source_timestamp or value.server_timestamp or value.received_at
 
     def _state(self, plc_id: str) -> _RealtimeState:
@@ -285,23 +285,29 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         node_ids: Iterable[str] | None = None,
         max_events: int = 5000,
     ) -> tuple[RuntimeValue, ...]:
-        """Drain subscription events in arrival order for the historical timeline."""
+        """Drain subscription events for the historical consumer.
+
+        When ``node_ids`` is supplied, events outside that explicit history scope are
+        intentionally discarded. There is one Live history consumer per PLC/session;
+        retaining unrelated high-rate events would let them evict the bounded
+        commissioning transients the history engine actually needs. Requested events
+        beyond ``max_events`` remain queued for the next drain.
+        """
         if max_events < 1:
             raise ValueError("max_events must be >= 1")
         state = self._state(plc_id)
         allowed = None if node_ids is None else {str(item) for item in node_ids}
-        kept: deque[RuntimeValue] = deque(maxlen=state.events.maxlen)
+        overflow: deque[RuntimeValue] = deque(maxlen=state.events.maxlen)
         result: list[RuntimeValue] = []
         while state.events:
             value = state.events.popleft()
-            if allowed is None or value.node_id in allowed:
-                if len(result) < max_events:
-                    result.append(value)
-                else:
-                    kept.append(value)
+            if allowed is not None and value.node_id not in allowed:
+                continue
+            if len(result) < max_events:
+                result.append(value)
             else:
-                kept.append(value)
-        state.events.extend(kept)
+                overflow.append(value)
+        state.events.extend(overflow)
         return tuple(result)
 
     def _cached_snapshot(
@@ -315,7 +321,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         state = self._state(plc_id)
         now = self._now()
         values: list[RuntimeValue] = []
-        timestamps: list[datetime] = []
+        receipt_timestamps: list[datetime] = []
         for node_id in node_ids:
             value = state.cache.get(node_id)
             if (
@@ -325,19 +331,23 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                 or value.replayed
             ):
                 return None
-            stamp = self._freshness_timestamp(value)
-            age = max(0.0, (now - stamp).total_seconds())
+            # The trust/stale gate above preserves source/server freshness. The
+            # short realtime-cache window is different: it answers "did DevAgent
+            # receive this trusted value very recently?" and therefore uses the
+            # local receipt timestamp. A stable PLC value may legitimately retain
+            # an older source timestamp while still being freshly delivered.
+            age = max(0.0, (now - value.received_at).total_seconds())
             if age > self.cache_fresh_seconds:
                 return None
             values.append(value)
-            timestamps.append(stamp)
-        skew = self._timestamp_skew(timestamps)
+            receipt_timestamps.append(value.received_at)
+        skew = self._timestamp_skew(receipt_timestamps)
         if skew is not None and skew > self.max_snapshot_skew_seconds:
             return None
         state.last_snapshot = RealtimeSnapshotStatus(
             plc_id=plc_id,
             connection_epoch=state.epoch,
-            source="SUBSCRIPTION_CACHE",
+            source="REALTIME_CACHE",
             requested_nodes=len(node_ids),
             cached_nodes=len(state.cache),
             monitored_nodes=len(state.monitored_nodes),
@@ -408,8 +418,8 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                 state = self._state(plc_id)
                 for value in values:
                     state.cache[value.node_id] = value
-                timestamps = [self._freshness_timestamp(value) for value in values]
-                skew = self._timestamp_skew(timestamps)
+                evidence_timestamps = [self._evidence_timestamp(value) for value in values]
+                skew = self._timestamp_skew(evidence_timestamps)
                 state.last_snapshot = RealtimeSnapshotStatus(
                     plc_id=plc_id,
                     connection_epoch=state.epoch,
