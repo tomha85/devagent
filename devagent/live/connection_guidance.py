@@ -377,10 +377,11 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
     if recommended.application_certificate_required:
         lines.extend(
             [
-                "  Required secure-channel files:",
+                "  Required secure-channel material:",
                 "    - client application certificate",
                 "    - client application private key",
-                "    - pinned server certificate",
+                "    - server trust: exact --server-certificate pin OR --trust-store directory",
+                "  Optional revocation validation: --crl-store with --trust-store.",
             ]
         )
     if recommended.username_password_available and not recommended.username_password_requires_insecure_opt_in:
