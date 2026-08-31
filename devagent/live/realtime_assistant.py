@@ -499,6 +499,14 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         started = time.monotonic()
         text = str(question or "").strip()
         raw_reply: LiveAssistantReply | None = None
+        control_request = is_plc_control_request(text)
+
+        # A control/write request is a new topic even though DevAgent will refuse it.
+        # Drop prior health/target context before routing the READ ONLY refusal so a
+        # later vague turn cannot resurrect machine truth from before this request.
+        if control_request:
+            self._last_system_health_reply = None
+            self._last_target = None
 
         # A validated whole-system health result is the newest conversational topic.
         # Resolve that bounded context before the general semantic router gets a
@@ -506,7 +514,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         if (
             getattr(self, "_last_system_health_reply", None) is not None
             and self.provider is not None
-            and not is_plc_control_request(text)
+            and not control_request
         ):
             followup_intent = await self._resolve_system_health_followup(text)
             if followup_intent in {"EXPLAIN", "NEXT_CHECKS", "STATUS"}:
