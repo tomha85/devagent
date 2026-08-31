@@ -43,10 +43,25 @@ class ProductionRealtimeMultiPlcConnectionManager(_CommercialRealtimeManager):
             and selected != integrity.active_nodes
             and integrity.reconfiguration_gap_started_at is None
         ):
-            # Initial startup previously had no active set, so the base exact-replace
-            # path did not open a reconfiguration gap. Open one before scheduling the
-            # subscription so the pre-monitoring interval can never be called COMPLETE.
-            self._open_reconfiguration_gap(plc_id)
+            if integrity.monitoring_started_at is None and not integrity.active_nodes:
+                # Initial subscription arming happens before the history collector starts.
+                # Preserve that interval as query-time gap metadata without permanently
+                # poisoning the session-wide counter once authoritative monitoring is active.
+                start = self._now_utc()
+                integrity.reconfiguration_gap_started_at = start
+                self._record_gap(
+                    plc_id,
+                    source="MONITOR_SET_RECONFIGURATION",
+                    reason=(
+                        "initial OPC UA monitored-set setup is still in progress; "
+                        "notification continuity is not yet established"
+                    ),
+                    timestamp=start,
+                    open_interval=True,
+                    count_toward_total=False,
+                )
+            else:
+                self._open_reconfiguration_gap(plc_id)
         await super().replace_monitored_node_ids(plc_id, requested)
 
     async def wait_for_active_monitoring(
