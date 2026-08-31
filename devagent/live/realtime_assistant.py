@@ -168,11 +168,33 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             intent = str(response["intent"])
         except (KeyError, TypeError, ValueError):
             return None
-        if confidence < 0.55 or intent == "UNKNOWN":
+        if confidence < 0.55:
             return None
+        if intent == "UNKNOWN":
+            return "UNKNOWN"
         if intent not in {"EXPLAIN", "NEXT_CHECKS", "STATUS"}:
             return None
         return intent
+
+    def _system_health_revalidation_gap_reply(
+        self,
+        question: str,
+        detail: str,
+    ) -> LiveAssistantReply:
+        self._last_system_health_reply = None
+        bounded = " ".join(str(detail or "unknown read-only evidence failure").split())
+        return LiveAssistantReply(
+            question=question,
+            kind=LiveAssistantReplyKind.LIMITATION,
+            text=(
+                "DEVAGENT LIVE SYSTEM HEALTH NOT REVALIDATED\n"
+                "Current whole-system health could not be revalidated from trusted CURRENT OPC UA evidence. "
+                "DevAgent discarded earlier AI/current-state wording rather than presenting potentially stale machine truth.\n\n"
+                f"Limitation: {bounded}\n"
+                "Next check: verify the read-only OPC UA session and trusted current evidence, then ask again."
+            ),
+            target_output=None,
+        )
 
     async def _finalize_system_health_evidence(
         self,
@@ -189,10 +211,14 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             self._last_system_health_reply = deterministic
             return deterministic, False
 
-        refreshed = await RecursiveLiveCommissioningAssistant.answer(
-            self,
-            "Does the system have any faults?",
-        )
+        try:
+            refreshed = await RecursiveLiveCommissioningAssistant.answer(
+                self,
+                "Does the system have any faults?",
+            )
+        except LiveError as exc:
+            return self._system_health_revalidation_gap_reply(question, str(exc)), True
+
         if not _is_system_health_reply(refreshed):
             self._last_system_health_reply = None
             return (
@@ -288,14 +314,9 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         )
         if not answer:
             return authoritative
-        if (
-            is_plc_control_request(answer)
-            or _contains_forbidden_control_advice(answer)
-            or any(
-                is_plc_control_request(item)
-                or _contains_forbidden_control_advice(item)
-                for item in next_checks
-            )
+        if any(
+            _contains_forbidden_control_advice(item)
+            for item in (answer, *next_checks, *limitations)
         ):
             return authoritative
 
@@ -479,6 +500,9 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         raw_reply = await super().answer(question)
 
         if _is_system_health_reply(raw_reply):
+            # Whole-system health is now the newest conversational topic. A
+            # previous target must not remain eligible for FOLLOW_UP routing.
+            self._last_target = None
             self._last_system_health_reply = raw_reply
             return await self._explain_system_health(
                 question,
@@ -493,11 +517,21 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             and raw_reply.kind is LiveAssistantReplyKind.LIMITATION
         ):
             followup_intent = await self._resolve_system_health_followup(question)
-            if followup_intent is not None:
-                fresh_health = await RecursiveLiveCommissioningAssistant.answer(
-                    self,
-                    "Does the system have any faults?",
-                )
+            if followup_intent == "UNKNOWN":
+                # A confidently unrelated/different topic ends the bounded health
+                # conversation. Later vague turns cannot resurrect stale health.
+                self._last_system_health_reply = None
+            elif followup_intent is not None:
+                try:
+                    fresh_health = await RecursiveLiveCommissioningAssistant.answer(
+                        self,
+                        "Does the system have any faults?",
+                    )
+                except LiveError as exc:
+                    return self._system_health_revalidation_gap_reply(
+                        question,
+                        str(exc),
+                    )
                 if _is_system_health_reply(fresh_health):
                     self._last_system_health_reply = fresh_health
                     return await self._explain_system_health(
@@ -506,13 +540,14 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                         followup_intent=followup_intent,
                         started=started,
                     )
+                self._last_system_health_reply = None
 
-        if (
-            raw_reply.kind is LiveAssistantReplyKind.SYSTEM_OVERVIEW
-            or (
-                raw_reply.kind is LiveAssistantReplyKind.DIAGNOSIS
-                and raw_reply.target_output is not None
-            )
+        if raw_reply.kind is LiveAssistantReplyKind.SYSTEM_OVERVIEW:
+            self._last_system_health_reply = None
+            self._last_target = None
+        elif (
+            raw_reply.kind is LiveAssistantReplyKind.DIAGNOSIS
+            and raw_reply.target_output is not None
         ):
             self._last_system_health_reply = None
 
