@@ -393,7 +393,6 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         outer_client = entry.client
         if outer_client is None or not bool(getattr(outer_client, "connected", False)):
             return None
-        stale_after_seconds = float(getattr(outer_client, "stale_after_seconds", 5.0))
         state = self._state(plc_id)
         now = self._now()
         values: list[RuntimeValue] = []
@@ -407,15 +406,10 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                 or value.replayed
             ):
                 return None
-            source_stamp = value.source_timestamp or value.server_timestamp
-            if source_stamp is not None:
-                source_age = max(0.0, (now - source_stamp).total_seconds())
-                if source_age > stale_after_seconds:
-                    return None
-            # Recompute source/server freshness above because RuntimeValue.stale is a
-            # receipt-time snapshot. The short cache residency window answers a
-            # separate question: did DevAgent receive this still-trusted value recently
-            # enough to avoid another network round trip?
+            # RuntimeValue.stale captures trust/staleness when the value entered
+            # the cache. OPC UA SourceTimestamp may represent the last source
+            # change and can therefore be old for a stable but freshly received
+            # value. Cache residency is intentionally based on local receipt time.
             age = max(0.0, (now - value.received_at).total_seconds())
             if age > self.cache_fresh_seconds:
                 return None

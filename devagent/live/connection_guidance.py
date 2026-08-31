@@ -398,7 +398,7 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         lines.extend(
             [
                 "  Next step: browse/read can be attempted directly after supplying any required user-identity material.",
-                "  Note: NoSecurity is appropriate for lab/legacy use; production should prefer a supported secure endpoint when available.",
+                "  Note: NoSecurity is appropriate for lab/simulator use and may be required for legacy servers; production should prefer a supported secure endpoint when available.",
             ]
         )
     return lines

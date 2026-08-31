@@ -150,8 +150,10 @@ def test_revalidation_rebuilds_recursive_trace_when_direct_diagnosis_is_unchange
             state=PlcSessionState.CONNECTED,
         )
     )
-    assistant.context = SimpleNamespace(
-        rules_for_output=lambda target: (SimpleNamespace(id="rule-1"),)
+    assistant.loaded = SimpleNamespace(
+        context=SimpleNamespace(
+            rules_for_output=lambda target: (SimpleNamespace(id="rule-1"),)
+        )
     )
     assistant.trace_max_depth = 6
     assistant.trace_max_nodes = 64

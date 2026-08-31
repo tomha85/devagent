@@ -44,10 +44,17 @@ def test_real_exact_monitor_refresh_records_closed_reconfiguration_interval() ->
                 await manager.replace_monitored_node_ids("plc1", first)
                 await asyncio.sleep(0.20)
                 assert manager.integrity_status("plc1").active_monitored_nodes == 1
-                assert not any(
-                    gap.source == "MONITOR_SET_RECONFIGURATION"
-                    for gap in manager.drain_evidence_gaps("plc1")
-                )
+                initial_gaps = manager.drain_evidence_gaps("plc1")
+                initial_reconfiguration = [
+                    gap
+                    for gap in initial_gaps
+                    if gap.source == "MONITOR_SET_RECONFIGURATION"
+                ]
+                assert len(initial_reconfiguration) == 1
+                assert initial_reconfiguration[0].end_timestamp is not None
+                # Initial arming is preserved as bounded startup metadata but does
+                # not poison the session-wide evidence-loss counter.
+                assert manager.integrity_status("plc1").evidence_gap_count == 0
 
                 await manager.replace_monitored_node_ids("plc1", second)
                 await asyncio.sleep(0.20)
