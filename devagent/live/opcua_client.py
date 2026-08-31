@@ -4,7 +4,11 @@ import asyncio
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+import ssl
 from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+from cryptography import x509
 
 from .errors import LiveConnectionError, LiveDependencyError
 from .models import BrowseNode, EndpointSummary, Quality, RuntimeValue
@@ -43,6 +47,42 @@ def _require_trust_runtime() -> tuple[Any, Any, Any]:
             'Install it with: python -m pip install "devagent-ai[live]"'
         ) from exc
     return TrustStore, CertificateValidator, CertificateValidatorOptions
+
+
+def _validate_server_certificate_hostname(certificate: x509.Certificate, endpoint: str) -> None:
+    """Require the OPC UA server certificate SAN to match the configured endpoint host.
+
+    asyncua 2.0.x validates trust, lifetime, ApplicationURI, key usage, and
+    revocation, but its hostname check is not active. DevAgent adds this check
+    for trust-store/CA mode so a different server certificate issued by the
+    same trusted CA cannot impersonate the configured PLC endpoint.
+    """
+
+    host = urlsplit(endpoint).hostname
+    if not host:
+        raise LiveConnectionError("OPC UA endpoint host is unavailable for certificate validation")
+    try:
+        san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound as exc:
+        raise LiveConnectionError(
+            f"OPC UA server certificate has no SubjectAlternativeName for endpoint host {host!r}"
+        ) from exc
+
+    presented: list[tuple[str, str]] = []
+    presented.extend(("DNS", value) for value in san.get_values_for_type(x509.DNSName))
+    presented.extend(
+        ("IP Address", str(value)) for value in san.get_values_for_type(x509.IPAddress)
+    )
+    if not presented:
+        raise LiveConnectionError(
+            f"OPC UA server certificate has no DNS/IP SubjectAlternativeName for endpoint host {host!r}"
+        )
+    try:
+        ssl.match_hostname({"subjectAltName": presented}, host)
+    except ssl.CertificateError as exc:
+        raise LiveConnectionError(
+            f"OPC UA server certificate does not match endpoint host {host!r}"
+        ) from exc
 
 
 def _node_id_text(node_id: Any) -> str:
@@ -290,11 +330,17 @@ class ReadOnlyOpcUaClient:
                     [Path(self.security.crl_store)] if self.security.crl_store is not None else [],
                 )
                 await trust_store.load()
-                client.certificate_validator = CertificateValidator(
+                base_validator = CertificateValidator(
                     CertificateValidatorOptions.TRUSTED_VALIDATION
                     | CertificateValidatorOptions.PEER_SERVER,
                     trust_store,
                 )
+
+                async def validate_server_certificate(certificate: x509.Certificate, app_description: Any) -> None:
+                    await base_validator(certificate, app_description)
+                    _validate_server_certificate_hostname(certificate, self.endpoint)
+
+                client.certificate_validator = validate_server_certificate
 
             client.application_uri = self.security.application_uri
             await client.set_security(
