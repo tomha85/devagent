@@ -498,6 +498,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
     async def answer(self, question: str) -> LiveAssistantReply:
         started = time.monotonic()
         text = str(question or "").strip()
+        raw_reply: LiveAssistantReply | None = None
 
         # A validated whole-system health result is the newest conversational topic.
         # Resolve that bounded context before the general semantic router gets a
@@ -537,11 +538,13 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             elif followup_intent is None:
                 # Provider failure, malformed output, or low confidence must not let a
                 # second LLM route an ungrounded target ahead of the active health
-                # context. Fail closed through the deterministic parent for this turn.
+                # context. Fail closed through the deterministic parent, but preserve
+                # the normal final target revalidation before displaying that fallback.
                 self._last_system_health_reply = None
-                return await RecursiveLiveCommissioningAssistant.answer(self, text)
+                raw_reply = await RecursiveLiveCommissioningAssistant.answer(self, text)
 
-        raw_reply = await super().answer(question)
+        if raw_reply is None:
+            raw_reply = await super().answer(question)
 
         if _is_system_health_reply(raw_reply):
             # Whole-system health is now the newest conversational topic. A
