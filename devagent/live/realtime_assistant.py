@@ -44,10 +44,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
     Natural-language routing and AI explanation can take long enough for a running
     machine to change state. For modeled current-output diagnoses, this wrapper
     performs one final trusted evidence capture when answer preparation exceeded the
-    configured latency threshold. If deterministic truth changed, stale AI wording is
-    discarded. If final truth cannot be established because the session/evidence path
-    is unavailable, the original current-state claim is also discarded and Live fails
-    closed with an explicit evidence gap.
+    configured latency threshold. The displayed direct diagnosis and recursive trace
+    are always rebuilt from that final evidence set so an unchanged immediate blocker
+    cannot hide a changed upstream cause. If final truth cannot be established because
+    the session/evidence path is unavailable, the original current-state claim is
+    discarded and Live fails closed with an explicit evidence gap.
     """
 
     def __init__(
@@ -115,7 +116,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         self,
         question: str,
         original: LiveCommissioningDiagnosis,
-    ) -> LiveAssistantReply | None:
+    ) -> LiveAssistantReply:
         target = original.target_output
         if not target:
             return self._revalidation_gap_reply(
@@ -171,8 +172,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
 
         observations = observations_from_reconciled(reconciled)
         refreshed = diagnose_output(self.context, target, observations)
-        if _diagnosis_signature(refreshed) == _diagnosis_signature(original):
-            return None
+        direct_changed = _diagnosis_signature(refreshed) != _diagnosis_signature(original)
 
         deterministic = answer_commissioning_question(
             question,
@@ -186,13 +186,21 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             max_depth=self.trace_max_depth,
             max_nodes=self.trace_max_nodes,
         )
-        text = (
-            "DEVAGENT LIVE CURRENT STATE REFRESHED\n"
-            "The PLC state changed while the answer was being prepared. "
-            "The earlier wording was discarded and the result below was recomputed "
-            "from fresh trusted OPC UA evidence.\n\n"
-            + deterministic.render_text()
-        )
+        if direct_changed:
+            heading = "DEVAGENT LIVE CURRENT STATE REFRESHED"
+            detail = (
+                "The PLC state changed while the answer was being prepared. "
+                "The earlier wording was discarded and the result below was recomputed "
+                "from fresh trusted OPC UA evidence."
+            )
+        else:
+            heading = "DEVAGENT LIVE CURRENT STATE REVALIDATED"
+            detail = (
+                "The immediate diagnosis remained the same, but DevAgent rebuilt the "
+                "entire deterministic and recursive root-cause trace from final trusted "
+                "OPC UA evidence before displaying this answer."
+            )
+        text = f"{heading}\n{detail}\n\n" + deterministic.render_text()
         if refreshed.source_locators:
             text += "\n\nTarget PLC source:"
             text += "".join(f"\n- {locator}" for locator in refreshed.source_locators)
@@ -218,13 +226,9 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             or not diagnosis.target_output
         ):
             return reply
-        if (
-            time.monotonic() - started
-            < self.final_revalidation_after_seconds
-        ):
+        if time.monotonic() - started < self.final_revalidation_after_seconds:
             return reply
-        refreshed = await self._refresh_current_diagnosis(question, diagnosis)
-        return refreshed or reply
+        return await self._refresh_current_diagnosis(question, diagnosis)
 
 
 __all__ = [
