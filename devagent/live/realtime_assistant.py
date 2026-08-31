@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
+from devagent.providers import ProviderError
+
 from .assistant import LiveAssistantReply, LiveAssistantReplyKind
+from .control_guard import is_plc_control_request
 from .diagnosis import (
     LiveCommissioningDiagnosis,
     LiveDiagnosisStatus,
@@ -11,13 +15,51 @@ from .diagnosis import (
 )
 from .diagnosis_guard import diagnose_output
 from .errors import LiveError
-from .qa import answer_commissioning_question
+from .qa import _contains_forbidden_control_advice, answer_commissioning_question
 from .reconciled_evidence import build_reconciled_live_agent_evidence
+from .recursive_assistant import RecursiveLiveCommissioningAssistant
 from .recursive_diagnosis import (
     required_tag_ids_for_recursive_output,
     trace_recursive_diagnosis,
 )
 from .semantic_assistant import SemanticLiveCommissioningAssistant
+
+
+_SYSTEM_HEALTH_HEADING = "DEVAGENT LIVE SYSTEM HEALTH"
+
+_HEALTH_FOLLOWUP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["intent", "confidence", "reason"],
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": ["EXPLAIN", "NEXT_CHECKS", "STATUS", "UNKNOWN"],
+        },
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "reason": {"type": "string", "minLength": 1},
+    },
+}
+
+_HEALTH_CONVERSATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["answer", "confidence", "next_checks", "limitations"],
+    "properties": {
+        "answer": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "next_checks": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "limitations": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1},
+        },
+    },
+}
 
 
 def _diagnosis_signature(diagnosis: LiveCommissioningDiagnosis) -> tuple[Any, ...]:
@@ -38,6 +80,14 @@ def _diagnosis_signature(diagnosis: LiveCommissioningDiagnosis) -> tuple[Any, ..
     )
 
 
+def _is_system_health_reply(reply: LiveAssistantReply) -> bool:
+    return (
+        reply.kind is LiveAssistantReplyKind.DIAGNOSIS
+        and reply.target_output is None
+        and reply.text.lstrip().startswith(_SYSTEM_HEALTH_HEADING)
+    )
+
+
 class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssistant):
     """Semantic Live assistant with bounded final-state revalidation.
 
@@ -49,6 +99,13 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
     cannot hide a changed upstream cause. If final truth cannot be established because
     the session/evidence path is unavailable, the original current-state claim is
     discarded and Live fails closed with an explicit evidence gap.
+
+    The realtime layer also preserves one bounded whole-system conversational context.
+    When a validated SYSTEM_HEALTH answer was just produced, a later free-form follow-up
+    such as "how do I fix this?" may be interpreted as a question about that health
+    result. Before answering, DevAgent re-runs the deterministic current health check;
+    the LLM may explain only that freshly proven evidence. No stale runtime truth is
+    promoted into the next answer and the PLC control/write guard remains authoritative.
     """
 
     def __init__(
@@ -62,6 +119,120 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
         super().__init__(*args, **kwargs)
         self.final_revalidation_after_seconds = float(
             final_revalidation_after_seconds
+        )
+        self._last_system_health_reply: LiveAssistantReply | None = None
+
+    async def _resolve_system_health_followup(self, question: str) -> str | None:
+        provider = self.provider
+        if provider is None or self._last_system_health_reply is None:
+            return None
+        try:
+            response = await asyncio.to_thread(
+                provider.request,
+                role="live_system_health_followup_router",
+                payload={
+                    "instruction": (
+                        "The previous validated conversational context is a CURRENT whole-system health diagnosis. "
+                        "Classify only whether the new engineer utterance is a follow-up to that system-health context. "
+                        "EXPLAIN means asking what the prior health result means or why it matters. "
+                        "NEXT_CHECKS means asking how to fix, what to do next, what to inspect, or how to investigate the proven issue. "
+                        "STATUS means asking whether the system is still good/bad/healthy now. "
+                        "UNKNOWN means the utterance is unrelated, requests a different target/topic, or cannot safely be tied to the prior system-health result. "
+                        "Do not answer the engineering question. Do not invent PLC tags, causes, runtime values, or evidence. "
+                        "A repair/fix request is only a request for safe diagnostic next checks; it does not authorize PLC writes, forces, resets, bypasses, downloads, mode changes, or machine control."
+                    ),
+                    "question": str(question or "").strip(),
+                    "previous_context": "SYSTEM_HEALTH",
+                },
+                schema=_HEALTH_FOLLOWUP_SCHEMA,
+            )
+        except ProviderError:
+            return None
+
+        try:
+            confidence = float(response["confidence"])
+            intent = str(response["intent"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if confidence < 0.55 or intent == "UNKNOWN":
+            return None
+        if intent not in {"EXPLAIN", "NEXT_CHECKS", "STATUS"}:
+            return None
+        return intent
+
+    async def _explain_system_health(
+        self,
+        question: str,
+        deterministic: LiveAssistantReply,
+        *,
+        followup_intent: str | None = None,
+    ) -> LiveAssistantReply:
+        provider = self.provider
+        if provider is None or not _is_system_health_reply(deterministic):
+            return deterministic
+
+        try:
+            response = await asyncio.to_thread(
+                provider.request,
+                role="live_system_health_explainer",
+                payload={
+                    "instruction": (
+                        "You are the conversational explanation layer for a READ-ONLY industrial commissioning assistant. "
+                        "The deterministic CURRENT system-health report below is authoritative. Answer the engineer's wording naturally and concisely using only facts present in that report. "
+                        "Do not invent PLC logic, tags, device faults, physical causes, safety claims, evidence, or repair success. "
+                        "If the engineer asks how to fix the issue, explain safe diagnostic next checks grounded in the report; do not claim the physical root cause is known unless the report proves it. "
+                        "Never instruct PLC writes, forcing, safety/interlock bypass, reset commands, downloads, controller mode changes, start/stop commands, or any other machine-control action. "
+                        "Suggested next checks must be read-only observations, engineering-source inspection, or approved field/device diagnostics. "
+                        "Do not weaken limitations stated in the deterministic report."
+                    ),
+                    "question": str(question or "").strip(),
+                    "followup_intent": followup_intent,
+                    "deterministic_current_system_health": deterministic.text,
+                },
+                schema=_HEALTH_CONVERSATION_SCHEMA,
+            )
+        except ProviderError:
+            return deterministic
+
+        answer = str(response.get("answer", "")).strip()
+        next_checks = tuple(
+            str(item).strip()
+            for item in response.get("next_checks", ())
+            if str(item).strip()
+        )
+        limitations = tuple(
+            str(item).strip()
+            for item in response.get("limitations", ())
+            if str(item).strip()
+        )
+        if not answer:
+            return deterministic
+        if _contains_forbidden_control_advice(answer) or any(
+            _contains_forbidden_control_advice(item) for item in next_checks
+        ):
+            return deterministic
+
+        lines = [answer]
+        if next_checks:
+            lines.extend(["", "Next checks:"])
+            lines.extend(f"- {item}" for item in next_checks)
+        if limitations:
+            lines.extend(["", "Limitations:"])
+            lines.extend(f"- {item}" for item in limitations)
+        lines.extend(
+            [
+                "",
+                "Deterministic current evidence:",
+                deterministic.text,
+            ]
+        )
+        return LiveAssistantReply(
+            question=question,
+            kind=deterministic.kind,
+            text="\n".join(lines),
+            target_output=deterministic.target_output,
+            diagnosis=deterministic.diagnosis,
+            answer=deterministic.answer,
         )
 
     def _revalidation_gap_reply(
@@ -218,7 +389,42 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
 
     async def answer(self, question: str) -> LiveAssistantReply:
         started = time.monotonic()
-        reply = await super().answer(question)
+        raw_reply = await super().answer(question)
+
+        if _is_system_health_reply(raw_reply):
+            self._last_system_health_reply = raw_reply
+            return await self._explain_system_health(question, raw_reply)
+
+        if (
+            self._last_system_health_reply is not None
+            and self.provider is not None
+            and not is_plc_control_request(str(question or ""))
+            and raw_reply.kind is LiveAssistantReplyKind.LIMITATION
+        ):
+            followup_intent = await self._resolve_system_health_followup(question)
+            if followup_intent is not None:
+                fresh_health = await RecursiveLiveCommissioningAssistant.answer(
+                    self,
+                    "Does the system have any faults?",
+                )
+                if _is_system_health_reply(fresh_health):
+                    self._last_system_health_reply = fresh_health
+                    return await self._explain_system_health(
+                        question,
+                        fresh_health,
+                        followup_intent=followup_intent,
+                    )
+
+        if (
+            raw_reply.kind in {
+                LiveAssistantReplyKind.DIAGNOSIS,
+                LiveAssistantReplyKind.SYSTEM_OVERVIEW,
+            }
+            and raw_reply.target_output is not None
+        ):
+            self._last_system_health_reply = None
+
+        reply = raw_reply
         diagnosis = reply.diagnosis
         if (
             reply.kind is not LiveAssistantReplyKind.DIAGNOSIS
@@ -234,4 +440,5 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
 __all__ = [
     "RealtimeSemanticLiveCommissioningAssistant",
     "_diagnosis_signature",
+    "_is_system_health_reply",
 ]
