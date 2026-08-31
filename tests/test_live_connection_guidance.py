@@ -59,7 +59,9 @@ def test_no_security_x509_only_requires_user_certificate_not_application_certifi
     assert guidance.secure_connection_available is False
     assert guidance.user_certificate_available is True
     assert guidance.recommended is not None
-    assert guidance.recommended.certificate_required is True
+    # Per-endpoint `Client certificate` output refers to the application
+    # certificate. The X.509 user certificate is represented separately.
+    assert guidance.recommended.certificate_required is False
     assert guidance.recommended.application_certificate_required is False
     assert guidance.recommended.user_certificate_required is True
 
@@ -79,6 +81,27 @@ def test_no_security_anonymous_plus_x509_has_certificate_free_path() -> None:
     assert guidance.recommended is not None
     assert guidance.recommended.user_certificate_available is True
     assert guidance.recommended.user_certificate_required is False
+
+
+def test_no_security_anonymous_plus_username_keeps_username_out_of_default_recommendation() -> None:
+    guidance = analyze_connection_guidance(
+        [_endpoint(mode="None_", policy="None", tokens=("Anonymous", "UserName"))]
+    )
+
+    assert guidance.recommended is not None
+    assert guidance.recommended.anonymous_available is True
+    assert guidance.recommended.username_password_available is True
+    assert guidance.recommended.username_password_requires_insecure_opt_in is True
+    assert guidance.username_password_available is False
+    assert guidance.insecure_username_password_advertised is True
+    assert guidance.recommended.authentication_summary == "ANONYMOUS"
+
+    rendered = "\n".join(format_connection_guidance(guidance))
+    assert "Username/password available by default policy: NO" in rendered
+    assert "Username/password NoSecurity profile: YES — explicit insecure opt-in required" in rendered
+    assert "Authentication: ANONYMOUS" in rendered
+    assert "Password: provide through --password-env" not in rendered
+    assert "Required explicit opt-in:" not in rendered
 
 
 def test_mixed_server_reports_certificate_not_required_but_recommends_secure_profile() -> None:
