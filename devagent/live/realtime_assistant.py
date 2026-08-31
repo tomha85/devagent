@@ -497,6 +497,50 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
 
     async def answer(self, question: str) -> LiveAssistantReply:
         started = time.monotonic()
+        text = str(question or "").strip()
+
+        # A validated whole-system health result is the newest conversational topic.
+        # Resolve that bounded context before the general semantic router gets a
+        # chance to select an unrelated canonical target from known_targets.
+        if (
+            getattr(self, "_last_system_health_reply", None) is not None
+            and self.provider is not None
+            and not is_plc_control_request(text)
+        ):
+            followup_intent = await self._resolve_system_health_followup(text)
+            if followup_intent in {"EXPLAIN", "NEXT_CHECKS", "STATUS"}:
+                try:
+                    fresh_health = await RecursiveLiveCommissioningAssistant.answer(
+                        self,
+                        "Does the system have any faults?",
+                    )
+                except LiveError as exc:
+                    return self._system_health_revalidation_gap_reply(
+                        text,
+                        str(exc),
+                    )
+                if _is_system_health_reply(fresh_health):
+                    self._last_target = None
+                    self._last_system_health_reply = fresh_health
+                    return await self._explain_system_health(
+                        text,
+                        fresh_health,
+                        followup_intent=followup_intent,
+                        started=started,
+                    )
+                self._last_system_health_reply = None
+                return fresh_health
+            if followup_intent == "UNKNOWN":
+                # A confidently unrelated/different topic ends the bounded health
+                # conversation, then the normal semantic router may handle the new topic.
+                self._last_system_health_reply = None
+            elif followup_intent is None:
+                # Provider failure, malformed output, or low confidence must not let a
+                # second LLM route an ungrounded target ahead of the active health
+                # context. Fail closed through the deterministic parent for this turn.
+                self._last_system_health_reply = None
+                return await RecursiveLiveCommissioningAssistant.answer(self, text)
+
         raw_reply = await super().answer(question)
 
         if _is_system_health_reply(raw_reply):
@@ -509,38 +553,6 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                 raw_reply,
                 started=started,
             )
-
-        if (
-            getattr(self, "_last_system_health_reply", None) is not None
-            and self.provider is not None
-            and not is_plc_control_request(str(question or ""))
-            and raw_reply.kind is LiveAssistantReplyKind.LIMITATION
-        ):
-            followup_intent = await self._resolve_system_health_followup(question)
-            if followup_intent == "UNKNOWN":
-                # A confidently unrelated/different topic ends the bounded health
-                # conversation. Later vague turns cannot resurrect stale health.
-                self._last_system_health_reply = None
-            elif followup_intent is not None:
-                try:
-                    fresh_health = await RecursiveLiveCommissioningAssistant.answer(
-                        self,
-                        "Does the system have any faults?",
-                    )
-                except LiveError as exc:
-                    return self._system_health_revalidation_gap_reply(
-                        question,
-                        str(exc),
-                    )
-                if _is_system_health_reply(fresh_health):
-                    self._last_system_health_reply = fresh_health
-                    return await self._explain_system_health(
-                        question,
-                        fresh_health,
-                        followup_intent=followup_intent,
-                        started=started,
-                    )
-                self._last_system_health_reply = None
 
         if raw_reply.kind is LiveAssistantReplyKind.SYSTEM_OVERVIEW:
             self._last_system_health_reply = None
