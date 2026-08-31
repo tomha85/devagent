@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
+import ssl
 from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+from cryptography import x509
 
 from .errors import LiveConnectionError, LiveDependencyError
 from .models import BrowseNode, EndpointSummary, Quality, RuntimeValue
@@ -30,6 +35,54 @@ def _require_security_policies() -> Any:
             'Install it with: python -m pip install "devagent-ai[live]"'
         ) from exc
     return security_policies
+
+
+def _require_trust_runtime() -> tuple[Any, Any, Any]:
+    try:
+        from asyncua.crypto.truststore import TrustStore
+        from asyncua.crypto.validator import CertificateValidator, CertificateValidatorOptions
+    except ImportError as exc:  # pragma: no cover - optional dependency guard
+        raise LiveDependencyError(
+            'DevAgent Live OPC UA trust-store validation requires the optional OPC UA runtime. '
+            'Install it with: python -m pip install "devagent-ai[live]"'
+        ) from exc
+    return TrustStore, CertificateValidator, CertificateValidatorOptions
+
+
+def _validate_server_certificate_hostname(certificate: x509.Certificate, endpoint: str) -> None:
+    """Require the OPC UA server certificate SAN to match the configured endpoint host.
+
+    asyncua 2.0.x validates trust, lifetime, ApplicationURI, key usage, and
+    revocation, but its hostname check is not active. DevAgent adds this check
+    for trust-store/CA mode so a different server certificate issued by the
+    same trusted CA cannot impersonate the configured PLC endpoint.
+    """
+
+    host = urlsplit(endpoint).hostname
+    if not host:
+        raise LiveConnectionError("OPC UA endpoint host is unavailable for certificate validation")
+    try:
+        san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound as exc:
+        raise LiveConnectionError(
+            f"OPC UA server certificate has no SubjectAlternativeName for endpoint host {host!r}"
+        ) from exc
+
+    presented: list[tuple[str, str]] = []
+    presented.extend(("DNS", value) for value in san.get_values_for_type(x509.DNSName))
+    presented.extend(
+        ("IP Address", str(value)) for value in san.get_values_for_type(x509.IPAddress)
+    )
+    if not presented:
+        raise LiveConnectionError(
+            f"OPC UA server certificate has no DNS/IP SubjectAlternativeName for endpoint host {host!r}"
+        )
+    try:
+        ssl.match_hostname({"subjectAltName": presented}, host)
+    except ssl.CertificateError as exc:
+        raise LiveConnectionError(
+            f"OPC UA server certificate does not match endpoint host {host!r}"
+        ) from exc
 
 
 def _node_id_text(node_id: Any) -> str:
@@ -270,13 +323,36 @@ class ReadOnlyOpcUaClient:
                     f"Installed asyncua does not support security mode {self.security.security_mode}"
                 )
 
+            if self.security.trust_store is not None:
+                TrustStore, CertificateValidator, CertificateValidatorOptions = _require_trust_runtime()
+                trust_store = TrustStore(
+                    [Path(self.security.trust_store)],
+                    [Path(self.security.crl_store)] if self.security.crl_store is not None else [],
+                )
+                await trust_store.load()
+                base_validator = CertificateValidator(
+                    CertificateValidatorOptions.TRUSTED_VALIDATION
+                    | CertificateValidatorOptions.PEER_SERVER,
+                    trust_store,
+                )
+
+                async def validate_server_certificate(certificate: x509.Certificate, app_description: Any) -> None:
+                    await base_validator(certificate, app_description)
+                    _validate_server_certificate_hostname(certificate, self.endpoint)
+
+                client.certificate_validator = validate_server_certificate
+
             client.application_uri = self.security.application_uri
             await client.set_security(
                 policy,
                 certificate=str(self.security.client_certificate),
                 private_key=str(self.security.client_private_key),
                 private_key_password=self.security.private_key_password,
-                server_certificate=str(self.security.server_certificate),
+                server_certificate=(
+                    str(self.security.server_certificate)
+                    if self.security.server_certificate is not None
+                    else None
+                ),
                 mode=mode,
             )
 

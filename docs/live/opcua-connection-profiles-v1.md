@@ -39,9 +39,9 @@ The deprecated Basic128/Basic256 policies are exposed only for compatibility wit
 
 ECC profiles are recognized so `probe` can explain them accurately, but DevAgent does not claim a connection path that its pinned runtime cannot implement.
 
-## Application certificate vs user certificate
+## Application certificate, server trust, and user certificate
 
-These are separate OPC UA identities and DevAgent exposes them separately:
+These are separate OPC UA concepts and DevAgent exposes them separately:
 
 ```text
 Client application identity / SecureChannel
@@ -49,8 +49,10 @@ Client application identity / SecureChannel
   --client-private-key
   --private-key-password-env
 
-Server certificate pin
-  --server-certificate
+Server trust — choose one or both
+  --server-certificate     # exact server certificate pin
+  --trust-store DIR        # trusted server certificates and/or issuing CA certificates
+  --crl-store DIR          # optional revocation lists used with --trust-store
 
 X.509 user identity / Session
   --user-certificate
@@ -58,7 +60,68 @@ X.509 user identity / Session
   --user-private-key-password-env
 ```
 
-A secure channel requires the client application certificate/private key and a pinned server certificate. An X.509 user identity additionally requires the user certificate/private key when that is the server's configured user-token type.
+A secure channel requires the DevAgent client application certificate/private key plus a server-trust method. The server-trust method can be an exact `--server-certificate` pin, a reusable `--trust-store`, or both. An X.509 user identity additionally requires the user certificate/private key when that is the server's configured user-token type.
+
+## Server trust modes
+
+### Exact server certificate pin
+
+Use this when the operator wants DevAgent to connect only to one exact server certificate:
+
+```text
+--server-certificate ./pki/plc01-server.der
+```
+
+This remains the strictest per-server identity mode.
+
+### Reusable trust store / CA trust
+
+Use a directory containing trusted server certificates and/or issuing CA certificates:
+
+```text
+./pki/trusted/
+├── factory-opcua-root-ca.der
+└── factory-opcua-intermediate-ca.der
+```
+
+Then use:
+
+```text
+--trust-store ./pki/trusted
+```
+
+If PLC01, PLC02, PLC03, and other OPC UA servers have server certificates issued by that trusted CA chain, DevAgent does **not** need a separate `--server-certificate` argument for every PLC. The server certificate discovered during the OPC UA connection is validated against the trust store before the Session is accepted.
+
+For self-signed OPC UA servers, the individual self-signed server certificate may be placed in the trust store. That avoids a CLI pin but still requires one trusted certificate per self-signed server. For many PLCs, a shared customer/factory CA is the scalable configuration.
+
+If the CA chain contains intermediates, place the required intermediate CA certificates in the same trust-store directory so the runtime can build the certificate chain.
+
+### Optional CRL validation
+
+A CRL directory may be supplied with the trust store:
+
+```text
+./pki/crl/
+└── factory-opcua-ca.crl.der
+```
+
+```text
+--trust-store ./pki/trusted \
+--crl-store ./pki/crl
+```
+
+`--crl-store` is invalid without `--trust-store`. DevAgent fails closed for missing/empty configured trust or CRL directories.
+
+### Pin + trust store
+
+Both can be supplied together:
+
+```text
+--server-certificate ./pki/plc01-server.der \
+--trust-store ./pki/trusted
+```
+
+In this mode the exact server certificate pin is used for SecureChannel setup and the presented server certificate must also pass trust-store validation.
 
 ## Discover the server profile
 
@@ -79,7 +142,7 @@ devagent live assist \
   --endpoint opc.tcp://192.168.10.20:4840/
 ```
 
-### Username/password + secure channel
+### Username/password + secure channel + exact pin
 
 ```bash
 export PLC_OPCUA_PASSWORD='...'
@@ -97,20 +160,40 @@ devagent live assist \
   --password-env PLC_OPCUA_PASSWORD
 ```
 
-`Sign` is also accepted when that is the customer's configured secure endpoint:
+### Username/password + secure channel + reusable trust store
+
+```bash
+export PLC_OPCUA_PASSWORD='...'
+
+devagent live assist \
+  --project-folder ./Line1 \
+  --primary-project Line1.L5X \
+  --endpoint opc.tcp://192.168.10.20:4840/ \
+  --security-policy Basic256Sha256 \
+  --security-mode SignAndEncrypt \
+  --client-certificate ./pki/devagent-app.der \
+  --client-private-key ./pki/devagent-app-key.pem \
+  --trust-store ./pki/trusted \
+  --username devagent_reader \
+  --password-env PLC_OPCUA_PASSWORD
+```
+
+No `--server-certificate` is needed in this example. The server certificate is discovered and must chain to a certificate trusted by `./pki/trusted`.
+
+`Sign` is also accepted when that is the customer's configured secure endpoint.
+
+### Secure Anonymous + reusable trust store
 
 ```bash
 devagent live assist \
   --project-folder ./Line1 \
   --primary-project Line1.L5X \
   --endpoint opc.tcp://192.168.10.20:4840/ \
-  --security-policy Basic256Sha256 \
-  --security-mode Sign \
+  --security-policy Aes256_Sha256_RsaPss \
+  --security-mode SignAndEncrypt \
   --client-certificate ./pki/devagent-app.der \
   --client-private-key ./pki/devagent-app-key.pem \
-  --server-certificate ./pki/plc-server.der \
-  --username devagent_reader \
-  --password-env PLC_OPCUA_PASSWORD
+  --trust-store ./pki/trusted
 ```
 
 ### Existing NoSecurity username/password profile
@@ -131,7 +214,7 @@ devagent live assist \
 
 The explicit opt-in prevents DevAgent from accidentally sending username/password over a NoSecurity endpoint because of a missing security flag.
 
-### X.509 user identity
+### X.509 user identity + trust store
 
 ```bash
 devagent live assist \
@@ -142,7 +225,7 @@ devagent live assist \
   --security-mode SignAndEncrypt \
   --client-certificate ./pki/devagent-app.der \
   --client-private-key ./pki/devagent-app-key.pem \
-  --server-certificate ./pki/plc-server.der \
+  --trust-store ./pki/trusted \
   --user-certificate ./pki/devagent-user.der \
   --user-private-key ./pki/devagent-user-key.pem
 ```
@@ -151,7 +234,24 @@ devagent live assist \
 
 The same security surface is accepted by `devagent live commission`, `vendor-qualify`, and other workflows that load `devagent-live-commission-v1` JSON.
 
-Example X.509 user identity:
+Example reusable trust store:
+
+```json
+{
+  "security": {
+    "security_policy": "Basic256Sha256",
+    "security_mode": "SignAndEncrypt",
+    "client_certificate": "./pki/devagent-app.der",
+    "client_private_key": "./pki/devagent-app-key.pem",
+    "trust_store": "./pki/trusted",
+    "crl_store": "./pki/crl",
+    "username": "devagent_reader",
+    "password_env": "PLC_OPCUA_PASSWORD"
+  }
+}
+```
+
+Example X.509 user identity with exact pin:
 
 ```json
 {

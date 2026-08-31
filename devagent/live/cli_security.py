@@ -63,7 +63,24 @@ def add_security_args(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--server-certificate",
-        help="Path to the pinned OPC UA server certificate. Required for secure channels.",
+        help=(
+            "Path to an exact pinned OPC UA server certificate. For secure channels, use this or --trust-store."
+        ),
+    )
+    group.add_argument(
+        "--trust-store",
+        metavar="DIR",
+        help=(
+            "Directory containing trusted OPC UA server certificates and/or issuing CA certificates (.der/.pem). "
+            "Allows secure connections without a per-server --server-certificate pin."
+        ),
+    )
+    group.add_argument(
+        "--crl-store",
+        metavar="DIR",
+        help=(
+            "Optional directory containing certificate revocation lists (.der/.pem) used with --trust-store."
+        ),
     )
     group.add_argument(
         "--user-certificate",
@@ -122,6 +139,8 @@ def security_from_args(args: argparse.Namespace) -> LiveSecurityConfig:
         client_private_key=getattr(args, "client_private_key", None),
         private_key_password=private_key_password,
         server_certificate=getattr(args, "server_certificate", None),
+        trust_store=getattr(args, "trust_store", None),
+        crl_store=getattr(args, "crl_store", None),
         user_certificate=getattr(args, "user_certificate", None),
         user_private_key=getattr(args, "user_private_key", None),
         user_private_key_password=user_private_key_password,
