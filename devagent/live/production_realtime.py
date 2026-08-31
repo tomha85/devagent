@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from typing import Any, Iterable
 
 from .history import (
@@ -13,7 +14,6 @@ from .history import (
     LiveSignalTransition,
     LiveTimelineStore,
 )
-from .manager import PlcSessionState
 from .models import RuntimeValue
 from .opcua_client import (
     _is_graceful_shutdown_status,
@@ -37,12 +37,25 @@ class LiveEvidenceGap:
     reason: str
     node_id: str | None = None
     dropped_count: int = 1
+    # None means an interval is still open. Instantaneous gaps explicitly set
+    # end_timestamp == timestamp when recorded.
+    end_timestamp: datetime | None = None
+
+    def overlaps(self, start: datetime, end: datetime) -> bool:
+        effective_end = self.end_timestamp if self.end_timestamp is not None else end
+        return self.timestamp <= end and effective_end >= start
 
     def render_text(self) -> str:
         node = f" node={self.node_id}" if self.node_id else ""
+        if self.end_timestamp is None:
+            span = "open"
+        elif self.end_timestamp == self.timestamp:
+            span = "instant"
+        else:
+            span = f"end={self.end_timestamp.isoformat()}"
         return (
             f"{self.timestamp.isoformat()} source={self.source}{node} "
-            f"count={self.dropped_count} reason={self.reason}"
+            f"count={self.dropped_count} span={span} reason={self.reason}"
         )
 
 
@@ -62,6 +75,9 @@ class LiveEvidenceIntegrityStatus:
     last_sequence_number: int | None
     last_gap_at: datetime | None
     last_gap_reason: str | None
+    gap_metadata_overflows: int = 0
+    continuous_monitoring_enabled: bool = True
+    monitored_coverage_complete: bool = True
 
 
 @dataclass
@@ -72,17 +88,18 @@ class _IntegrityState:
     local_buffer_drops: int = 0
     replayed_events: int = 0
     subscription_recreations: int = 0
+    gap_metadata_overflows: int = 0
     desired_nodes: tuple[str, ...] = ()
-    active_nodes: set[str] | None = None
+    active_nodes: set[str] = field(default_factory=set)
     omitted_nodes: tuple[str, ...] = ()
     last_sequence_number: int | None = None
     last_gap_at: datetime | None = None
     last_gap_reason: str | None = None
-    continuity_gap_open: bool = False
-
-    def __post_init__(self) -> None:
-        if self.active_nodes is None:
-            self.active_nodes = set()
+    continuity_gap_started_at: datetime | None = None
+    continuity_gap_reason: str | None = None
+    capacity_gap_started_at: datetime | None = None
+    monitoring_disabled_gap_started_at: datetime | None = None
+    setup_gap_starts: dict[str, datetime] = field(default_factory=dict)
 
 
 def _status_code_value(status: object) -> int | None:
@@ -100,20 +117,16 @@ def status_has_monitored_item_overflow(status: object) -> bool:
     return (value & _OPCUA_DATAVALUE_OVERFLOW_MASK) == _OPCUA_DATAVALUE_OVERFLOW_MASK
 
 
+def _value_timestamp(value: RuntimeValue) -> datetime:
+    return value.source_timestamp or value.server_timestamp or value.received_at
+
+
 class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionManager):
-    """Commercial read-only realtime manager with explicit evidence-integrity accounting.
+    """Commercial read-only realtime manager with explicit evidence integrity.
 
-    This class keeps the V1 current-state correctness model and adds the properties
-    needed for defensible commissioning evidence:
-
-    * exact desired monitored-node reconciliation instead of an add-only union;
-    * asyncua iterator overflow policy DISCONNECT (supported by asyncua 2.0+);
-    * explicit OPC UA MonitoredItem Overflow InfoBit detection;
-    * explicit local event-buffer loss accounting before bounded deque eviction;
-    * subscription recreation and connection-continuity gap accounting;
-    * replay telemetry and bounded evidence-gap drain for the historical layer.
-
-    No PLC write/control API is added.
+    V1 current-state protections remain authoritative. V2 adds exact monitored-set
+    lifecycle, server/client overflow fail-safety, interval-based continuity gaps,
+    replay/recreation telemetry, and bounded-but-never-silent integrity metadata.
     """
 
     def __init__(
@@ -125,8 +138,8 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
     ) -> None:
         if iterator_queue_maxsize < 100:
             raise ValueError("iterator_queue_maxsize must be >= 100")
-        if evidence_gap_maxsize < 1:
-            raise ValueError("evidence_gap_maxsize must be >= 1")
+        if evidence_gap_maxsize < 2:
+            raise ValueError("evidence_gap_maxsize must be >= 2")
         super().__init__(*args, **kwargs)
         self.iterator_queue_maxsize = int(iterator_queue_maxsize)
         self.evidence_gap_maxsize = int(evidence_gap_maxsize)
@@ -141,6 +154,32 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         except KeyError as exc:
             raise KeyError(f"Unknown PLC id: {plc_id}") from exc
 
+    @staticmethod
+    def _now_utc() -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _append_gap_metadata(self, state: _IntegrityState, gap: LiveEvidenceGap) -> None:
+        maxlen = state.gaps.maxlen
+        if maxlen is not None and len(state.gaps) >= maxlen:
+            oldest = state.gaps[0]
+            latest_end = gap.end_timestamp or gap.timestamp
+            state.gaps.clear()
+            state.gaps.append(
+                LiveEvidenceGap(
+                    timestamp=oldest.timestamp,
+                    end_timestamp=max(oldest.end_timestamp or oldest.timestamp, latest_end),
+                    plc_id=gap.plc_id,
+                    source="EVIDENCE_GAP_METADATA_OVERFLOW",
+                    reason=(
+                        "Detailed evidence-gap metadata exceeded the bounded queue; "
+                        "the coalesced interval is conservatively incomplete"
+                    ),
+                    dropped_count=0,
+                )
+            )
+            state.gap_metadata_overflows += 1
+        state.gaps.append(gap)
+
     def _record_gap(
         self,
         plc_id: str,
@@ -149,55 +188,188 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         reason: str,
         node_id: str | None = None,
         dropped_count: int = 1,
-    ) -> None:
+        timestamp: datetime | None = None,
+        end_timestamp: datetime | None = None,
+        open_interval: bool = False,
+        count_toward_total: bool = True,
+    ) -> LiveEvidenceGap:
         state = self._integrity_state(plc_id)
-        now = datetime.now(timezone.utc)
+        stamp = timestamp or self._now_utc()
+        if not open_interval and end_timestamp is None:
+            end_timestamp = stamp
         gap = LiveEvidenceGap(
-            timestamp=now,
+            timestamp=stamp,
+            end_timestamp=end_timestamp,
             plc_id=plc_id,
             source=source,
             reason=str(reason),
             node_id=node_id,
-            dropped_count=max(1, int(dropped_count)),
+            dropped_count=max(0, int(dropped_count)),
         )
-        state.gaps.append(gap)
-        state.evidence_gap_count += gap.dropped_count
-        state.last_gap_at = now
+        self._append_gap_metadata(state, gap)
+        if count_toward_total:
+            state.evidence_gap_count += max(1, gap.dropped_count)
+        state.last_gap_at = stamp
         state.last_gap_reason = gap.reason
-        if source == "SERVER_MONITORED_ITEM_OVERFLOW":
-            state.server_overflow_events += gap.dropped_count
-        elif source == "LOCAL_EVENT_BUFFER_OVERFLOW":
-            state.local_buffer_drops += gap.dropped_count
-        elif source == "SUBSCRIPTION_RECREATED":
+        if count_toward_total and source == "SERVER_MONITORED_ITEM_OVERFLOW":
+            state.server_overflow_events += max(1, gap.dropped_count)
+        elif count_toward_total and source == "LOCAL_EVENT_BUFFER_OVERFLOW":
+            state.local_buffer_drops += max(1, gap.dropped_count)
+        elif count_toward_total and source == "SUBSCRIPTION_RECREATED":
             state.subscription_recreations += 1
+        return gap
 
-    def _invalidate_realtime(self, plc_id: str, *, reason: str | None = None) -> None:
-        integrity = getattr(self, "_integrity", {}).get(plc_id)
-        if (
-            integrity is not None
-            and reason
-            and reason != "session disconnected"
-            and not integrity.continuity_gap_open
-        ):
+    def _open_continuity_gap(self, plc_id: str, reason: str) -> None:
+        state = self._integrity_state(plc_id)
+        if state.continuity_gap_started_at is not None:
+            return
+        start = self._now_utc()
+        state.continuity_gap_started_at = start
+        state.continuity_gap_reason = reason
+        self._record_gap(
+            plc_id,
+            source="CONNECTION_CONTINUITY",
+            reason=reason,
+            timestamp=start,
+            open_interval=True,
+        )
+
+    def _close_continuity_gap(self, plc_id: str) -> None:
+        state = self._integrity_state(plc_id)
+        start = state.continuity_gap_started_at
+        if start is None:
+            return
+        self._record_gap(
+            plc_id,
+            source="CONNECTION_CONTINUITY",
+            reason=state.continuity_gap_reason or "OPC UA connection continuity gap",
+            timestamp=start,
+            end_timestamp=self._now_utc(),
+            count_toward_total=False,
+        )
+        state.continuity_gap_started_at = None
+        state.continuity_gap_reason = None
+
+    def _set_capacity_gap(self, plc_id: str, omitted: tuple[str, ...]) -> None:
+        state = self._integrity_state(plc_id)
+        if omitted and state.capacity_gap_started_at is None:
+            start = self._now_utc()
+            state.capacity_gap_started_at = start
             self._record_gap(
                 plc_id,
-                source="CONNECTION_CONTINUITY",
-                reason=reason,
+                source="MONITOR_CAPACITY",
+                reason=(
+                    f"{len(omitted)} desired node(s) exceeded the configured continuous-monitor limit"
+                ),
+                timestamp=start,
+                open_interval=True,
             )
-            integrity.continuity_gap_open = True
+        elif not omitted and state.capacity_gap_started_at is not None:
+            start = state.capacity_gap_started_at
+            self._record_gap(
+                plc_id,
+                source="MONITOR_CAPACITY",
+                reason="continuous-monitor capacity coverage was restored",
+                timestamp=start,
+                end_timestamp=self._now_utc(),
+                count_toward_total=False,
+            )
+            state.capacity_gap_started_at = None
+
+    def _set_monitoring_disabled_gap(self, plc_id: str, has_desired_nodes: bool) -> None:
+        state = self._integrity_state(plc_id)
+        disabled = has_desired_nodes and not self.subscription_enabled
+        if disabled and state.monitoring_disabled_gap_started_at is None:
+            start = self._now_utc()
+            state.monitoring_disabled_gap_started_at = start
+            self._record_gap(
+                plc_id,
+                source="CONTINUOUS_MONITORING_DISABLED",
+                reason=(
+                    "continuous OPC UA monitoring is disabled; polling cannot prove all transient changes"
+                ),
+                timestamp=start,
+                open_interval=True,
+            )
+        elif not disabled and state.monitoring_disabled_gap_started_at is not None:
+            start = state.monitoring_disabled_gap_started_at
+            self._record_gap(
+                plc_id,
+                source="CONTINUOUS_MONITORING_DISABLED",
+                reason="continuous monitoring coverage was restored",
+                timestamp=start,
+                end_timestamp=self._now_utc(),
+                count_toward_total=False,
+            )
+            state.monitoring_disabled_gap_started_at = None
+
+    def _sync_setup_gaps(
+        self,
+        plc_id: str,
+        *,
+        desired_nodes: tuple[str, ...],
+        failures: tuple[str, ...],
+    ) -> None:
+        state = self._integrity_state(plc_id)
+        now = self._now_utc()
+        failure_set = set(failures)
+        desired_set = set(desired_nodes)
+        for node_id in failures:
+            if node_id in state.setup_gap_starts:
+                continue
+            state.setup_gap_starts[node_id] = now
+            self._record_gap(
+                plc_id,
+                source="MONITORED_ITEM_SETUP",
+                reason="OPC UA server rejected the requested monitored item",
+                node_id=node_id,
+                timestamp=now,
+                open_interval=True,
+            )
+        resolved = [
+            node_id
+            for node_id in state.setup_gap_starts
+            if node_id not in failure_set or node_id not in desired_set
+        ]
+        for node_id in resolved:
+            start = state.setup_gap_starts.pop(node_id)
+            self._record_gap(
+                plc_id,
+                source="MONITORED_ITEM_SETUP",
+                reason="monitored-item coverage was restored or node left the desired set",
+                node_id=node_id,
+                timestamp=start,
+                end_timestamp=now,
+                count_toward_total=False,
+            )
+
+    def _invalidate_realtime(self, plc_id: str, *, reason: str | None = None) -> None:
+        if (
+            getattr(self, "_integrity", None) is not None
+            and plc_id in self._integrity
+            and reason
+            and reason != "session disconnected"
+        ):
+            self._open_continuity_gap(plc_id, reason)
         super()._invalidate_realtime(plc_id, reason=reason)
 
     async def connect(self, plc_id: str):
         status = await super().connect(plc_id)
         if status.connected:
-            self._integrity_state(plc_id).continuity_gap_open = False
+            self._close_continuity_gap(plc_id)
         return status
 
     def integrity_status(self, plc_id: str) -> LiveEvidenceIntegrityStatus:
         state = self._integrity_state(plc_id)
+        selected = set(state.desired_nodes[: self.max_monitored_nodes])
+        if self.subscription_enabled:
+            coverage_complete = not state.omitted_nodes and selected == state.active_nodes
+        else:
+            coverage_complete = not state.desired_nodes
+        complete = state.evidence_gap_count == 0 and coverage_complete
         return LiveEvidenceIntegrityStatus(
             plc_id=plc_id,
-            evidence_complete_since_session_start=state.evidence_gap_count == 0,
+            evidence_complete_since_session_start=complete,
             evidence_gap_count=state.evidence_gap_count,
             gap_backlog=len(state.gaps),
             server_overflow_events=state.server_overflow_events,
@@ -205,11 +377,14 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
             replayed_events=state.replayed_events,
             subscription_recreations=state.subscription_recreations,
             desired_monitored_nodes=len(state.desired_nodes),
-            active_monitored_nodes=len(state.active_nodes or ()),
+            active_monitored_nodes=len(state.active_nodes),
             omitted_monitored_nodes=len(state.omitted_nodes),
             last_sequence_number=state.last_sequence_number,
             last_gap_at=state.last_gap_at,
             last_gap_reason=state.last_gap_reason,
+            gap_metadata_overflows=state.gap_metadata_overflows,
+            continuous_monitoring_enabled=self.subscription_enabled,
+            monitored_coverage_complete=coverage_complete,
         )
 
     def drain_evidence_gaps(
@@ -234,8 +409,11 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
             self._record_gap(
                 plc_id,
                 source="LOCAL_EVENT_BUFFER_OVERFLOW",
-                reason="DevAgent bounded realtime event buffer evicted the oldest event before history consumed it",
+                reason=(
+                    "DevAgent bounded realtime event buffer evicted the oldest event before history consumed it"
+                ),
                 node_id=dropped.node_id,
+                timestamp=_value_timestamp(dropped),
             )
         realtime.events.append(value)
 
@@ -254,13 +432,24 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         if exact:
             desired = requested
         else:
-            desired = tuple(dict.fromkeys((*realtime.monitored_nodes, *requested)))
+            desired = tuple(dict.fromkeys((*integrity.desired_nodes, *requested)))
 
         selected = desired[: self.max_monitored_nodes]
         omitted = desired[self.max_monitored_nodes :]
         selected_set = set(selected)
         integrity.desired_nodes = desired
         integrity.omitted_nodes = omitted
+        self._set_capacity_gap(plc_id, omitted)
+        self._set_monitoring_disabled_gap(plc_id, bool(selected_set))
+        self._sync_setup_gaps(
+            plc_id,
+            desired_nodes=selected,
+            failures=tuple(
+                node_id
+                for node_id in integrity.setup_gap_starts
+                if node_id in selected_set
+            ),
+        )
 
         async with realtime.lock:
             before = set(realtime.monitored_nodes)
@@ -273,6 +462,7 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
             realtime.generation += 1
             generation = realtime.generation
             old_task, realtime.task = realtime.task, None
+            integrity.active_nodes.clear()
 
         if old_task is not None:
             old_task.cancel()
@@ -284,7 +474,6 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                 pass
 
         if not self.subscription_enabled or not selected_set:
-            integrity.active_nodes = set()
             return
 
         async with realtime.lock:
@@ -300,7 +489,7 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         await self._reconcile_monitored_node_ids(plc_id, node_ids, exact=True)
 
     async def ensure_monitored_node_ids(self, plc_id: str, node_ids: Iterable[str]) -> None:
-        """Add a bounded subset without removing the session's desired monitored set."""
+        """Add nodes without losing deterministic desired-set ordering."""
         await self._reconcile_monitored_node_ids(plc_id, node_ids, exact=False)
 
     @staticmethod
@@ -308,6 +497,8 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         node_ids: tuple[str, ...],
         handles: object,
     ) -> tuple[str, ...]:
+        if isinstance(handles, tuple):
+            handles = list(handles)
         if not isinstance(handles, list):
             return ()
         failed: list[str] = []
@@ -321,7 +512,9 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                 good = False
             if not good:
                 failed.append(node_id)
-        return tuple(failed)
+        if len(handles) < len(node_ids):
+            failed.extend(node_ids[len(handles) :])
+        return tuple(dict.fromkeys(failed))
 
     async def _subscription_loop(self, plc_id: str, generation: int) -> None:
         realtime = self._state(plc_id)
@@ -367,23 +560,32 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                     )
                     failures = self._subscription_setup_failures(node_ids, handles)
                     integrity.active_nodes = set(node_ids) - set(failures)
-                    for node_id in failures:
-                        self._record_gap(
-                            plc_id,
-                            source="MONITORED_ITEM_SETUP",
-                            reason="OPC UA server rejected the requested monitored item",
-                            node_id=node_id,
-                        )
+                    self._sync_setup_gaps(
+                        plc_id,
+                        desired_nodes=node_ids,
+                        failures=failures,
+                    )
                     realtime.last_subscription_error = (
                         f"{len(failures)} monitored item(s) were rejected by the OPC UA server"
                         if failures
                         else None
                     )
-                    integrity.continuity_gap_open = False
+                    self._close_continuity_gap(plc_id)
                     last_subscription_id = getattr(subscription, "subscription_id", None)
 
                     while generation == realtime.generation:
-                        event = await subscription.next_event(timeout=1.0)
+                        try:
+                            event = await subscription.next_event(timeout=1.0)
+                        except asyncio.TimeoutError:
+                            # A stable machine can legitimately have no DataChange for
+                            # many seconds. Idle time is not a subscription/evidence gap.
+                            if not bool(getattr(outer_client, "connected", False)):
+                                self._invalidate_realtime(
+                                    plc_id,
+                                    reason="OPC UA subscription lost connection continuity",
+                                )
+                                break
+                            continue
 
                         current_subscription_id = getattr(
                             subscription, "subscription_id", None
@@ -411,17 +613,11 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                                 pass
 
                         if event is None:
-                            if not bool(getattr(outer_client, "connected", False)):
-                                self._invalidate_realtime(
-                                    plc_id,
-                                    reason="OPC UA subscription lost connection continuity",
-                                )
-                                break
                             continue
 
                         if isinstance(event, StatusChangeEvent):
                             status = event.notification.Status
-                            if event.replayed:
+                            if bool(getattr(event, "replayed", False)):
                                 integrity.replayed_events += 1
                             if status is not None and status.is_bad():
                                 reconnecting = bool(
@@ -449,8 +645,18 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
 
                         node_id = _node_id_text(event.node.nodeid)
                         data_value = event.data.monitored_item.Value
-                        status = getattr(data_value, "StatusCode", None)
-                        if status_has_monitored_item_overflow(status):
+                        replayed = bool(getattr(event, "replayed", False))
+                        if replayed:
+                            integrity.replayed_events += 1
+                        value = _runtime_value_from_datavalue(
+                            node_id,
+                            data_value,
+                            stale_after_seconds=outer_client.stale_after_seconds,
+                            replayed=replayed,
+                        )
+                        if status_has_monitored_item_overflow(
+                            getattr(data_value, "StatusCode", None)
+                        ):
                             self._record_gap(
                                 plc_id,
                                 source="SERVER_MONITORED_ITEM_OVERFLOW",
@@ -459,22 +665,15 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                                     "server queue purged detected changes"
                                 ),
                                 node_id=node_id,
+                                timestamp=_value_timestamp(value),
                             )
-                        if event.replayed:
-                            integrity.replayed_events += 1
 
-                        value = _runtime_value_from_datavalue(
-                            node_id,
-                            data_value,
-                            stale_after_seconds=outer_client.stale_after_seconds,
-                            replayed=event.replayed,
-                        )
                         self._update_cache(realtime, value, source="SUBSCRIPTION")
                         self._append_subscription_event(plc_id, value)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                integrity.active_nodes = set()
+                integrity.active_nodes.clear()
                 self._invalidate_realtime(plc_id, reason=str(exc))
                 await asyncio.sleep(0.1)
 
@@ -499,15 +698,52 @@ class ProductionHistoricalDiagnosis(LiveHistoricalDiagnosis):
 
 
 class EvidenceIntegrityTimelineStore(LiveTimelineStore):
-    """Timeline that preserves late events and makes evidence gaps query-visible."""
+    """Timeline that preserves late events and makes integrity ambiguity query-visible."""
 
     def __init__(self, *args: Any, max_evidence_gaps: int = 5000, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        if max_evidence_gaps < 1:
-            raise ValueError("max_evidence_gaps must be >= 1")
+        if max_evidence_gaps < 2:
+            raise ValueError("max_evidence_gaps must be >= 2")
         self._evidence_gaps: deque[LiveEvidenceGap] = deque(maxlen=max_evidence_gaps)
+        self._gap_metadata_overflows = 0
+
+    @staticmethod
+    def _gap_key(gap: LiveEvidenceGap) -> tuple[object, ...]:
+        return (gap.plc_id, gap.source, gap.node_id, gap.timestamp)
 
     def record_gap(self, gap: LiveEvidenceGap) -> None:
+        # A connection/setup/capacity gap is first emitted open and later emitted
+        # again with the same key and a closing timestamp. Replace rather than
+        # double-counting it in historical presentation.
+        key = self._gap_key(gap)
+        items = list(self._evidence_gaps)
+        for index, existing in enumerate(items):
+            if self._gap_key(existing) == key:
+                if existing.end_timestamp is None and gap.end_timestamp is not None:
+                    items[index] = gap
+                    self._evidence_gaps = deque(items, maxlen=self._evidence_gaps.maxlen)
+                self._trim_integrity(self._now())
+                return
+
+        maxlen = self._evidence_gaps.maxlen
+        if maxlen is not None and len(self._evidence_gaps) >= maxlen:
+            oldest = self._evidence_gaps[0]
+            latest_end = gap.end_timestamp or gap.timestamp
+            self._evidence_gaps.clear()
+            self._evidence_gaps.append(
+                LiveEvidenceGap(
+                    timestamp=oldest.timestamp,
+                    end_timestamp=max(oldest.end_timestamp or oldest.timestamp, latest_end),
+                    plc_id=gap.plc_id,
+                    source="EVIDENCE_GAP_METADATA_OVERFLOW",
+                    reason=(
+                        "Historical evidence-gap metadata exceeded its bounded store; "
+                        "the coalesced interval is conservatively incomplete"
+                    ),
+                    dropped_count=0,
+                )
+            )
+            self._gap_metadata_overflows += 1
         self._evidence_gaps.append(gap)
         self._trim_integrity(self._now())
 
@@ -517,7 +753,11 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
 
     def _trim_integrity(self, now: datetime) -> None:
         cutoff = now - timedelta(seconds=self.retention_seconds)
-        while self._evidence_gaps and self._evidence_gaps[0].timestamp < cutoff:
+        while self._evidence_gaps:
+            gap = self._evidence_gaps[0]
+            effective_end = gap.end_timestamp or now
+            if effective_end >= cutoff:
+                break
             self._evidence_gaps.popleft()
 
     @staticmethod
@@ -532,6 +772,10 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
             sample.quality,
             sample.trust,
         )
+
+    @staticmethod
+    def _sample_group_key(sample: LiveHistoricalSample) -> tuple[object, ...]:
+        return (sample.timestamp, sample.plc_id, sample.tag_id, sample.node_id)
 
     def append(self, sample: LiveHistoricalSample) -> None:
         self.append_many((sample,))
@@ -551,30 +795,66 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
             for item in (*tuple(self._samples), *incoming)
             if item.timestamp >= cutoff
         ]
-        merged.sort(key=lambda item: (item.timestamp, item.tag_id, item.node_id))
+        merged.sort(
+            key=lambda item: (
+                item.timestamp,
+                item.plc_id,
+                item.tag_id,
+                item.node_id,
+                repr(item.value),
+            )
+        )
 
-        deduped: list[LiveHistoricalSample] = []
-        previous_identity: tuple[object, ...] | None = None
-        for item in merged:
-            identity = self._sample_identity(item)
-            if identity == previous_identity:
+        normalized: list[LiveHistoricalSample] = []
+        for _key, grouped in groupby(merged, key=self._sample_group_key):
+            group = list(grouped)
+            unique: dict[tuple[object, ...], LiveHistoricalSample] = {}
+            for item in group:
+                unique[self._sample_identity(item)] = item
+            variants = tuple(unique.values())
+            if len(variants) == 1:
+                normalized.append(variants[0])
                 continue
-            deduped.append(item)
-            previous_identity = identity
-        if len(deduped) > max_samples:
-            deduped = deduped[-max_samples:]
+
+            first = variants[0]
+            conflict_gap = LiveEvidenceGap(
+                timestamp=first.timestamp,
+                end_timestamp=first.timestamp,
+                plc_id=first.plc_id,
+                source="TIMESTAMP_CONFLICT",
+                reason=(
+                    "conflicting values share the same source timestamp; temporal ordering is not defensible"
+                ),
+                node_id=first.node_id,
+            )
+            self.record_gap(conflict_gap)
+            normalized.append(
+                LiveHistoricalSample(
+                    timestamp=first.timestamp,
+                    plc_id=first.plc_id,
+                    tag_id=first.tag_id,
+                    tag_name=first.tag_name,
+                    node_id=first.node_id,
+                    value=None,
+                    definitive_current=False,
+                    quality="UNCERTAIN",
+                    trust="UNTRUSTED",
+                )
+            )
+
+        if len(normalized) > max_samples:
+            normalized = normalized[-max_samples:]
 
         latest: dict[str, LiveHistoricalSample] = {}
         previous_by_tag: dict[str, LiveHistoricalSample] = {}
         transitions: list[LiveSignalTransition] = []
-        for item in deduped:
+        for item in normalized:
             previous = previous_by_tag.get(item.tag_id)
             latest[item.tag_id] = item
             if previous is not None:
                 gap_seconds = (item.timestamp - previous.timestamp).total_seconds()
-                continuous = 0.0 < gap_seconds <= self.continuity_seconds
                 if (
-                    continuous
+                    0.0 < gap_seconds <= self.continuity_seconds
                     and previous.definitive_current
                     and item.definitive_current
                     and previous.value != item.value
@@ -590,12 +870,9 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
                             new_value=item.value,
                         )
                     )
-            # Equal timestamps with conflicting values have no defensible temporal
-            # ordering, so they intentionally do not produce a transition.
-            if previous is None or item.timestamp >= previous.timestamp:
-                previous_by_tag[item.tag_id] = item
+            previous_by_tag[item.tag_id] = item
 
-        self._samples = deque(deduped, maxlen=max_samples)
+        self._samples = deque(normalized, maxlen=max_samples)
         self._transitions = deque(transitions[-max_transitions:], maxlen=max_transitions)
         self._latest_by_tag = latest
         self._trim_integrity(now)
@@ -607,7 +884,7 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
         gaps = tuple(
             gap
             for gap in self._evidence_gaps
-            if cutoff <= gap.timestamp <= current
+            if gap.overlaps(cutoff, current)
         )
         limitations = list(base.limitations)
         if gaps:
