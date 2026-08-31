@@ -252,8 +252,13 @@ class LiveTimelineStore:
             self._latest_by_tag.pop(tag_id, None)
 
     def append(self, sample: LiveHistoricalSample) -> None:
-        self._trim(sample.timestamp)
         previous = self._latest_by_tag.get(sample.tag_id)
+        if previous is not None and sample.timestamp < previous.timestamp:
+            # Network/server delivery can occasionally reorder source timestamps.
+            # Never let a late older sample rewind the latest known state or create
+            # a false reverse transition in the commissioning timeline.
+            return
+        self._trim(sample.timestamp)
         self._samples.append(sample)
         self._latest_by_tag[sample.tag_id] = sample
         if previous is None:
@@ -512,6 +517,7 @@ class LiveHistoryCollector:
                     trust=record.trust,
                 )
             )
+        samples.sort(key=lambda item: (item.timestamp, item.tag_id, item.node_id))
         return samples
 
     async def _collect_once(self) -> None:
