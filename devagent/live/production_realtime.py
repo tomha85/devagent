@@ -22,10 +22,31 @@ from .opcua_client import (
     _runtime_value_from_datavalue,
     _status_name,
 )
+from .realtime_manager import RealtimeMultiPlcConnectionManager
 
 
 class ProductionRealtimeMultiPlcConnectionManager(_CommercialRealtimeManager):
-    """Default commercial manager with final startup and idle-timeout integrity gates."""
+    """Default commercial manager with final startup and reconnect integrity gates."""
+
+    def _invalidate_realtime(self, plc_id: str, *, reason: str | None = None) -> None:
+        # Any lost/replaced session invalidates the pre-loss monitored-item coverage.
+        # Keep desired_nodes as the target, but never let a stale active_nodes set make
+        # an exact same-set replacement look ready while subscription setup is pending.
+        self._integrity_state(plc_id).active_nodes.clear()
+        super()._invalidate_realtime(plc_id, reason=reason)
+
+    async def connect(self, plc_id: str):
+        # Deliberately bypass _CommercialRealtimeManager.connect(): that implementation
+        # closes the continuity interval as soon as the OPC UA session is connected.
+        # For a continuously monitored PLC, session establishment alone is insufficient:
+        # continuity remains open until _subscription_loop successfully recreates the
+        # monitored items and closes it after subscribe_data_change().
+        status = await RealtimeMultiPlcConnectionManager.connect(self, plc_id)
+        if status.connected:
+            integrity = self._integrity_state(plc_id)
+            if not self.subscription_enabled or not integrity.desired_nodes:
+                self._close_continuity_gap(plc_id)
+        return status
 
     async def replace_monitored_node_ids(
         self,
@@ -70,12 +91,7 @@ class ProductionRealtimeMultiPlcConnectionManager(_CommercialRealtimeManager):
         *,
         timeout_seconds: float = 5.0,
     ) -> bool:
-        """Wait until the requested subscription attempt is established fail-closed.
-
-        False means startup did not arm within the bound. The authoritative
-        MONITOR_SET_RECONFIGURATION gap intentionally remains open in that case, so
-        history may continue operating but cannot claim complete evidence.
-        """
+        """Wait until requested monitored coverage and continuity are established."""
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be > 0")
         integrity = self._integrity_state(plc_id)
@@ -88,7 +104,9 @@ class ProductionRealtimeMultiPlcConnectionManager(_CommercialRealtimeManager):
             integrity = self._integrity_state(plc_id)
             if (
                 integrity.monitoring_started_at is not None
+                and integrity.active_nodes == selected
                 and integrity.reconfiguration_gap_started_at is None
+                and integrity.continuity_gap_started_at is None
             ):
                 return True
             realtime = self._state(plc_id)
@@ -292,7 +310,6 @@ class ProductionRealtimeMultiPlcConnectionManager(_CommercialRealtimeManager):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                integrity.active_nodes.clear()
                 self._invalidate_realtime(plc_id, reason=str(exc))
                 await asyncio.sleep(0.1)
 
