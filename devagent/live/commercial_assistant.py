@@ -33,10 +33,15 @@ class CommercialRealtimeSemanticLiveCommissioningAssistant(
         return bool(await wait(self.connection.plc_id, timeout_seconds=5.0))
 
     async def start(self):
-        # Build connection + reconciliation first, arm the authoritative full monitored
-        # set second, wait for the subscription attempt to become active, and only then
-        # start history. If readiness times out, the manager deliberately leaves an
-        # open reconfiguration gap so the historical path remains fail-closed.
+        # Reconnect startup must stop the old collector first. Otherwise that collector
+        # can drain the just-closed continuity gap into a store that _start_history()
+        # subsequently discards, allowing the replacement store to lose outage evidence.
+        await self._stop_history_before_reconfiguration()
+
+        # Build connection + reconciliation, arm the authoritative monitored set, wait
+        # until the monitored items are active, and only then create the replacement
+        # history collector. If readiness times out, the manager leaves an open evidence
+        # interval so historical diagnosis remains fail-closed.
         status = await LiveCommissioningAssistant.start(self)
         assert self.reconciliation is not None
         replace = getattr(self.manager, "replace_monitored_node_ids", None)
