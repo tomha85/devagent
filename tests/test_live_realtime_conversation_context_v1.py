@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from devagent.live.assistant import LiveAssistantReply, LiveAssistantReplyKind
 from devagent.live.errors import LiveConnectionError
@@ -42,6 +43,14 @@ def _followup_response(intent: str = "NEXT_CHECKS") -> dict[str, object]:
         "intent": intent,
         "confidence": 0.99,
         "reason": "The engineer is continuing the prior system-health discussion.",
+    }
+
+
+def _low_confidence_followup_response() -> dict[str, object]:
+    return {
+        "intent": "NEXT_CHECKS",
+        "confidence": 0.20,
+        "reason": "Not confident enough to bind this turn to prior system health.",
     }
 
 
@@ -157,6 +166,60 @@ def test_vague_fix_followup_preempts_general_semantic_target_routing(monkeypatch
     ]
 
 
+def test_low_confidence_health_fallback_still_runs_final_target_revalidation(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([_low_confidence_followup_response()])
+    assistant = _bare_assistant(provider)
+    assistant._last_system_health_reply = _health_reply("prior-health")
+    assistant.final_revalidation_after_seconds = 0.0
+    fallback_diagnosis = SimpleNamespace(target_output="RunCmd")
+    fallback = LiveAssistantReply(
+        question="Why is RunCmd false?",
+        kind=LiveAssistantReplyKind.DIAGNOSIS,
+        text="stale deterministic target result",
+        target_output="RunCmd",
+        diagnosis=fallback_diagnosis,
+    )
+    refreshed = LiveAssistantReply(
+        question="Why is RunCmd false?",
+        kind=LiveAssistantReplyKind.DIAGNOSIS,
+        text="final revalidated target result",
+        target_output="RunCmd",
+        diagnosis=fallback_diagnosis,
+    )
+    recursive_questions: list[str] = []
+    refresh_calls: list[tuple[str, object]] = []
+
+    async def fake_recursive_answer(self, question: str) -> LiveAssistantReply:
+        recursive_questions.append(question)
+        return fallback
+
+    async def fake_refresh(self, question: str, diagnosis: object) -> LiveAssistantReply:
+        refresh_calls.append((question, diagnosis))
+        return refreshed
+
+    async def forbidden_semantic_answer(self, question: str) -> LiveAssistantReply:
+        raise AssertionError("low-confidence health fallback must stay deterministic")
+
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", fake_recursive_answer)
+    monkeypatch.setattr(
+        SemanticLiveCommissioningAssistant,
+        "answer",
+        forbidden_semantic_answer,
+    )
+    monkeypatch.setattr(
+        RealtimeSemanticLiveCommissioningAssistant,
+        "_refresh_current_diagnosis",
+        fake_refresh,
+    )
+
+    reply = asyncio.run(assistant.answer("Why is RunCmd false?"))
+
+    assert recursive_questions == ["Why is RunCmd false?"]
+    assert refresh_calls == [("Why is RunCmd false?", fallback_diagnosis)]
+    assert reply is refreshed
+    assert assistant._last_system_health_reply is None
+
+
 def test_unknown_unrelated_followup_clears_health_context_and_preserves_fail_closed_result(monkeypatch) -> None:
     provider = ScriptedFakeProvider([_followup_response("UNKNOWN")])
     assistant = _bare_assistant(provider)
@@ -221,6 +284,14 @@ def test_plc_control_request_never_uses_health_followup_recovery(monkeypatch) ->
     assert provider.calls == []
 
 
+def test_generated_control_guard_rejects_arbitrary_plc_reference_actions() -> None:
+    assert _contains_forbidden_control_advice("The operator should force RunCmd true.")
+    assert _contains_forbidden_control_advice("Write Program:Main.RunCmd to true.")
+    assert _contains_forbidden_control_advice("Set SafetyTrip false.")
+    assert _contains_forbidden_control_advice("Start Conveyor7.")
+    assert _contains_forbidden_control_advice("Turn on RunCmd.")
+
+
 def test_generated_control_guard_rejects_turn_on_and_turn_off_machine_advice() -> None:
     assert _contains_forbidden_control_advice(
         "The operator should turn on the conveyor."
@@ -237,6 +308,9 @@ def test_generated_control_guard_does_not_overblock_diagnostic_wording() -> None
     )
     assert not _contains_forbidden_control_advice(
         "Start by inspecting the read-only SafetyTrip diagnostics."
+    )
+    assert not _contains_forbidden_control_advice(
+        "RunCmd is false in the current trusted evidence."
     )
 
 
