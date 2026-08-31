@@ -215,6 +215,62 @@ def test_old_or_incoherent_receipt_cache_forces_new_batch_read() -> None:
     asyncio.run(scenario())
 
 
+def test_cache_ordering_rejects_delayed_older_subscription_after_batch() -> None:
+    manager = _manager()
+    state = manager._state("plc1")
+    now = datetime.now(timezone.utc)
+    batch = _runtime(
+        "n1",
+        True,
+        stamp=now + timedelta(milliseconds=100),
+        received_at=now + timedelta(milliseconds=120),
+    )
+    delayed_old_subscription = _runtime(
+        "n1",
+        False,
+        stamp=now,
+        received_at=now + timedelta(milliseconds=200),
+    )
+
+    assert manager._update_cache(state, batch, source="BATCH_READ") is True
+    assert (
+        manager._update_cache(
+            state,
+            delayed_old_subscription,
+            source="SUBSCRIPTION",
+        )
+        is False
+    )
+    assert state.cache["n1"].value is True
+    assert state.cache_sources["n1"] == "BATCH_READ"
+
+
+def test_batch_wins_exact_timestamp_tie_against_delayed_subscription() -> None:
+    manager = _manager()
+    state = manager._state("plc1")
+    stamp = datetime.now(timezone.utc)
+    subscription = _runtime("n1", False, stamp=stamp, received_at=stamp)
+    batch = _runtime(
+        "n1",
+        True,
+        stamp=stamp,
+        received_at=stamp + timedelta(milliseconds=10),
+    )
+    delayed_subscription = _runtime(
+        "n1",
+        False,
+        stamp=stamp,
+        received_at=stamp + timedelta(milliseconds=20),
+    )
+
+    manager._update_cache(state, subscription, source="SUBSCRIPTION")
+    manager._update_cache(state, batch, source="BATCH_READ")
+    manager._update_cache(state, delayed_subscription, source="SUBSCRIPTION")
+
+    assert state.cache["n1"].value is True
+    assert state.cache_sources["n1"] == "BATCH_READ"
+
+
 def test_replayed_cache_is_never_current_question_truth() -> None:
     async def scenario() -> None:
         manager = _manager(cache_fresh_seconds=2.0)
@@ -232,20 +288,28 @@ def test_replayed_cache_is_never_current_question_truth() -> None:
     asyncio.run(scenario())
 
 
-def test_cache_is_rejected_when_connection_is_not_current() -> None:
+def test_read_observed_reconnect_invalidates_cache_and_advances_epoch() -> None:
     async def scenario() -> None:
         manager = _manager(cache_fresh_seconds=2.0)
         await manager.connect("plc1")
         state = manager._state("plc1")
         state.cache["n1"] = _runtime("n1", True)
+        state.cache_sources["n1"] = "SUBSCRIPTION"
+        state.events.append(_runtime("n1", True))
         outer = manager._entry("plc1").client
         assert outer is not None
         outer.state = "RECONNECTING"
+        before_epoch = state.epoch
 
         assert manager._cached_snapshot("plc1", ("n1",)) is None
         result = await manager.read_many({"plc1": ("n1",)})
+
         assert result["plc1"].succeeded is False
         assert result["plc1"].state is PlcSessionState.RECONNECTING
+        assert state.cache == {}
+        assert state.cache_sources == {}
+        assert not state.events
+        assert state.epoch > before_epoch
 
     asyncio.run(scenario())
 
@@ -256,11 +320,13 @@ def test_disconnect_invalidates_cache_events_snapshot_and_epoch() -> None:
         await manager.connect("plc1")
         state = manager._state("plc1")
         state.cache["n1"] = _runtime("n1", True)
+        state.cache_sources["n1"] = "SUBSCRIPTION"
         state.events.append(_runtime("n1", True))
         state.last_snapshot = manager.realtime_status("plc1")
         before = state.epoch
         await manager.disconnect("plc1")
         assert state.cache == {}
+        assert state.cache_sources == {}
         assert not state.events
         assert state.last_snapshot is None
         assert state.epoch > before
@@ -292,12 +358,22 @@ def test_history_drain_discards_unrelated_backlog_and_keeps_requested_overflow()
     assert not state.events
 
 
+def _history_reconciliation():
+    mapping = SimpleNamespace(
+        tag_id="tag-1",
+        tag_name="RunCmd",
+        selected_node_id="n1",
+    )
+    return SimpleNamespace(
+        plc_id="plc1",
+        accepted_mappings=lambda: (mapping,),
+    )
+
+
 def test_realtime_event_drain_preserves_out_of_order_transient_for_history() -> None:
     class _HistoryManager:
         def __init__(self) -> None:
             now = datetime.now(timezone.utc)
-            # Delivery order is intentionally reversed. History must normalize by
-            # source timestamp before deriving transitions.
             self.events = [
                 _runtime("n1", False, stamp=now + timedelta(milliseconds=100)),
                 _runtime("n1", True, stamp=now),
@@ -323,18 +399,64 @@ def test_realtime_event_drain_preserves_out_of_order_transient_for_history() -> 
                 )
             }
 
-    mapping = SimpleNamespace(
-        tag_id="tag-1",
-        tag_name="RunCmd",
-        selected_node_id="n1",
-    )
-    reconciliation = SimpleNamespace(
-        plc_id="plc1",
-        accepted_mappings=lambda: (mapping,),
-    )
     collector = LiveHistoryCollector(
         _HistoryManager(),
-        reconciliation,
+        _history_reconciliation(),
+        poll_interval_seconds=1.0,
+    )
+
+    asyncio.run(collector._collect_once())
+
+    transitions = collector.store.transitions()
+    assert len(transitions) == 1
+    assert transitions[0].old_value is True
+    assert transitions[0].new_value is False
+    latest = collector.store.latest_samples()[0]
+    assert latest.value is False
+    assert latest.timestamp >= transitions[0].timestamp
+
+
+def test_history_merges_events_arriving_while_poll_read_is_in_flight() -> None:
+    class _HistoryManager:
+        def __init__(self) -> None:
+            self.now = datetime.now(timezone.utc)
+            self.events = [_runtime("n1", True, stamp=self.now)]
+
+        @staticmethod
+        def status(plc_id: str):
+            return SimpleNamespace(plc_name="PLC 1")
+
+        def drain_realtime_events(self, plc_id: str, *, node_ids, max_events: int):
+            result, self.events = tuple(self.events), []
+            return result
+
+        async def read_many(self, requests):
+            # Simulate a subscription DataChange delivered while the awaited Read
+            # operation is in flight.
+            self.events.append(
+                _runtime(
+                    "n1",
+                    False,
+                    stamp=self.now + timedelta(milliseconds=100),
+                )
+            )
+            return {
+                "plc1": PlcReadResult(
+                    plc_id="plc1",
+                    values=(
+                        _runtime(
+                            "n1",
+                            False,
+                            stamp=self.now + timedelta(milliseconds=200),
+                        ),
+                    ),
+                    state=PlcSessionState.CONNECTED,
+                )
+            }
+
+    collector = LiveHistoryCollector(
+        _HistoryManager(),
+        _history_reconciliation(),
         poll_interval_seconds=1.0,
     )
 
