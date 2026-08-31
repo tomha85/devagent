@@ -533,7 +533,7 @@ class ReadOnlyOpcUaClient:
                 )
 
             if self.security.trust_store is not None:
-                TrustStore, CertificateValidator, CertificateValidatorOptions = _require_trust_runtime()
+                _TrustStore, CertificateValidator, CertificateValidatorOptions = _require_trust_runtime()
                 trust_store = await _build_trust_store(self.security)
                 base_validator = CertificateValidator(
                     CertificateValidatorOptions.TRUSTED_VALIDATION
