@@ -95,6 +95,8 @@ class LiveSecurityConfig:
     user_private_key: str | None = None
     user_private_key_password: str | None = field(default=None, repr=False)
     allow_insecure_username_password: bool = False
+    trust_store: str | None = None
+    crl_store: str | None = None
 
     def __post_init__(self) -> None:
         canonical_policy = canonical_security_policy_name(self.security_policy)
@@ -125,6 +127,10 @@ class LiveSecurityConfig:
             )
         if not self.application_uri.strip():
             raise LiveConfigurationError("OPC UA application URI cannot be blank")
+        if self.crl_store is not None and self.trust_store is None:
+            raise LiveConfigurationError(
+                "OPC UA --crl-store requires --trust-store"
+            )
 
         secure_fields = (
             self.security_policy,
@@ -132,6 +138,8 @@ class LiveSecurityConfig:
             self.client_certificate,
             self.client_private_key,
             self.server_certificate,
+            self.trust_store,
+            self.crl_store,
         )
         secure_requested = any(value is not None for value in secure_fields)
         if not secure_requested:
@@ -168,19 +176,21 @@ class LiveSecurityConfig:
                 raise LiveConfigurationError("Secure OPC UA requires a client application certificate")
             if not self.client_private_key:
                 raise LiveConfigurationError("Secure OPC UA requires a client application private key")
-            if not self.server_certificate:
+            if not self.server_certificate and not self.trust_store:
                 raise LiveConfigurationError(
-                    "Secure OPC UA requires a pinned server certificate"
+                    "Secure OPC UA requires a pinned server certificate or a trust store"
                 )
 
         # Normalize home-directory references once so validation and asyncua use
-        # exactly the same certificate/key paths.
+        # exactly the same certificate/key/trust-store paths.
         for attribute in (
             "client_certificate",
             "client_private_key",
             "server_certificate",
             "user_certificate",
             "user_private_key",
+            "trust_store",
+            "crl_store",
         ):
             value = getattr(self, attribute)
             if value is not None:
@@ -207,6 +217,16 @@ class LiveSecurityConfig:
         return "ANONYMOUS"
 
     @property
+    def server_trust_mode(self) -> str:
+        if self.server_certificate and self.trust_store:
+            return "PIN_AND_TRUST_STORE"
+        if self.server_certificate:
+            return "PINNED_CERTIFICATE"
+        if self.trust_store:
+            return "TRUST_STORE"
+        return "NONE"
+
+    @property
     def channel_summary(self) -> str:
         if not self.secure_channel:
             return "NONE"
@@ -214,28 +234,49 @@ class LiveSecurityConfig:
         return f"{self.security_policy}/{self.security_mode}{suffix}"
 
     def validate_files(self) -> None:
-        required: list[tuple[str, str | None]] = []
+        required_files: list[tuple[str, str | None]] = []
         if self.secure_channel:
-            required.extend(
+            required_files.extend(
                 [
                     ("client application certificate", self.client_certificate),
                     ("client application private key", self.client_private_key),
-                    ("server certificate", self.server_certificate),
                 ]
             )
+            if self.server_certificate is not None:
+                required_files.append(("server certificate", self.server_certificate))
         if self.user_certificate is not None:
-            required.extend(
+            required_files.extend(
                 [
                     ("X.509 user certificate", self.user_certificate),
                     ("X.509 user private key", self.user_private_key),
                 ]
             )
 
-        for label, value in required:
+        for label, value in required_files:
             assert value is not None
             path = Path(value)
             if not path.is_file():
                 raise LiveConfigurationError(f"OPC UA {label} file does not exist: {path}")
+
+        if self.trust_store is not None:
+            path = Path(self.trust_store)
+            if not path.is_dir():
+                raise LiveConfigurationError(f"OPC UA trust store directory does not exist: {path}")
+            trusted = [item for item in path.iterdir() if item.is_file() and item.suffix.lower() in {".der", ".pem"}]
+            if not trusted:
+                raise LiveConfigurationError(
+                    f"OPC UA trust store contains no .der/.pem trusted certificates: {path}"
+                )
+
+        if self.crl_store is not None:
+            path = Path(self.crl_store)
+            if not path.is_dir():
+                raise LiveConfigurationError(f"OPC UA CRL store directory does not exist: {path}")
+            crls = [item for item in path.iterdir() if item.is_file() and item.suffix.lower() in {".der", ".pem"}]
+            if not crls:
+                raise LiveConfigurationError(
+                    f"OPC UA CRL store contains no .der/.pem revocation lists: {path}"
+                )
 
     def redact(self, text: str) -> str:
         redacted = text
