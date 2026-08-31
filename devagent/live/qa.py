@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -164,9 +165,9 @@ def _provider_payload(
 
 
 # Generated prose needs a broader guard than the user-request control detector.
-# These phrases are intentionally action/object oriented so normal diagnostic
-# wording such as "start by inspecting the safety chain" remains allowed while
-# indirect machine-control advice is rejected regardless of sentence grammar.
+# Phrase checks catch common indirect machine-control advice, while the reference
+# regexes reject control verbs applied to arbitrary canonical PLC/tag identifiers.
+# Diagnostic wording such as "turned off" and "start by inspecting" remains allowed.
 _FORBIDDEN_CONTROL_PHRASES = (
     "force the",
     "force tag",
@@ -228,43 +229,36 @@ _FORBIDDEN_CONTROL_PHRASES = (
     "command the output",
 )
 
-_GENERATED_CONTROL_OBJECTS = (
-    "line",
-    "machine",
-    "motor",
-    "conveyor",
-    "equipment",
-    "output",
-    "tag",
-    "drive",
-    "axis",
-    "robot",
-    "cell",
-    "system",
-    "plc",
-    "controller",
+_PLC_REFERENCE_TOKEN = r"[A-Za-z_][A-Za-z0-9_.:\[\]]*"
+
+_GENERATED_DIRECT_CONTROL_RE = re.compile(
+    rf"\b(?:force|write|set|reset|bypass|override|jog|command)\s+"
+    rf"(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b",
+    flags=re.IGNORECASE,
 )
 
-_FORBIDDEN_TURN_CONTROL_PHRASES = tuple(
-    phrase
-    for object_name in _GENERATED_CONTROL_OBJECTS
-    for phrase in (
-        f"turn on the {object_name}",
-        f"turn on {object_name}",
-        f"turn off the {object_name}",
-        f"turn off {object_name}",
-        f"turn the {object_name} on",
-        f"turn {object_name} on",
-        f"turn the {object_name} off",
-        f"turn {object_name} off",
-    )
+_GENERATED_START_STOP_CONTROL_RE = re.compile(
+    rf"\b(?:start|stop)\s+"
+    rf"(?!by\b|with\b|after\b|before\b|when\b|if\b|because\b)"
+    rf"(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b",
+    flags=re.IGNORECASE,
+)
+
+_GENERATED_TURN_CONTROL_RE = re.compile(
+    rf"(?:\bturn\s+(?:on|off)\s+(?:the\s+)?{_PLC_REFERENCE_TOKEN}\b|"
+    rf"\bturn\s+(?:the\s+)?{_PLC_REFERENCE_TOKEN}\s+(?:on|off)\b)",
+    flags=re.IGNORECASE,
 )
 
 
 def _contains_forbidden_control_advice(text: str) -> bool:
-    lowered = " ".join(str(text or "").casefold().split())
-    return any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES) or any(
-        phrase in lowered for phrase in _FORBIDDEN_TURN_CONTROL_PHRASES
+    normalized = " ".join(str(text or "").split())
+    lowered = normalized.casefold()
+    return (
+        any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
+        or _GENERATED_DIRECT_CONTROL_RE.search(normalized) is not None
+        or _GENERATED_START_STOP_CONTROL_RE.search(normalized) is not None
+        or _GENERATED_TURN_CONTROL_RE.search(normalized) is not None
     )
 
 
