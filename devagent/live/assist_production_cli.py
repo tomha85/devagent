@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
 from . import assist_cli as base_assist_cli
 from . import recursive_assistant as recursive_assistant_module
+from .commercial_assistant import CommercialRealtimeSemanticLiveCommissioningAssistant
 from .production_realtime import (
     ProductionLiveHistoryCollector,
     ProductionRealtimeMultiPlcConnectionManager,
 )
 
 
-_ORIGINAL_PRINT_STATUS = base_assist_cli._print_status
+_BASE_PRINT_STATUS = base_assist_cli._print_status
 
 
 def _production_print_status(assistant) -> None:
-    _ORIGINAL_PRINT_STATUS(assistant)
+    _BASE_PRINT_STATUS(assistant)
     integrity_status = getattr(assistant.manager, "integrity_status", None)
     if not callable(integrity_status):
         return
@@ -32,6 +33,7 @@ def _production_print_status(assistant) -> None:
     print(f"Local event-buffer drops: {integrity.local_buffer_drops}")
     print(f"Replay/Republish events observed: {integrity.replayed_events}")
     print(f"Subscription recreations: {integrity.subscription_recreations}")
+    print(f"Gap metadata compactions: {integrity.gap_metadata_overflows}")
     print(
         "Realtime monitored-set coverage: "
         f"desired={integrity.desired_monitored_nodes} "
@@ -46,22 +48,44 @@ def _production_print_status(assistant) -> None:
         print(f"Last evidence-gap reason: {integrity.last_gap_reason}")
 
 
-def _install_production_runtime() -> None:
-    # assist_cli imported these symbols directly; replace only its runtime globals.
-    # The generic V1 classes remain available for tests/library callers.
+def _install_production_runtime() -> tuple[Any, Any, Any, Any]:
+    """Install commercial runtime globals and return an exact restoration token."""
+    previous = (
+        base_assist_cli.RealtimeMultiPlcConnectionManager,
+        base_assist_cli.RealtimeSemanticLiveCommissioningAssistant,
+        base_assist_cli._print_status,
+        recursive_assistant_module.LiveHistoryCollector,
+    )
     base_assist_cli.RealtimeMultiPlcConnectionManager = (
         ProductionRealtimeMultiPlcConnectionManager
     )
+    base_assist_cli.RealtimeSemanticLiveCommissioningAssistant = (
+        CommercialRealtimeSemanticLiveCommissioningAssistant
+    )
     base_assist_cli._print_status = _production_print_status
-
-    # RecursiveLiveCommissioningAssistant resolves LiveHistoryCollector from its
-    # defining module at runtime. Replace that factory only for the production CLI.
     recursive_assistant_module.LiveHistoryCollector = ProductionLiveHistoryCollector
+    return previous
+
+
+def _restore_production_runtime(previous: tuple[Any, Any, Any, Any]) -> None:
+    (
+        manager_cls,
+        assistant_cls,
+        print_status,
+        history_cls,
+    ) = previous
+    base_assist_cli.RealtimeMultiPlcConnectionManager = manager_cls
+    base_assist_cli.RealtimeSemanticLiveCommissioningAssistant = assistant_cls
+    base_assist_cli._print_status = print_status
+    recursive_assistant_module.LiveHistoryCollector = history_cls
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    _install_production_runtime()
-    return base_assist_cli.main(argv)
+    previous = _install_production_runtime()
+    try:
+        return base_assist_cli.main(argv)
+    finally:
+        _restore_production_runtime(previous)
 
 
 __all__ = ["main"]
