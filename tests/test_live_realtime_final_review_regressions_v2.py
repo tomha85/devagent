@@ -14,6 +14,7 @@ from devagent.live.production_realtime import (
     ProductionRealtimeMultiPlcConnectionManager,
 )
 from devagent.live.realtime_assistant import RealtimeSemanticLiveCommissioningAssistant
+from devagent.live.realtime_manager import RealtimeMultiPlcConnectionManager
 
 
 class _FakeSubscription:
@@ -254,5 +255,106 @@ def test_ai_historical_route_reconnects_before_integrity_sync(monkeypatch) -> No
         assistant = TestAssistant()
         await assistant._dispatch_historical_route("why earlier", object())
         assert events == ["start", "sync", "dispatch"]
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_keeps_continuity_open_until_monitored_items_resume(monkeypatch) -> None:
+    async def scenario() -> None:
+        manager = _production_manager()
+        integrity = manager._integrity_state("plc1")
+        integrity.desired_nodes = ("A",)
+        integrity.active_nodes = {"A"}
+        integrity.monitoring_started_at = manager._now_utc()
+
+        manager._invalidate_realtime(
+            "plc1",
+            reason="OPC UA session is reconnecting",
+        )
+        assert integrity.active_nodes == set()
+        assert integrity.continuity_gap_started_at is not None
+
+        async def fake_realtime_connect(self, plc_id):
+            assert plc_id == "plc1"
+            return SimpleNamespace(connected=True)
+
+        monkeypatch.setattr(
+            RealtimeMultiPlcConnectionManager,
+            "connect",
+            fake_realtime_connect,
+        )
+
+        status = await manager.connect("plc1")
+        assert status.connected is True
+        assert integrity.continuity_gap_started_at is not None
+        assert any(
+            gap.source == "CONNECTION_CONTINUITY"
+            for gap in manager.open_evidence_gaps("plc1")
+        )
+        assert await manager.wait_for_active_monitoring(
+            "plc1",
+            timeout_seconds=0.03,
+        ) is False
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_start_stops_old_history_before_session_and_gap_handoff(monkeypatch) -> None:
+    async def scenario() -> None:
+        events: list[str] = []
+
+        class OldCollector:
+            async def stop(self):
+                events.append("old-history-stop")
+
+        class NewCollector:
+            def sync_integrity_gaps(self):
+                events.append("new-history-sync")
+
+        class Reconciliation:
+            @staticmethod
+            def accepted_mappings():
+                return (SimpleNamespace(selected_node_id="A"),)
+
+        class Manager:
+            async def replace_monitored_node_ids(self, plc_id, node_ids):
+                events.append(f"replace:{plc_id}:{','.join(node_ids)}")
+
+            async def wait_for_active_monitoring(self, plc_id, timeout_seconds=5.0):
+                events.append(f"wait:{plc_id}")
+                return True
+
+        async def fake_base_start(self):
+            events.append("base-start")
+            self.reconciliation = Reconciliation()
+            return SimpleNamespace(connected=True)
+
+        monkeypatch.setattr(
+            LiveCommissioningAssistant,
+            "start",
+            fake_base_start,
+        )
+
+        assistant = object.__new__(CommercialRealtimeSemanticLiveCommissioningAssistant)
+        assistant.connection = SimpleNamespace(plc_id="plc1")
+        assistant.manager = Manager()
+        assistant.history_collector = OldCollector()
+        assistant.reconciliation = SimpleNamespace()
+
+        async def fake_start_history(self):
+            events.append("new-history-start")
+            self.history_collector = NewCollector()
+
+        assistant._start_history = MethodType(fake_start_history, assistant)
+        await assistant.start()
+
+        assert events == [
+            "old-history-stop",
+            "base-start",
+            "replace:plc1:A",
+            "wait:plc1",
+            "new-history-start",
+            "new-history-sync",
+        ]
 
     asyncio.run(scenario())
