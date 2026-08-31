@@ -4,6 +4,7 @@ import asyncio
 
 from devagent.live.assistant import LiveAssistantReply, LiveAssistantReplyKind
 from devagent.live.errors import LiveConnectionError
+from devagent.live.qa import _contains_forbidden_control_advice
 from devagent.live.realtime_assistant import (
     RealtimeSemanticLiveCommissioningAssistant,
     _is_system_health_reply,
@@ -109,7 +110,7 @@ def test_initial_system_health_answer_gets_conversational_ai_presentation(monkey
     assert [call["role"] for call in provider.calls] == ["live_system_health_explainer"]
 
 
-def test_vague_fix_followup_rechecks_current_health_before_ai_explains(monkeypatch) -> None:
+def test_vague_fix_followup_preempts_general_semantic_target_routing(monkeypatch) -> None:
     provider = ScriptedFakeProvider(
         [
             _followup_response("NEXT_CHECKS"),
@@ -121,16 +122,20 @@ def test_vague_fix_followup_rechecks_current_health_before_ai_explains(monkeypat
     fresh = _health_reply("fresh-revalidated-evidence")
     deterministic_questions: list[str] = []
 
-    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
-        return _limitation(
-            "AI semantic router: UNKNOWN confidence=0.99: vague follow-up"
+    async def forbidden_semantic_answer(self, question: str) -> LiveAssistantReply:
+        raise AssertionError(
+            "general semantic router must not run before accepted SYSTEM_HEALTH follow-up"
         )
 
     async def fake_recursive_answer(self, question: str) -> LiveAssistantReply:
         deterministic_questions.append(question)
         return fresh
 
-    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+    monkeypatch.setattr(
+        SemanticLiveCommissioningAssistant,
+        "answer",
+        forbidden_semantic_answer,
+    )
     monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", fake_recursive_answer)
 
     reply = asyncio.run(assistant.answer("HOW TO FIX"))
@@ -173,7 +178,7 @@ def test_unknown_unrelated_followup_clears_health_context_and_preserves_fail_clo
 
 
 def test_system_overview_replaces_previous_health_and_target_context(monkeypatch) -> None:
-    provider = ScriptedFakeProvider([])
+    provider = ScriptedFakeProvider([_followup_response("UNKNOWN")])
     assistant = _bare_assistant(provider)
     assistant._last_system_health_reply = _health_reply("prior")
     assistant._last_target = "RunCmd"
@@ -194,7 +199,9 @@ def test_system_overview_replaces_previous_health_and_target_context(monkeypatch
     assert reply is overview
     assert assistant._last_system_health_reply is None
     assert assistant._last_target is None
-    assert provider.calls == []
+    assert [call["role"] for call in provider.calls] == [
+        "live_system_health_followup_router"
+    ]
 
 
 def test_plc_control_request_never_uses_health_followup_recovery(monkeypatch) -> None:
@@ -212,6 +219,25 @@ def test_plc_control_request_never_uses_health_followup_recovery(monkeypatch) ->
 
     assert reply is raw
     assert provider.calls == []
+
+
+def test_generated_control_guard_rejects_turn_on_and_turn_off_machine_advice() -> None:
+    assert _contains_forbidden_control_advice(
+        "The operator should turn on the conveyor."
+    )
+    assert _contains_forbidden_control_advice(
+        "The operator should turn the machine off before proceeding."
+    )
+    assert _contains_forbidden_control_advice("Turn off Drive")
+
+
+def test_generated_control_guard_does_not_overblock_diagnostic_wording() -> None:
+    assert not _contains_forbidden_control_advice(
+        "The conveyor turned off after the observed safety event."
+    )
+    assert not _contains_forbidden_control_advice(
+        "Start by inspecting the read-only SafetyTrip diagnostics."
+    )
 
 
 def test_ai_health_explanation_with_indirect_control_advice_is_rejected(monkeypatch) -> None:
@@ -260,6 +286,25 @@ def test_ai_health_limitation_with_control_advice_is_rejected(monkeypatch) -> No
     assert "authoritative-safe-evidence" in reply.text
 
 
+def test_ai_health_turn_on_advice_is_rejected(monkeypatch) -> None:
+    provider = ScriptedFakeProvider(
+        [_explanation_response("The operator should turn on the conveyor.")]
+    )
+    assistant = _bare_assistant(provider)
+    deterministic = _health_reply("authoritative-safe-evidence")
+
+    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
+        return deterministic
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+
+    reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
+
+    assert reply is deterministic
+    assert "turn on the conveyor" not in reply.text.casefold()
+    assert "authoritative-safe-evidence" in reply.text
+
+
 def test_slow_system_health_answer_fails_closed_when_final_revalidation_read_fails(monkeypatch) -> None:
     provider = ScriptedFakeProvider([_explanation_response()])
     assistant = _bare_assistant(provider)
@@ -288,15 +333,20 @@ def test_fix_followup_fails_closed_when_current_health_reread_fails(monkeypatch)
     provider = ScriptedFakeProvider([_followup_response("NEXT_CHECKS")])
     assistant = _bare_assistant(provider)
     assistant._last_system_health_reply = _health_reply("stale-prior-evidence")
-    raw = _limitation("semantic fallback")
 
-    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
-        return raw
+    async def forbidden_semantic_answer(self, question: str) -> LiveAssistantReply:
+        raise AssertionError(
+            "general semantic router must not run for accepted health follow-up"
+        )
 
     async def failing_recursive_answer(self, question: str) -> LiveAssistantReply:
         raise LiveConnectionError("current health evidence unavailable")
 
-    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+    monkeypatch.setattr(
+        SemanticLiveCommissioningAssistant,
+        "answer",
+        forbidden_semantic_answer,
+    )
     monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", failing_recursive_answer)
 
     reply = asyncio.run(assistant.answer("HOW TO FIX"))
