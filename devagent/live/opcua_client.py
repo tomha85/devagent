@@ -253,34 +253,46 @@ class ReadOnlyOpcUaClient:
             assert self.security.password is not None
             client.set_password(self.security.password)
 
-        if not self.security.secure_channel:
-            return
-
-        security_policies = _require_security_policies()
-        policy = getattr(
-            security_policies,
-            f"SecurityPolicy{self.security.security_policy}",
-            None,
-        )
-        if policy is None:
-            raise LiveConnectionError(
-                f"Installed asyncua does not support security policy {self.security.security_policy}"
+        if self.security.secure_channel:
+            security_policies = _require_security_policies()
+            policy = getattr(
+                security_policies,
+                f"SecurityPolicy{self.security.security_policy}",
+                None,
             )
-        mode = getattr(ua.MessageSecurityMode, str(self.security.security_mode), None)
-        if mode is None:
-            raise LiveConnectionError(
-                f"Installed asyncua does not support security mode {self.security.security_mode}"
+            if policy is None:
+                raise LiveConnectionError(
+                    f"Installed asyncua does not support security policy {self.security.security_policy}"
+                )
+            mode = getattr(ua.MessageSecurityMode, str(self.security.security_mode), None)
+            if mode is None:
+                raise LiveConnectionError(
+                    f"Installed asyncua does not support security mode {self.security.security_mode}"
+                )
+
+            client.application_uri = self.security.application_uri
+            await client.set_security(
+                policy,
+                certificate=str(self.security.client_certificate),
+                private_key=str(self.security.client_private_key),
+                private_key_password=self.security.private_key_password,
+                server_certificate=str(self.security.server_certificate),
+                mode=mode,
             )
 
-        client.application_uri = self.security.application_uri
-        await client.set_security(
-            policy,
-            certificate=str(self.security.client_certificate),
-            private_key=str(self.security.client_private_key),
-            private_key_password=self.security.private_key_password,
-            server_certificate=str(self.security.server_certificate),
-            mode=mode,
-        )
+        if self.security.user_certificate is not None:
+            load_user_certificate = getattr(client, "load_client_certificate", None)
+            load_user_private_key = getattr(client, "load_private_key", None)
+            if not callable(load_user_certificate) or not callable(load_user_private_key):
+                raise LiveConnectionError(
+                    "Installed asyncua does not expose X.509 user-certificate authentication loaders"
+                )
+            assert self.security.user_private_key is not None
+            await load_user_certificate(str(self.security.user_certificate))
+            await load_user_private_key(
+                str(self.security.user_private_key),
+                password=self.security.user_private_key_password,
+            )
 
     async def connect(self) -> None:
         if self._client is not None:

@@ -41,15 +41,23 @@ _PLC_KEYS = {
 _SECURITY_KEYS = {
     "username",
     "password_env",
+    "allow_insecure_username_password",
     "security_policy",
     "security_mode",
     "client_certificate",
     "client_private_key",
     "private_key_password_env",
     "server_certificate",
+    "user_certificate",
+    "user_private_key",
+    "user_private_key_password_env",
     "application_uri",
 }
-_FORBIDDEN_SECRET_KEYS = {"password", "private_key_password"}
+_FORBIDDEN_SECRET_KEYS = {
+    "password",
+    "private_key_password",
+    "user_private_key_password",
+}
 
 ProjectLoader = Callable[[Path], Any]
 WorkflowFactory = Callable[..., LiveCommissioningWorkflow]
@@ -182,6 +190,11 @@ def _security_from_json(
             data.get("password_env"),
             label="OPC UA password",
         ),
+        allow_insecure_username_password=_bool(
+            data.get("allow_insecure_username_password"),
+            label="security.allow_insecure_username_password",
+            default=False,
+        ),
         security_policy=_optional_text(
             data.get("security_policy"), label="security.security_policy"
         ),
@@ -196,6 +209,13 @@ def _security_from_json(
             label="OPC UA private-key password",
         ),
         server_certificate=optional_path("server_certificate"),
+        user_certificate=optional_path("user_certificate"),
+        user_private_key=optional_path("user_private_key"),
+        user_private_key_password=_secret_from_env(
+            env,
+            data.get("user_private_key_password_env"),
+            label="OPC UA user private-key password",
+        ),
         application_uri=_optional_text(
             data.get("application_uri"), label="security.application_uri"
         )

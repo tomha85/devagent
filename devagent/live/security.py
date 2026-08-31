@@ -6,12 +6,61 @@ from urllib.parse import urlsplit
 
 from .errors import LiveConfigurationError
 
-SUPPORTED_SECURITY_POLICIES = (
+MODERN_SECURITY_POLICIES = (
     "Basic256Sha256",
     "Aes128Sha256RsaOaep",
     "Aes256Sha256RsaPss",
 )
+DEPRECATED_SECURITY_POLICIES = (
+    "Basic128Rsa15",
+    "Basic256",
+)
+RUNTIME_SUPPORTED_SECURITY_POLICIES = (
+    *DEPRECATED_SECURITY_POLICIES,
+    *MODERN_SECURITY_POLICIES,
+)
+ECC_SECURITY_POLICIES = (
+    "EccNistP256",
+    "EccNistP384",
+    "EccBrainpoolP256r1",
+    "EccBrainpoolP384r1",
+    "EccCurve25519",
+)
+STANDARD_SECURITY_POLICIES = (
+    *RUNTIME_SUPPORTED_SECURITY_POLICIES,
+    *ECC_SECURITY_POLICIES,
+)
+
+# Backward-compatible public name used by existing CLI/tests.
+SUPPORTED_SECURITY_POLICIES = RUNTIME_SUPPORTED_SECURITY_POLICIES
 SUPPORTED_SECURITY_MODES = ("Sign", "SignAndEncrypt")
+
+_POLICY_ALIASES = {
+    "basic128rsa15": "Basic128Rsa15",
+    "basic256": "Basic256",
+    "basic256sha256": "Basic256Sha256",
+    "aes128sha256rsaoaep": "Aes128Sha256RsaOaep",
+    "aes256sha256rsapss": "Aes256Sha256RsaPss",
+    "eccnistp256": "EccNistP256",
+    "eccnistp384": "EccNistP384",
+    "eccbrainpoolp256r1": "EccBrainpoolP256r1",
+    "eccbrainpoolp384r1": "EccBrainpoolP384r1",
+    "ecccurve25519": "EccCurve25519",
+}
+
+
+def canonical_security_policy_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if "#" in text:
+        text = text.rsplit("#", 1)[-1]
+    elif "/" in text:
+        text = text.rsplit("/", 1)[-1]
+    key = "".join(ch for ch in text.lower() if ch.isalnum())
+    return _POLICY_ALIASES.get(key, text)
 
 
 def validate_opcua_endpoint(endpoint: str) -> str:
@@ -30,6 +79,9 @@ def validate_opcua_endpoint(endpoint: str) -> str:
 
 @dataclass(frozen=True)
 class LiveSecurityConfig:
+    # Keep the original positional constructor order stable. New V1 profile
+    # fields are appended after application_uri so existing positional callers
+    # do not silently bind old arguments to new meanings.
     username: str | None = None
     password: str | None = field(default=None, repr=False)
     security_policy: str | None = None
@@ -39,13 +91,37 @@ class LiveSecurityConfig:
     private_key_password: str | None = field(default=None, repr=False)
     server_certificate: str | None = None
     application_uri: str = "urn:devagent:live:client"
+    user_certificate: str | None = None
+    user_private_key: str | None = None
+    user_private_key_password: str | None = field(default=None, repr=False)
+    allow_insecure_username_password: bool = False
 
     def __post_init__(self) -> None:
+        canonical_policy = canonical_security_policy_name(self.security_policy)
+        if canonical_policy != self.security_policy:
+            object.__setattr__(self, "security_policy", canonical_policy)
+
         if self.username is not None and not self.username.strip():
             raise LiveConfigurationError("OPC UA username cannot be blank")
         if (self.username is None) != (self.password is None):
             raise LiveConfigurationError(
                 "OPC UA username and password must be configured together"
+            )
+        if self.allow_insecure_username_password and self.username is None:
+            raise LiveConfigurationError(
+                "--allow-insecure-username-password requires OPC UA username/password configuration"
+            )
+        if (self.user_certificate is None) != (self.user_private_key is None):
+            raise LiveConfigurationError(
+                "OPC UA X.509 user certificate and user private key must be configured together"
+            )
+        if self.username is not None and self.user_certificate is not None:
+            raise LiveConfigurationError(
+                "Choose exactly one OPC UA user identity: username/password or X.509 user certificate"
+            )
+        if self.user_private_key_password is not None and self.user_private_key is None:
+            raise LiveConfigurationError(
+                "A user private-key password requires X.509 user-certificate configuration"
             )
         if not self.application_uri.strip():
             raise LiveConfigurationError("OPC UA application URI cannot be blank")
@@ -63,41 +139,48 @@ class LiveSecurityConfig:
                 raise LiveConfigurationError(
                     "A private-key password requires secure-channel certificate configuration"
                 )
-            if self.username is not None:
+            if self.username is not None and not self.allow_insecure_username_password:
                 raise LiveConfigurationError(
-                    "Username/password authentication requires an OPC UA SignAndEncrypt channel"
+                    "Username/password authentication over a NoSecurity channel is blocked by default; "
+                    "use --allow-insecure-username-password only when the existing OPC UA server profile requires it"
                 )
-            return
+        else:
+            if self.allow_insecure_username_password:
+                raise LiveConfigurationError(
+                    "--allow-insecure-username-password is only valid when no secure-channel policy is configured"
+                )
+            if self.security_policy in ECC_SECURITY_POLICIES:
+                raise LiveConfigurationError(
+                    f"OPC UA security policy {self.security_policy!r} is recognized by the standard "
+                    "but is not available in the supported asyncua >=2,<3 runtime"
+                )
+            if self.security_policy not in RUNTIME_SUPPORTED_SECURITY_POLICIES:
+                allowed = ", ".join(STANDARD_SECURITY_POLICIES)
+                raise LiveConfigurationError(
+                    f"Unsupported OPC UA security policy {self.security_policy!r}; recognized profiles: {allowed}"
+                )
+            if self.security_mode not in SUPPORTED_SECURITY_MODES:
+                allowed = ", ".join(SUPPORTED_SECURITY_MODES)
+                raise LiveConfigurationError(
+                    f"Unsupported OPC UA security mode {self.security_mode!r}; choose one of: {allowed}"
+                )
+            if not self.client_certificate:
+                raise LiveConfigurationError("Secure OPC UA requires a client application certificate")
+            if not self.client_private_key:
+                raise LiveConfigurationError("Secure OPC UA requires a client application private key")
+            if not self.server_certificate:
+                raise LiveConfigurationError(
+                    "Secure OPC UA requires a pinned server certificate"
+                )
 
-        if self.security_policy not in SUPPORTED_SECURITY_POLICIES:
-            allowed = ", ".join(SUPPORTED_SECURITY_POLICIES)
-            raise LiveConfigurationError(
-                f"Unsupported OPC UA security policy {self.security_policy!r}; choose one of: {allowed}"
-            )
-        if self.security_mode not in SUPPORTED_SECURITY_MODES:
-            allowed = ", ".join(SUPPORTED_SECURITY_MODES)
-            raise LiveConfigurationError(
-                f"Unsupported OPC UA security mode {self.security_mode!r}; choose one of: {allowed}"
-            )
-        if not self.client_certificate:
-            raise LiveConfigurationError("Secure OPC UA requires a client certificate")
-        if not self.client_private_key:
-            raise LiveConfigurationError("Secure OPC UA requires a client private key")
-        if not self.server_certificate:
-            raise LiveConfigurationError(
-                "Secure OPC UA requires a pinned server certificate"
-            )
-        if self.username is not None and self.security_mode != "SignAndEncrypt":
-            raise LiveConfigurationError(
-                "Username/password authentication requires security mode SignAndEncrypt"
-            )
-
-        # Normalize home-directory references once so validation and the
-        # asyncua security loader use exactly the same certificate/key paths.
+        # Normalize home-directory references once so validation and asyncua use
+        # exactly the same certificate/key paths.
         for attribute in (
             "client_certificate",
             "client_private_key",
             "server_certificate",
+            "user_certificate",
+            "user_private_key",
         ):
             value = getattr(self, attribute)
             if value is not None:
@@ -108,23 +191,47 @@ class LiveSecurityConfig:
         return self.security_policy is not None
 
     @property
+    def deprecated_policy(self) -> bool:
+        return self.security_policy in DEPRECATED_SECURITY_POLICIES
+
+    @property
+    def insecure_username_password(self) -> bool:
+        return self.username is not None and not self.secure_channel
+
+    @property
     def authentication_mode(self) -> str:
-        return "USERNAME_PASSWORD" if self.username is not None else "ANONYMOUS"
+        if self.user_certificate is not None:
+            return "X509_USER_CERTIFICATE"
+        if self.username is not None:
+            return "USERNAME_PASSWORD"
+        return "ANONYMOUS"
 
     @property
     def channel_summary(self) -> str:
         if not self.secure_channel:
             return "NONE"
-        return f"{self.security_policy}/{self.security_mode}"
+        suffix = " [DEPRECATED]" if self.deprecated_policy else ""
+        return f"{self.security_policy}/{self.security_mode}{suffix}"
 
     def validate_files(self) -> None:
-        if not self.secure_channel:
-            return
-        for label, value in (
-            ("client certificate", self.client_certificate),
-            ("client private key", self.client_private_key),
-            ("server certificate", self.server_certificate),
-        ):
+        required: list[tuple[str, str | None]] = []
+        if self.secure_channel:
+            required.extend(
+                [
+                    ("client application certificate", self.client_certificate),
+                    ("client application private key", self.client_private_key),
+                    ("server certificate", self.server_certificate),
+                ]
+            )
+        if self.user_certificate is not None:
+            required.extend(
+                [
+                    ("X.509 user certificate", self.user_certificate),
+                    ("X.509 user private key", self.user_private_key),
+                ]
+            )
+
+        for label, value in required:
             assert value is not None
             path = Path(value)
             if not path.is_file():
@@ -132,7 +239,11 @@ class LiveSecurityConfig:
 
     def redact(self, text: str) -> str:
         redacted = text
-        for secret in (self.password, self.private_key_password):
+        for secret in (
+            self.password,
+            self.private_key_password,
+            self.user_private_key_password,
+        ):
             if secret:
                 redacted = redacted.replace(secret, "<redacted>")
         return redacted
