@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from devagent.live.assistant import LiveAssistantReply, LiveAssistantReplyKind
+from devagent.live.errors import LiveConnectionError
 from devagent.live.realtime_assistant import (
     RealtimeSemanticLiveCommissioningAssistant,
     _is_system_health_reply,
@@ -45,15 +46,22 @@ def _followup_response(intent: str = "NEXT_CHECKS") -> dict[str, object]:
 
 def _explanation_response(
     answer: str = "The system has a proven safety-trip condition. Start by inspecting the safety-trip diagnostics and the source of SafetyOK being false.",
+    *,
+    next_checks: list[str] | None = None,
+    limitations: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "answer": answer,
         "confidence": 0.92,
-        "next_checks": [
+        "next_checks": next_checks
+        if next_checks is not None
+        else [
             "Inspect the read-only diagnostics associated with SafetyTrip.",
             "Trace why SafetyOK is false in the engineering/runtime evidence.",
         ],
-        "limitations": [
+        "limitations": limitations
+        if limitations is not None
+        else [
             "The physical root cause is not proven by the current PLC/OPC UA evidence."
         ],
     }
@@ -64,6 +72,7 @@ def _bare_assistant(provider: ScriptedFakeProvider) -> RealtimeSemanticLiveCommi
     assistant.provider = provider
     assistant.final_revalidation_after_seconds = 999.0
     assistant._last_system_health_reply = None
+    assistant._last_target = None
     return assistant
 
 
@@ -82,6 +91,7 @@ def test_system_health_reply_detection_is_bounded_to_targetless_health_report() 
 def test_initial_system_health_answer_gets_conversational_ai_presentation(monkeypatch) -> None:
     provider = ScriptedFakeProvider([_explanation_response()])
     assistant = _bare_assistant(provider)
+    assistant._last_target = "RunCmd"
     deterministic = _health_reply("fresh-current-evidence")
 
     async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
@@ -92,6 +102,7 @@ def test_initial_system_health_answer_gets_conversational_ai_presentation(monkey
     reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
 
     assert assistant._last_system_health_reply is deterministic
+    assert assistant._last_target is None
     assert "The system has a proven safety-trip condition." in reply.text
     assert "Deterministic current evidence:" in reply.text
     assert "fresh-current-evidence" in reply.text
@@ -141,7 +152,7 @@ def test_vague_fix_followup_rechecks_current_health_before_ai_explains(monkeypat
     ]
 
 
-def test_unknown_unrelated_followup_preserves_fail_closed_semantic_result(monkeypatch) -> None:
+def test_unknown_unrelated_followup_clears_health_context_and_preserves_fail_closed_result(monkeypatch) -> None:
     provider = ScriptedFakeProvider([_followup_response("UNKNOWN")])
     assistant = _bare_assistant(provider)
     assistant._last_system_health_reply = _health_reply("prior")
@@ -155,15 +166,17 @@ def test_unknown_unrelated_followup_preserves_fail_closed_semantic_result(monkey
     reply = asyncio.run(assistant.answer("tell me about something unrelated"))
 
     assert reply is raw
+    assert assistant._last_system_health_reply is None
     assert [call["role"] for call in provider.calls] == [
         "live_system_health_followup_router"
     ]
 
 
-def test_system_overview_replaces_previous_health_conversation_context(monkeypatch) -> None:
+def test_system_overview_replaces_previous_health_and_target_context(monkeypatch) -> None:
     provider = ScriptedFakeProvider([])
     assistant = _bare_assistant(provider)
     assistant._last_system_health_reply = _health_reply("prior")
+    assistant._last_target = "RunCmd"
     overview = LiveAssistantReply(
         question="what is this system?",
         kind=LiveAssistantReplyKind.SYSTEM_OVERVIEW,
@@ -180,6 +193,7 @@ def test_system_overview_replaces_previous_health_conversation_context(monkeypat
 
     assert reply is overview
     assert assistant._last_system_health_reply is None
+    assert assistant._last_target is None
     assert provider.calls == []
 
 
@@ -200,11 +214,11 @@ def test_plc_control_request_never_uses_health_followup_recovery(monkeypatch) ->
     assert provider.calls == []
 
 
-def test_ai_health_explanation_with_forbidden_control_advice_is_rejected(monkeypatch) -> None:
+def test_ai_health_explanation_with_indirect_control_advice_is_rejected(monkeypatch) -> None:
     provider = ScriptedFakeProvider(
         [
             _explanation_response(
-                "Reset the safety trip and start the line."
+                "The operator should reset the safety trip and start the line."
             )
         ]
     )
@@ -219,5 +233,76 @@ def test_ai_health_explanation_with_forbidden_control_advice_is_rejected(monkeyp
     reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
 
     assert reply is deterministic
-    assert "Reset the safety trip" not in reply.text
+    assert "reset the safety trip" not in reply.text.casefold()
     assert "authoritative-safe-evidence" in reply.text
+
+
+def test_ai_health_limitation_with_control_advice_is_rejected(monkeypatch) -> None:
+    provider = ScriptedFakeProvider(
+        [
+            _explanation_response(
+                limitations=["Reset the safety trip before proceeding."]
+            )
+        ]
+    )
+    assistant = _bare_assistant(provider)
+    deterministic = _health_reply("authoritative-safe-evidence")
+
+    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
+        return deterministic
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+
+    reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
+
+    assert reply is deterministic
+    assert "reset the safety trip" not in reply.text.casefold()
+    assert "authoritative-safe-evidence" in reply.text
+
+
+def test_slow_system_health_answer_fails_closed_when_final_revalidation_read_fails(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([_explanation_response()])
+    assistant = _bare_assistant(provider)
+    assistant.final_revalidation_after_seconds = 0.0
+    deterministic = _health_reply("initial-evidence")
+
+    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
+        return deterministic
+
+    async def failing_recursive_answer(self, question: str) -> LiveAssistantReply:
+        raise LiveConnectionError("OPC UA session disconnected during final health read")
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", failing_recursive_answer)
+
+    reply = asyncio.run(assistant.answer("HOW IS THE SYSTEM"))
+
+    assert reply.kind is LiveAssistantReplyKind.LIMITATION
+    assert "SYSTEM HEALTH NOT REVALIDATED" in reply.text
+    assert "disconnected during final health read" in reply.text
+    assert "initial-evidence" not in reply.text
+    assert assistant._last_system_health_reply is None
+
+
+def test_fix_followup_fails_closed_when_current_health_reread_fails(monkeypatch) -> None:
+    provider = ScriptedFakeProvider([_followup_response("NEXT_CHECKS")])
+    assistant = _bare_assistant(provider)
+    assistant._last_system_health_reply = _health_reply("stale-prior-evidence")
+    raw = _limitation("semantic fallback")
+
+    async def fake_semantic_answer(self, question: str) -> LiveAssistantReply:
+        return raw
+
+    async def failing_recursive_answer(self, question: str) -> LiveAssistantReply:
+        raise LiveConnectionError("current health evidence unavailable")
+
+    monkeypatch.setattr(SemanticLiveCommissioningAssistant, "answer", fake_semantic_answer)
+    monkeypatch.setattr(RecursiveLiveCommissioningAssistant, "answer", failing_recursive_answer)
+
+    reply = asyncio.run(assistant.answer("HOW TO FIX"))
+
+    assert reply.kind is LiveAssistantReplyKind.LIMITATION
+    assert "SYSTEM HEALTH NOT REVALIDATED" in reply.text
+    assert "current health evidence unavailable" in reply.text
+    assert "stale-prior-evidence" not in reply.text
+    assert assistant._last_system_health_reply is None
