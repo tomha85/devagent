@@ -525,19 +525,19 @@ class LiveHistoryCollector:
         node_ids = tuple(self._node_to_mapping)
         trust_layer = LiveDataTrustLayer()
         status = self.manager.status(plc_id)
+        samples: list[LiveHistoricalSample] = []
 
         drain = getattr(self.manager, "drain_realtime_events", None)
         if callable(drain):
-            events = drain(plc_id, node_ids=node_ids, max_events=5000)
-            if events:
-                self.store.append_many(
-                    self._samples_from_values(
-                        events,
-                        plc_id=plc_id,
-                        plc_name=status.plc_name,
-                        trust_layer=trust_layer,
-                    )
+            before = drain(plc_id, node_ids=node_ids, max_events=5000)
+            samples.extend(
+                self._samples_from_values(
+                    before,
+                    plc_id=plc_id,
+                    plc_name=status.plc_name,
+                    trust_layer=trust_layer,
                 )
+            )
 
         results = await self.manager.read_many({plc_id: node_ids})
         batch = results[plc_id]
@@ -546,7 +546,7 @@ class LiveHistoryCollector:
         else:
             self.last_error = None
         status = self.manager.status(plc_id)
-        self.store.append_many(
+        samples.extend(
             self._samples_from_values(
                 batch.values,
                 plc_id=plc_id,
@@ -554,6 +554,23 @@ class LiveHistoryCollector:
                 trust_layer=trust_layer,
             )
         )
+
+        # Events can arrive while the awaited read is in flight. Drain a second
+        # time and merge them with the read result before touching the timeline;
+        # otherwise an older queued event could be processed a full cycle later.
+        if callable(drain):
+            after = drain(plc_id, node_ids=node_ids, max_events=5000)
+            samples.extend(
+                self._samples_from_values(
+                    after,
+                    plc_id=plc_id,
+                    plc_name=status.plc_name,
+                    trust_layer=trust_layer,
+                )
+            )
+
+        samples.sort(key=lambda item: (item.timestamp, item.tag_id, item.node_id))
+        self.store.append_many(samples)
         self.cycles += 1
 
     async def _run(self) -> None:
