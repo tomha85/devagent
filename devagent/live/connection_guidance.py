@@ -32,6 +32,9 @@ class EndpointConnectionAssessment:
     supported: bool
     support_status: str
     secure_channel: bool
+    # Legacy per-endpoint field consumed by `devagent live probe`. It now means
+    # client *application* certificate requirement; X.509 user-certificate
+    # requirements are represented separately by user_certificate_required.
     certificate_required: bool
     application_certificate_required: bool
     user_certificate_required: bool
@@ -50,11 +53,14 @@ class EndpointConnectionAssessment:
         options: list[str] = []
         if self.user_certificate_available:
             options.append("X509_USER_CERTIFICATE")
-        if self.username_password_available:
-            if self.username_password_requires_insecure_opt_in:
-                options.append("USERNAME_PASSWORD[EXPLICIT_INSECURE_OPT_IN]")
-            else:
-                options.append("USERNAME_PASSWORD")
+        if self.username_password_available and not self.username_password_requires_insecure_opt_in:
+            options.append("USERNAME_PASSWORD")
+        elif (
+            self.username_password_requires_insecure_opt_in
+            and not self.anonymous_available
+            and not self.user_certificate_available
+        ):
+            options.append("USERNAME_PASSWORD[EXPLICIT_INSECURE_OPT_IN]")
         if self.anonymous_available:
             options.append("ANONYMOUS")
         if self.issued_token_available:
@@ -73,7 +79,12 @@ class OpcUaConnectionGuidance:
 
     @property
     def certificate_free_connection_available(self) -> bool:
-        return any(item.supported and not item.certificate_required for item in self.assessments)
+        return any(
+            item.supported
+            and not item.application_certificate_required
+            and not item.user_certificate_required
+            for item in self.assessments
+        )
 
     @property
     def secure_connection_available(self) -> bool:
@@ -81,7 +92,12 @@ class OpcUaConnectionGuidance:
 
     @property
     def username_password_available(self) -> bool:
-        return any(item.supported and item.username_password_available for item in self.assessments)
+        return any(
+            item.supported
+            and item.username_password_available
+            and not item.username_password_requires_insecure_opt_in
+            for item in self.assessments
+        )
 
     @property
     def insecure_username_password_advertised(self) -> bool:
@@ -104,7 +120,10 @@ class OpcUaConnectionGuidance:
         supported = self.supported_assessments
         if not supported:
             return None
-        return all(item.certificate_required for item in supported)
+        return all(
+            item.application_certificate_required or item.user_certificate_required
+            for item in supported
+        )
 
 
 def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
@@ -164,7 +183,7 @@ def assess_endpoint(endpoint: EndpointSummary) -> EndpointConnectionAssessment:
             supported=direct_supported_identity,
             support_status=status,
             secure_channel=False,
-            certificate_required=x509_required,
+            certificate_required=False,
             application_certificate_required=False,
             user_certificate_required=x509_required,
             anonymous_available=anonymous,
@@ -355,14 +374,6 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
         lines.append(
             "  Warning: this security policy is deprecated by OPC UA and is provided for older-server compatibility."
         )
-    if recommended.username_password_requires_insecure_opt_in:
-        lines.extend(
-            [
-                "  WARNING: username/password would be used on a NoSecurity endpoint.",
-                "  Required explicit opt-in: --allow-insecure-username-password",
-                "  DevAgent will never select or enable this profile silently.",
-            ]
-        )
     if recommended.application_certificate_required:
         lines.extend(
             [
@@ -372,7 +383,7 @@ def format_connection_guidance(guidance: OpcUaConnectionGuidance) -> list[str]:
                 "    - pinned server certificate",
             ]
         )
-    if recommended.username_password_available:
+    if recommended.username_password_available and not recommended.username_password_requires_insecure_opt_in:
         lines.append("  Password: provide through --password-env; never place it directly on argv.")
     if recommended.user_certificate_available:
         prefix = "REQUIRED" if recommended.user_certificate_required else "AVAILABLE"
