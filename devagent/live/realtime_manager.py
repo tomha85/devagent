@@ -41,6 +41,7 @@ class _RealtimeState:
     epoch: int = 0
     monitored_nodes: set[str] = field(default_factory=set)
     cache: dict[str, RuntimeValue] = field(default_factory=dict)
+    cache_sources: dict[str, str] = field(default_factory=dict)
     events: deque[RuntimeValue] = field(default_factory=lambda: deque(maxlen=20000))
     task: asyncio.Task[None] | None = None
     generation: int = 0
@@ -59,9 +60,15 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
     * accepted nodes can be monitored continuously through OPC UA subscriptions;
     * very fresh, coherent realtime values can satisfy a question immediately;
     * otherwise all requested nodes are refreshed in one OPC UA Read service call;
-    * cache/event state is invalidated whenever the subscription loses continuity;
+    * concurrent subscription/read cache writes are ordered per node;
+    * cache/event state is invalidated whenever connection continuity is lost;
     * subscription events are retained in a bounded queue for the historical layer.
     """
+
+    _CACHE_SOURCE_RANK = {
+        "SUBSCRIPTION": 1,
+        "BATCH_READ": 2,
+    }
 
     def __init__(
         self,
@@ -109,11 +116,58 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
     def _evidence_timestamp(value: RuntimeValue) -> datetime:
         return value.source_timestamp or value.server_timestamp or value.received_at
 
+    @staticmethod
+    def _cache_observed_at(value: RuntimeValue) -> datetime:
+        candidates = tuple(
+            stamp
+            for stamp in (value.source_timestamp, value.server_timestamp)
+            if stamp is not None
+        )
+        return max(candidates) if candidates else value.received_at
+
     def _state(self, plc_id: str) -> _RealtimeState:
         try:
             return self._realtime[plc_id]
         except KeyError as exc:
             raise KeyError(f"Unknown PLC id: {plc_id}") from exc
+
+    def _update_cache(
+        self,
+        state: _RealtimeState,
+        value: RuntimeValue,
+        *,
+        source: str,
+    ) -> bool:
+        """Store a node value only when it is not older than current cache truth.
+
+        OPC UA subscription notifications and an in-flight multi-node Read can finish
+        in either order. Evidence timestamps decide first. For an exact timestamp tie,
+        a direct batch read wins over a queued subscription event because it was
+        explicitly requested at question time. Same-source ties use local receipt
+        order. The event queue still retains subscription notifications for history.
+        """
+        current = state.cache.get(value.node_id)
+        if current is None:
+            state.cache[value.node_id] = value
+            state.cache_sources[value.node_id] = source
+            return True
+
+        incoming_observed = self._cache_observed_at(value)
+        current_observed = self._cache_observed_at(current)
+        replace = incoming_observed > current_observed
+        if incoming_observed == current_observed:
+            incoming_rank = self._CACHE_SOURCE_RANK.get(source, 0)
+            current_source = state.cache_sources.get(value.node_id, "")
+            current_rank = self._CACHE_SOURCE_RANK.get(current_source, 0)
+            if incoming_rank > current_rank:
+                replace = True
+            elif incoming_rank == current_rank:
+                replace = value.received_at >= current.received_at
+
+        if replace:
+            state.cache[value.node_id] = value
+            state.cache_sources[value.node_id] = source
+        return replace
 
     def realtime_status(self, plc_id: str) -> RealtimeSnapshotStatus:
         state = self._state(plc_id)
@@ -136,6 +190,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         state = self._state(plc_id)
         state.epoch += 1
         state.cache.clear()
+        state.cache_sources.clear()
         state.events.clear()
         state.last_snapshot = None
         state.last_subscription_error = reason
@@ -270,7 +325,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                             stale_after_seconds=outer_client.stale_after_seconds,
                             replayed=event.replayed,
                         )
-                        state.cache[value.node_id] = value
+                        self._update_cache(state, value, source="SUBSCRIPTION")
                         state.events.append(value)
             except asyncio.CancelledError:
                 raise
@@ -331,11 +386,10 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                 or value.replayed
             ):
                 return None
-            # The trust/stale gate above preserves source/server freshness. The
-            # short realtime-cache window is different: it answers "did DevAgent
-            # receive this trusted value very recently?" and therefore uses the
-            # local receipt timestamp. A stable PLC value may legitimately retain
-            # an older source timestamp while still being freshly delivered.
+            # Source/server staleness is enforced by value.stale above. The short
+            # cache residency window answers a different question: did DevAgent
+            # receive this already-trusted value recently enough to avoid another
+            # network round trip?
             age = max(0.0, (now - value.received_at).total_seconds())
             if age > self.cache_fresh_seconds:
                 return None
@@ -389,11 +443,16 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
             outer_client = entry.client
             if outer_client is None or not bool(getattr(outer_client, "connected", False)):
                 observed = self.status(plc_id)
+                reason = (
+                    f"PLC {plc_id} session is not connected; state={observed.state.value}"
+                )
+                self._set_state(entry, observed.state, error=reason)
+                self._invalidate_realtime(plc_id, reason=reason)
                 return PlcReadResult(
                     plc_id=plc_id,
                     values=(),
                     state=observed.state,
-                    error=f"PLC {plc_id} session is not connected; state={observed.state.value}",
+                    error=reason,
                 )
             try:
                 client = outer_client._require_connected()
@@ -407,7 +466,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     raise RuntimeError(
                         f"OPC UA batch read returned {len(data_values)} values for {len(node_ids)} requested nodes"
                     )
-                values = tuple(
+                batch_values = tuple(
                     _runtime_value_from_datavalue(
                         node_id,
                         data_value,
@@ -416,14 +475,27 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     for node_id, data_value in zip(node_ids, data_values, strict=True)
                 )
                 state = self._state(plc_id)
-                for value in values:
-                    state.cache[value.node_id] = value
+                for value in batch_values:
+                    self._update_cache(state, value, source="BATCH_READ")
+
+                # A subscription notification may have completed while the Read was
+                # in flight. Return whichever per-node value won timestamp ordering,
+                # not blindly the batch response.
+                values = tuple(state.cache[node_id] for node_id in node_ids)
+                selected_sources = {
+                    state.cache_sources.get(node_id, "") for node_id in node_ids
+                }
+                snapshot_source = (
+                    "OPCUA_BATCH_READ"
+                    if selected_sources == {"BATCH_READ"}
+                    else "REALTIME_MERGED"
+                )
                 evidence_timestamps = [self._evidence_timestamp(value) for value in values]
                 skew = self._timestamp_skew(evidence_timestamps)
                 state.last_snapshot = RealtimeSnapshotStatus(
                     plc_id=plc_id,
                     connection_epoch=state.epoch,
-                    source="OPCUA_BATCH_READ",
+                    source=snapshot_source,
                     requested_nodes=len(node_ids),
                     cached_nodes=len(state.cache),
                     monitored_nodes=len(state.monitored_nodes),
