@@ -3,23 +3,42 @@ from __future__ import annotations
 import asyncio
 import socket
 from datetime import datetime, timedelta, timezone
+from types import MethodType, SimpleNamespace
 
 import pytest
 
-from devagent.live.manager import PlcConnectionSpec
+from devagent.live.manager import PlcConnectionSpec, PlcReadResult, PlcSessionState
+from devagent.live.models import Quality, RuntimeValue
 from devagent.live.production_realtime import (
     EvidenceIntegrityTimelineStore,
     LiveEvidenceGap,
+    ProductionLiveHistoryCollector,
     ProductionRealtimeMultiPlcConnectionManager,
 )
 from devagent.live.simulator import OpcUaSimulator
 
 
-def _manager(**kwargs) -> ProductionRealtimeMultiPlcConnectionManager:
+def _manager(*, subscription_enabled: bool = False, **kwargs) -> ProductionRealtimeMultiPlcConnectionManager:
     return ProductionRealtimeMultiPlcConnectionManager(
         [PlcConnectionSpec("plc1", "opc.tcp://plc1:4840/")],
-        subscription_enabled=False,
+        subscription_enabled=subscription_enabled,
         **kwargs,
+    )
+
+
+def _runtime(node_id: str, value: object, stamp: datetime) -> RuntimeValue:
+    return RuntimeValue(
+        node_id=node_id,
+        value=value,
+        variant_type="Boolean" if isinstance(value, bool) else "Int32",
+        status_code="Good",
+        quality=Quality.GOOD,
+        source_timestamp=stamp,
+        server_timestamp=stamp,
+        received_at=stamp,
+        age_seconds=0.0,
+        stale=False,
+        replayed=False,
     )
 
 
@@ -32,181 +51,187 @@ def _context():
     return Context()
 
 
-def test_open_connection_gap_marks_later_window_incomplete_until_closed() -> None:
+def test_question_read_many_is_additive_and_does_not_replace_history_scope() -> None:
+    async def scenario() -> None:
+        manager = _manager(max_monitored_nodes=8)
+        await manager.replace_monitored_node_ids("plc1", ("A", "B", "C"))
+
+        async def fake_batch(self, plc_id: str, node_ids: tuple[str, ...]):
+            return PlcReadResult(
+                plc_id=plc_id,
+                values=(),
+                state=PlcSessionState.CONNECTED,
+            )
+
+        manager._batch_read_isolated = MethodType(fake_batch, manager)
+        await manager.read_many({"plc1": ("B", "D")})
+        assert manager._integrity_state("plc1").desired_nodes == ("A", "B", "C", "D")
+        assert manager._state("plc1").monitored_nodes == {"A", "B", "C", "D"}
+
+    asyncio.run(scenario())
+
+
+def test_open_connection_gap_marks_every_overlapping_later_window_incomplete_until_closed() -> None:
     store = EvidenceIntegrityTimelineStore(retention_seconds=120.0)
     now = datetime.now(timezone.utc)
-    start = now - timedelta(seconds=10)
-    open_gap = LiveEvidenceGap(
+    start = now - timedelta(seconds=30)
+    gap = LiveEvidenceGap(
         timestamp=start,
         end_timestamp=None,
         plc_id="plc1",
         source="CONNECTION_CONTINUITY",
         reason="transport lost",
     )
-    store.record_gap(open_gap)
-
+    store.sync_open_gaps((gap,), observed_at=now)
     diagnosis = store.diagnose_recent_transition(
-        _context(),
-        "RunCmd",
-        lookback_seconds=2.0,
-        now=now,
+        _context(), "RunCmd", lookback_seconds=2.0, now=now
     )
     assert diagnosis.evidence_complete is False
 
-    store.record_gap(
-        LiveEvidenceGap(
-            timestamp=start,
-            end_timestamp=now - timedelta(seconds=5),
-            plc_id="plc1",
-            source="CONNECTION_CONTINUITY",
-            reason="transport lost",
-            dropped_count=0,
-        )
-    )
+    store.sync_open_gaps((), observed_at=now + timedelta(seconds=1))
+    later = now + timedelta(seconds=10)
     diagnosis = store.diagnose_recent_transition(
-        _context(),
-        "RunCmd",
-        lookback_seconds=2.0,
-        now=now,
+        _context(), "RunCmd", lookback_seconds=2.0, now=later
     )
     assert diagnosis.evidence_complete is True
 
 
-def test_local_buffer_gap_uses_evicted_source_timestamp() -> None:
-    from collections import deque
-    from devagent.live.models import Quality, RuntimeValue
-
-    manager = _manager()
-    state = manager._state("plc1")
-    state.events = deque(maxlen=1)
-    now = datetime.now(timezone.utc)
-    old_stamp = now - timedelta(seconds=8)
-    old = RuntimeValue(
-        node_id="n1",
-        value=False,
-        variant_type="Boolean",
-        status_code="Good",
-        quality=Quality.GOOD,
-        source_timestamp=old_stamp,
-        server_timestamp=old_stamp,
-        received_at=now - timedelta(seconds=7),
-        age_seconds=1.0,
-        stale=False,
-        replayed=False,
-    )
-    new = RuntimeValue(
-        node_id="n1",
-        value=True,
-        variant_type="Boolean",
-        status_code="Good",
-        quality=Quality.GOOD,
-        source_timestamp=now,
-        server_timestamp=now,
-        received_at=now,
-        age_seconds=0.0,
-        stale=False,
-        replayed=False,
-    )
-    manager._append_subscription_event("plc1", old)
-    manager._append_subscription_event("plc1", new)
-    gaps = manager.drain_evidence_gaps("plc1")
-    assert len(gaps) == 1
-    assert gaps[0].source == "LOCAL_EVENT_BUFFER_OVERFLOW"
-    assert gaps[0].timestamp == old_stamp
-
-
-def test_gap_metadata_overflow_coalesces_instead_of_becoming_silent() -> None:
-    manager = _manager(evidence_gap_maxsize=2)
-    now = datetime.now(timezone.utc)
-    for index in range(3):
-        manager._record_gap(
-            "plc1",
-            source="TEST_GAP",
-            reason=f"gap {index}",
-            timestamp=now + timedelta(milliseconds=index),
-        )
-    status = manager.integrity_status("plc1")
-    assert status.gap_metadata_overflows == 1
-    assert status.evidence_complete_since_session_start is False
-    gaps = manager.drain_evidence_gaps("plc1")
-    assert len(gaps) == 2
-    assert gaps[0].source == "EVIDENCE_GAP_METADATA_OVERFLOW"
-    assert gaps[0].end_timestamp is not None
-
-
-def test_additive_monitoring_preserves_deterministic_desired_order() -> None:
+def test_omitted_monitored_nodes_open_capacity_gap_and_never_claim_complete() -> None:
     async def scenario() -> None:
-        manager = _manager(max_monitored_nodes=4)
-        await manager.monitor_node_ids("plc1", ("A", "B"))
-        await manager.ensure_monitored_node_ids("plc1", ("C", "A"))
-        state = manager._integrity_state("plc1")
-        assert state.desired_nodes == ("A", "B", "C")
-        assert manager._state("plc1").monitored_nodes == {"A", "B", "C"}
+        manager = _manager(max_monitored_nodes=2)
+        await manager.replace_monitored_node_ids("plc1", ("A", "B", "C"))
+        status = manager.integrity_status("plc1")
+        assert status.omitted_monitored_nodes == 1
+        assert status.monitored_coverage_complete is False
+        assert status.evidence_complete_since_session_start is False
+        assert any(
+            gap.source == "MONITOR_CAPACITY"
+            for gap in manager.open_evidence_gaps("plc1")
+        )
 
     asyncio.run(scenario())
 
 
-def test_monitored_item_setup_gap_is_interval_and_closes_on_recovery() -> None:
+def test_bounded_closed_gap_metadata_never_evicts_authoritative_open_gap() -> None:
+    manager = _manager(evidence_gap_maxsize=16)
+    now = datetime.now(timezone.utc)
+    for index in range(24):
+        stamp = now + timedelta(milliseconds=index)
+        manager._record_gap(
+            "plc1",
+            source="TEST_CLOSED",
+            reason=f"closed {index}",
+            timestamp=stamp,
+            end_timestamp=stamp,
+        )
+    manager._invalidate_realtime("plc1", reason="transport lost")
+    status = manager.integrity_status("plc1")
+    assert status.gap_metadata_overflows > 0
+    assert status.evidence_complete_since_session_start is False
+    assert len(manager.open_evidence_gaps("plc1")) == 1
+    assert manager.open_evidence_gaps("plc1")[0].source == "CONNECTION_CONTINUITY"
+
+
+def test_server_overflow_gap_spans_previous_defensible_observation_to_retained_value() -> None:
     manager = _manager()
-    manager._sync_setup_gaps(
+    now = datetime.now(timezone.utc)
+    previous = now - timedelta(seconds=2)
+    manager._integrity_state("plc1").last_observed_at_by_node["n1"] = previous
+    manager._record_gap(
         "plc1",
-        desired_nodes=("A",),
-        failures=("A",),
-    )
-    state = manager._integrity_state("plc1")
-    start = state.setup_gap_starts["A"]
-    manager._sync_setup_gaps(
-        "plc1",
-        desired_nodes=("A",),
-        failures=(),
+        source="SERVER_MONITORED_ITEM_OVERFLOW",
+        reason="server queue purged changes",
+        node_id="n1",
+        timestamp=now,
     )
     gaps = manager.drain_evidence_gaps("plc1")
-    assert len(gaps) == 2
-    assert gaps[0].timestamp == start
-    assert gaps[0].end_timestamp is None
-    assert gaps[1].timestamp == start
-    assert gaps[1].end_timestamp is not None
-
-    store = EvidenceIntegrityTimelineStore(retention_seconds=60.0)
-    for gap in gaps:
-        store.record_gap(gap)
-    matching = [gap for gap in store.evidence_gaps() if gap.source == "MONITORED_ITEM_SETUP"]
-    assert len(matching) == 1
-    assert matching[0].end_timestamp is not None
+    assert len(gaps) == 1
+    assert gaps[0].timestamp == previous
+    assert gaps[0].end_timestamp == now
 
 
-def test_equal_timestamp_conflict_is_explicit_integrity_gap() -> None:
+def _sample(value: bool, timestamp: datetime):
     from devagent.live.history import LiveHistoricalSample
 
-    store = EvidenceIntegrityTimelineStore(retention_seconds=60.0)
+    return LiveHistoricalSample(
+        timestamp=timestamp,
+        plc_id="plc1",
+        tag_id="tag-1",
+        tag_name="RunCmd",
+        node_id="n1",
+        value=value,
+        definitive_current=True,
+        quality="GOOD",
+        trust="CURRENT",
+    )
+
+
+def test_timeline_sample_and_transition_capacity_eviction_are_explicit_gaps() -> None:
+    store = EvidenceIntegrityTimelineStore(
+        retention_seconds=120.0,
+        max_samples=10,
+        max_transitions=5,
+        continuity_seconds=5.0,
+    )
     now = datetime.now(timezone.utc)
-    stamp = now - timedelta(seconds=1)
-
-    def sample(value: bool) -> LiveHistoricalSample:
-        return LiveHistoricalSample(
-            timestamp=stamp,
-            plc_id="plc1",
-            tag_id="tag-1",
-            tag_name="RunCmd",
-            node_id="n1",
-            value=value,
-            definitive_current=True,
-            quality="GOOD",
-            trust="CURRENT",
-        )
-
-    store.append_many((sample(False), sample(True)))
-    assert store.transitions() == ()
-    gaps = store.evidence_gaps()
-    assert len(gaps) == 1
-    assert gaps[0].source == "TIMESTAMP_CONFLICT"
+    samples = tuple(
+        _sample(bool(index % 2), now - timedelta(milliseconds=30 - index))
+        for index in range(30)
+    )
+    store.append_many(samples)
+    sources = {gap.source for gap in store.evidence_gaps()}
+    assert "TIMELINE_SAMPLE_CAPACITY" in sources
+    assert "TIMELINE_TRANSITION_CAPACITY" in sources
     diagnosis = store.diagnose_recent_transition(
-        _context(),
-        "RunCmd",
-        lookback_seconds=5.0,
-        now=now,
+        _context(), "RunCmd", lookback_seconds=1.0, now=now
     )
     assert diagnosis.evidence_complete is False
+
+
+def test_pending_manager_gap_is_synchronized_immediately_before_history_diagnosis() -> None:
+    manager = _manager()
+
+    class Reconciliation:
+        plc_id = "plc1"
+
+        @staticmethod
+        def accepted_mappings():
+            return ()
+
+    collector = ProductionLiveHistoryCollector(
+        manager,
+        Reconciliation(),
+        retention_seconds=60.0,
+    )
+    now = datetime.now(timezone.utc)
+    manager._record_gap(
+        "plc1",
+        source="LOCAL_EVENT_BUFFER_OVERFLOW",
+        reason="history consumer fell behind",
+        node_id="n1",
+        timestamp=now - timedelta(seconds=1),
+    )
+    assert collector.store.evidence_gaps() == ()
+    collector.sync_integrity_gaps()
+    diagnosis = collector.store.diagnose_recent_transition(
+        _context(), "RunCmd", lookback_seconds=5.0, now=now
+    )
+    assert diagnosis.evidence_complete is False
+    assert any(gap.source == "LOCAL_EVENT_BUFFER_OVERFLOW" for gap in diagnosis.evidence_gaps)
+
+
+def test_monitored_item_setup_open_gap_closes_without_losing_interval_identity() -> None:
+    manager = _manager()
+    manager._sync_setup_gaps("plc1", desired_nodes=("A",), failures=("A",))
+    open_gaps = manager.open_evidence_gaps("plc1")
+    assert len(open_gaps) == 1
+    start = open_gaps[0].timestamp
+    manager._sync_setup_gaps("plc1", desired_nodes=("A",), failures=())
+    assert manager.open_evidence_gaps("plc1") == ()
+    closed = manager.drain_evidence_gaps("plc1")
+    assert len(closed) == 1
+    assert closed[0].timestamp == start
+    assert closed[0].end_timestamp is not None
 
 
 def _free_port() -> int:
@@ -215,7 +240,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_real_asyncua_idle_subscription_timeout_is_not_evidence_gap() -> None:
+def test_real_asyncua_idle_subscription_stays_healthy_past_one_second() -> None:
     pytest.importorskip("asyncua")
 
     async def scenario() -> None:
@@ -237,7 +262,7 @@ def test_real_asyncua_idle_subscription_timeout_is_not_evidence_gap() -> None:
             )
             try:
                 await manager.connect("plc1")
-                await manager.monitor_node_ids("plc1", (node,))
+                await manager.replace_monitored_node_ids("plc1", (node,))
                 await asyncio.sleep(1.35)
                 status = manager.integrity_status("plc1")
                 assert status.active_monitored_nodes == 1
