@@ -166,6 +166,34 @@ def test_timestamp_less_batch_replaces_subscription_when_order_is_unknowable() -
     assert state.cache_sources["n1"] == "BATCH_READ"
 
 
+def test_cached_value_is_rejected_after_source_timestamp_ages_stale() -> None:
+    async def scenario() -> None:
+        manager = _manager()
+        await manager.connect("plc1")
+        outer = manager._entry("plc1").client
+        assert outer is not None
+        outer.stale_after_seconds = 5.0
+
+        now = datetime.now(timezone.utc)
+        state = manager._state("plc1")
+        state.cache["n1"] = _runtime(
+            "n1",
+            True,
+            source_timestamp=now - timedelta(seconds=5.1),
+            server_timestamp=now - timedelta(seconds=5.1),
+            received_at=now,
+        )
+        state.cache_sources["n1"] = "SUBSCRIPTION"
+
+        # RuntimeValue.stale was False when constructed, but lookup-time source age
+        # has crossed the server freshness threshold and must force a new Read.
+        assert state.cache["n1"].stale is False
+        assert manager._cached_snapshot("plc1", ("n1",)) is None
+        await manager.disconnect("plc1")
+
+    asyncio.run(scenario())
+
+
 def test_incoherent_realtime_merge_falls_back_to_single_batch(monkeypatch) -> None:
     async def scenario() -> None:
         _fake_asyncua(monkeypatch)
