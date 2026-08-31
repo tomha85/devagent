@@ -68,7 +68,6 @@ def test_local_event_buffer_eviction_is_never_silent() -> None:
     manager._append_subscription_event(
         "plc1", _runtime("n1", 3, stamp=now + timedelta(milliseconds=2))
     )
-
     assert [item.value for item in state.events] == [2, 3]
     status = manager.integrity_status("plc1")
     assert status.evidence_complete_since_session_start is False
@@ -87,15 +86,15 @@ def test_connection_continuity_gap_is_deduplicated_until_recovered() -> None:
     status = manager.integrity_status("plc1")
     assert status.evidence_gap_count == 1
     assert status.gap_backlog == 1
+    assert len(manager.open_evidence_gaps("plc1")) == 1
 
 
 def test_exact_monitored_set_reconciliation_removes_stale_nodes() -> None:
     async def scenario() -> None:
         manager = _manager(max_monitored_nodes=4)
-        await manager.monitor_node_ids("plc1", ("A", "B", "C"))
+        await manager.replace_monitored_node_ids("plc1", ("A", "B", "C"))
         assert manager._state("plc1").monitored_nodes == {"A", "B", "C"}
-
-        await manager.monitor_node_ids("plc1", ("B", "C", "D"))
+        await manager.replace_monitored_node_ids("plc1", ("B", "C", "D"))
         assert manager._state("plc1").monitored_nodes == {"B", "C", "D"}
         assert "A" not in manager._state("plc1").monitored_nodes
         status = manager.integrity_status("plc1")
@@ -105,14 +104,30 @@ def test_exact_monitored_set_reconciliation_removes_stale_nodes() -> None:
     asyncio.run(scenario())
 
 
+def test_additive_question_monitoring_does_not_replace_existing_history_scope() -> None:
+    async def scenario() -> None:
+        manager = _manager(max_monitored_nodes=8)
+        await manager.replace_monitored_node_ids("plc1", ("A", "B", "C"))
+        await manager.monitor_node_ids("plc1", ("B", "D"))
+        assert manager._integrity_state("plc1").desired_nodes == ("A", "B", "C", "D")
+        assert manager._state("plc1").monitored_nodes == {"A", "B", "C", "D"}
+
+    asyncio.run(scenario())
+
+
 def test_monitored_set_limit_is_explicit_not_silent() -> None:
     async def scenario() -> None:
         manager = _manager(max_monitored_nodes=2)
-        await manager.monitor_node_ids("plc1", ("A", "B", "C", "D"))
+        await manager.replace_monitored_node_ids("plc1", ("A", "B", "C", "D"))
         assert manager._state("plc1").monitored_nodes == {"A", "B"}
         status = manager.integrity_status("plc1")
         assert status.desired_monitored_nodes == 4
         assert status.omitted_monitored_nodes == 2
+        assert status.evidence_complete_since_session_start is False
+        assert any(
+            gap.source == "MONITOR_CAPACITY"
+            for gap in manager.open_evidence_gaps("plc1")
+        )
 
     asyncio.run(scenario())
 
@@ -141,18 +156,13 @@ def _sample(
 
 
 def test_late_cross_cycle_event_is_preserved_and_transitions_are_recomputed() -> None:
-    store = EvidenceIntegrityTimelineStore(
-        retention_seconds=60.0,
-        continuity_seconds=5.0,
-    )
+    store = EvidenceIntegrityTimelineStore(retention_seconds=60.0, continuity_seconds=5.0)
     now = datetime.now(timezone.utc)
     t0 = now - timedelta(seconds=3)
     t1 = now - timedelta(seconds=2)
     t2 = now - timedelta(seconds=1)
-
     store.append_many((_sample("tag-1", False, t0), _sample("tag-1", False, t2)))
     assert store.transitions() == ()
-
     store.append(_sample("tag-1", True, t1))
     transitions = store.transitions()
     assert len(transitions) == 2
@@ -168,15 +178,10 @@ def test_late_cross_cycle_event_is_preserved_and_transitions_are_recomputed() ->
 
 def test_equal_timestamp_conflict_does_not_invent_temporal_transition() -> None:
     store = EvidenceIntegrityTimelineStore(retention_seconds=60.0)
-    now = datetime.now(timezone.utc)
-    stamp = now - timedelta(seconds=1)
-    store.append_many(
-        (
-            _sample("tag-1", False, stamp),
-            _sample("tag-1", True, stamp),
-        )
-    )
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=1)
+    store.append_many((_sample("tag-1", False, stamp), _sample("tag-1", True, stamp)))
     assert store.transitions() == ()
+    assert any(gap.source == "TIMESTAMP_CONFLICT" for gap in store.evidence_gaps())
 
 
 def test_historical_diagnosis_marks_overlapping_evidence_gap_incomplete() -> None:
@@ -199,10 +204,7 @@ def test_historical_diagnosis_marks_overlapping_evidence_gap_incomplete() -> Non
             node_id="n1",
         )
     )
-    context = SimpleNamespace(
-        unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1")
-    )
-
+    context = SimpleNamespace(unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1"))
     diagnosis = store.diagnose_recent_transition(
         context,
         "RunCmd",
@@ -229,9 +231,7 @@ def test_absence_of_transition_is_not_proof_when_window_has_gap() -> None:
             reason="session reconnect",
         )
     )
-    context = SimpleNamespace(
-        unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1")
-    )
+    context = SimpleNamespace(unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1"))
     diagnosis = store.diagnose_recent_transition(
         context,
         "RunCmd",
@@ -262,9 +262,7 @@ def test_gap_outside_requested_window_does_not_poison_current_window() -> None:
             _sample("tag-1", True, now - timedelta(seconds=3)),
         )
     )
-    context = SimpleNamespace(
-        unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1")
-    )
+    context = SimpleNamespace(unique_tag_for_reference=lambda reference: SimpleNamespace(id="tag-1"))
     diagnosis = store.diagnose_recent_transition(
         context,
         "RunCmd",
@@ -275,7 +273,7 @@ def test_gap_outside_requested_window_does_not_poison_current_window() -> None:
     assert diagnosis.evidence_gaps == ()
 
 
-def test_timeline_stress_stays_bounded_and_keeps_latest_truth() -> None:
+def test_timeline_stress_stays_bounded_and_marks_evicted_window_incomplete() -> None:
     store = EvidenceIntegrityTimelineStore(
         retention_seconds=300.0,
         max_samples=500,
@@ -284,11 +282,7 @@ def test_timeline_stress_stays_bounded_and_keeps_latest_truth() -> None:
     )
     now = datetime.now(timezone.utc)
     samples = [
-        _sample(
-            "tag-1",
-            bool(index % 2),
-            now - timedelta(milliseconds=1000 - index),
-        )
+        _sample("tag-1", bool(index % 2), now - timedelta(milliseconds=1000 - index))
         for index in range(1000)
     ]
     store.append_many(reversed(samples))
@@ -296,30 +290,35 @@ def test_timeline_stress_stays_bounded_and_keeps_latest_truth() -> None:
     assert len(store.transitions()) <= 300
     latest = store.latest_samples()[0]
     assert latest.timestamp == max(item.timestamp for item in samples)
+    sources = {gap.source for gap in store.evidence_gaps()}
+    assert "TIMELINE_SAMPLE_CAPACITY" in sources
+    assert "TIMELINE_TRANSITION_CAPACITY" in sources
 
 
-def test_production_cli_installs_integrity_runtime_without_rewriting_v1_modules() -> None:
-    from devagent.live import assist_cli
-    from devagent.live import assist_production_cli
-    from devagent.live import recursive_assistant
+def test_production_cli_install_restore_is_process_safe() -> None:
+    from devagent.live import assist_cli, assist_production_cli, recursive_assistant
+    from devagent.live.commercial_assistant import CommercialRealtimeSemanticLiveCommissioningAssistant
     from devagent.live.history import LiveHistoryCollector
+    from devagent.live.realtime_assistant import RealtimeSemanticLiveCommissioningAssistant
     from devagent.live.realtime_manager import RealtimeMultiPlcConnectionManager
     from devagent.live.production_realtime import ProductionLiveHistoryCollector
 
     old_manager = assist_cli.RealtimeMultiPlcConnectionManager
+    old_assistant = assist_cli.RealtimeSemanticLiveCommissioningAssistant
     old_history = recursive_assistant.LiveHistoryCollector
     old_print_status = assist_cli._print_status
+    token = assist_production_cli._install_production_runtime()
     try:
-        assist_production_cli._install_production_runtime()
-        assert (
-            assist_cli.RealtimeMultiPlcConnectionManager
-            is ProductionRealtimeMultiPlcConnectionManager
-        )
+        assert assist_cli.RealtimeMultiPlcConnectionManager is ProductionRealtimeMultiPlcConnectionManager
+        assert assist_cli.RealtimeSemanticLiveCommissioningAssistant is CommercialRealtimeSemanticLiveCommissioningAssistant
         assert recursive_assistant.LiveHistoryCollector is ProductionLiveHistoryCollector
     finally:
-        assist_cli.RealtimeMultiPlcConnectionManager = old_manager
-        recursive_assistant.LiveHistoryCollector = old_history
-        assist_cli._print_status = old_print_status
+        assist_production_cli._restore_production_runtime(token)
 
+    assert assist_cli.RealtimeMultiPlcConnectionManager is old_manager
+    assert assist_cli.RealtimeSemanticLiveCommissioningAssistant is old_assistant
+    assert recursive_assistant.LiveHistoryCollector is old_history
+    assert assist_cli._print_status is old_print_status
     assert RealtimeMultiPlcConnectionManager is not ProductionRealtimeMultiPlcConnectionManager
+    assert RealtimeSemanticLiveCommissioningAssistant is not CommercialRealtimeSemanticLiveCommissioningAssistant
     assert LiveHistoryCollector is not ProductionLiveHistoryCollector
