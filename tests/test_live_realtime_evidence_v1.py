@@ -15,9 +15,12 @@ def _runtime(
     value: object,
     *,
     stamp: datetime | None = None,
+    received_at: datetime | None = None,
     replayed: bool = False,
+    stale: bool = False,
 ) -> RuntimeValue:
     timestamp = stamp or datetime.now(timezone.utc)
+    received = received_at or timestamp
     return RuntimeValue(
         node_id=node_id,
         value=value,
@@ -26,9 +29,9 @@ def _runtime(
         quality=Quality.GOOD,
         source_timestamp=timestamp,
         server_timestamp=timestamp,
-        received_at=timestamp,
-        age_seconds=0.0,
-        stale=False,
+        received_at=received,
+        age_seconds=max(0.0, (received - timestamp).total_seconds()),
+        stale=stale,
         replayed=replayed,
     )
 
@@ -133,19 +136,61 @@ def test_current_question_uses_one_multi_node_read_then_fresh_cache() -> None:
         outer = manager._entry("plc1").client
         assert outer is not None
         assert len(outer.inner.uaclient.calls) == 1
+        assert outer.inner.uaclient.calls[0][0] == ("n1", "n2")
         assert [item.value for item in first["plc1"].values] == [True, False]
         assert manager.realtime_status("plc1").source == "OPCUA_BATCH_READ"
 
         second = await manager.read_many({"plc1": ("n1", "n2")})
         assert len(outer.inner.uaclient.calls) == 1
         assert [item.value for item in second["plc1"].values] == [True, False]
-        assert manager.realtime_status("plc1").source == "SUBSCRIPTION_CACHE"
+        assert manager.realtime_status("plc1").source == "REALTIME_CACHE"
         await manager.disconnect("plc1")
 
     asyncio.run(scenario())
 
 
-def test_stale_or_incoherent_cache_forces_new_batch_read() -> None:
+def test_cache_residency_uses_recent_receipt_not_old_source_change_time() -> None:
+    async def scenario() -> None:
+        manager = _manager(cache_fresh_seconds=0.5)
+        await manager.connect("plc1")
+        now = datetime.now(timezone.utc)
+        state = manager._state("plc1")
+        state.cache["n1"] = _runtime(
+            "n1",
+            True,
+            stamp=now - timedelta(seconds=30),
+            received_at=now,
+            stale=False,
+        )
+        cached = manager._cached_snapshot("plc1", ("n1",))
+        assert cached is not None
+        assert cached[0].value is True
+        assert manager.realtime_status("plc1").source == "REALTIME_CACHE"
+        await manager.disconnect("plc1")
+
+    asyncio.run(scenario())
+
+
+def test_source_stale_value_is_rejected_even_when_received_recently() -> None:
+    async def scenario() -> None:
+        manager = _manager(cache_fresh_seconds=2.0)
+        await manager.connect("plc1")
+        now = datetime.now(timezone.utc)
+        state = manager._state("plc1")
+        state.cache["n1"] = _runtime(
+            "n1",
+            True,
+            stamp=now - timedelta(seconds=30),
+            received_at=now,
+            stale=True,
+        )
+        assert manager._cached_snapshot("plc1", ("n1",)) is None
+        await manager.disconnect("plc1")
+
+    asyncio.run(scenario())
+
+
+def test_old_or_incoherent_receipt_cache_forces_new_batch_read() -> None:
     async def scenario() -> None:
         manager = _manager(cache_fresh_seconds=2.0, max_snapshot_skew_seconds=0.05)
         await manager.connect("plc1")
@@ -154,8 +199,13 @@ def test_stale_or_incoherent_cache_forces_new_batch_read() -> None:
         assert outer is not None
         state = manager._state("plc1")
         now = datetime.now(timezone.utc)
-        state.cache["n1"] = _runtime("n1", True, stamp=now)
-        state.cache["n2"] = _runtime("n2", False, stamp=now - timedelta(seconds=1))
+        state.cache["n1"] = _runtime("n1", True, stamp=now, received_at=now)
+        state.cache["n2"] = _runtime(
+            "n2",
+            False,
+            stamp=now,
+            received_at=now - timedelta(seconds=1),
+        )
 
         await manager.read_many({"plc1": ("n1", "n2")})
         assert len(outer.inner.uaclient.calls) == 2
@@ -200,28 +250,57 @@ def test_cache_is_rejected_when_connection_is_not_current() -> None:
     asyncio.run(scenario())
 
 
-def test_disconnect_invalidates_cache_and_changes_epoch() -> None:
+def test_disconnect_invalidates_cache_events_snapshot_and_epoch() -> None:
     async def scenario() -> None:
         manager = _manager()
         await manager.connect("plc1")
         state = manager._state("plc1")
         state.cache["n1"] = _runtime("n1", True)
+        state.events.append(_runtime("n1", True))
+        state.last_snapshot = manager.realtime_status("plc1")
         before = state.epoch
         await manager.disconnect("plc1")
         assert state.cache == {}
-        assert state.events == state.events.__class__(maxlen=state.events.maxlen)
+        assert not state.events
+        assert state.last_snapshot is None
         assert state.epoch > before
 
     asyncio.run(scenario())
 
 
-def test_realtime_event_drain_preserves_transient_for_history() -> None:
+def test_history_drain_discards_unrelated_backlog_and_keeps_requested_overflow() -> None:
+    manager = _manager()
+    state = manager._state("plc1")
+    now = datetime.now(timezone.utc)
+    for index in range(20):
+        state.events.append(
+            _runtime(
+                "noise",
+                index,
+                stamp=now + timedelta(milliseconds=index),
+            )
+        )
+    state.events.append(_runtime("n1", True, stamp=now + timedelta(milliseconds=30)))
+    state.events.append(_runtime("n1", False, stamp=now + timedelta(milliseconds=40)))
+
+    first = manager.drain_realtime_events("plc1", node_ids=("n1",), max_events=1)
+    assert [item.value for item in first] == [True]
+    assert [item.node_id for item in state.events] == ["n1"]
+
+    second = manager.drain_realtime_events("plc1", node_ids=("n1",), max_events=10)
+    assert [item.value for item in second] == [False]
+    assert not state.events
+
+
+def test_realtime_event_drain_preserves_out_of_order_transient_for_history() -> None:
     class _HistoryManager:
         def __init__(self) -> None:
             now = datetime.now(timezone.utc)
+            # Delivery order is intentionally reversed. History must normalize by
+            # source timestamp before deriving transitions.
             self.events = [
-                _runtime("n1", True, stamp=now),
                 _runtime("n1", False, stamp=now + timedelta(milliseconds=100)),
+                _runtime("n1", True, stamp=now),
             ]
             self.current = _runtime(
                 "n1", False, stamp=now + timedelta(milliseconds=200)
@@ -265,7 +344,9 @@ def test_realtime_event_drain_preserves_transient_for_history() -> None:
     assert len(transitions) == 1
     assert transitions[0].old_value is True
     assert transitions[0].new_value is False
-    assert (transitions[0].timestamp - collector.store.latest_samples()[0].timestamp).total_seconds() <= 0
+    latest = collector.store.latest_samples()[0]
+    assert latest.value is False
+    assert latest.timestamp >= transitions[0].timestamp
 
 
 def test_realtime_manager_does_not_expose_write_surface() -> None:
