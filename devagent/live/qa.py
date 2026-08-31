@@ -163,22 +163,74 @@ def _provider_payload(
     }
 
 
+# Generated prose needs a broader guard than the user-request control detector.
+# These phrases are intentionally action/object oriented so normal diagnostic
+# wording such as "start by inspecting the safety chain" remains allowed while
+# indirect machine-control advice is rejected regardless of sentence grammar.
 _FORBIDDEN_CONTROL_PHRASES = (
     "force the",
     "force tag",
+    "force output",
+    "force coil",
     "write the",
     "write tag",
+    "write output",
     "bypass the",
     "bypass safety",
+    "bypass interlock",
+    "reset the",
+    "reset safety",
+    "reset fault",
+    "reset trip",
+    "reset plc",
+    "reset controller",
+    "reset drive",
     "download to plc",
+    "download to the plc",
+    "upload to plc",
+    "upload to the plc",
     "change plc mode",
+    "change the plc mode",
+    "change controller mode",
+    "change the controller mode",
     "set the output",
     "set output",
+    "set the tag",
+    "set tag",
+    "start the line",
+    "start line",
+    "start the machine",
+    "start machine",
+    "start the motor",
+    "start motor",
+    "start the conveyor",
+    "start conveyor",
+    "start the equipment",
+    "start equipment",
+    "stop the line",
+    "stop line",
+    "stop the machine",
+    "stop machine",
+    "stop the motor",
+    "stop motor",
+    "stop the conveyor",
+    "stop conveyor",
+    "stop the equipment",
+    "stop equipment",
+    "jog the",
+    "jog axis",
+    "jog motor",
+    "override the",
+    "override interlock",
+    "override safety",
+    "command the motor",
+    "command the drive",
+    "command the output",
 )
 
 
 def _contains_forbidden_control_advice(text: str) -> bool:
-    lowered = text.casefold()
+    lowered = " ".join(str(text or "").casefold().split())
     return any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
 
 
@@ -241,11 +293,18 @@ def answer_commissioning_question(
         )
 
     answer = str(response["answer"]).strip()
-    next_checks = tuple(str(item).strip() for item in response.get("next_checks", ()) if str(item).strip())
-    if _contains_forbidden_control_advice(answer) or any(
-        _contains_forbidden_control_advice(item)
-        for item in next_checks
-    ):
+    next_checks = tuple(
+        str(item).strip()
+        for item in response.get("next_checks", ())
+        if str(item).strip()
+    )
+    provider_limitations = tuple(
+        str(item).strip()
+        for item in response.get("limitations", ())
+        if str(item).strip()
+    )
+    generated_text = (answer, *next_checks, *provider_limitations)
+    if any(_contains_forbidden_control_advice(item) for item in generated_text):
         return LiveCommissioningAnswer(
             question=deterministic.question,
             target_output=deterministic.target_output,
@@ -265,11 +324,6 @@ def answer_commissioning_question(
             ai_assisted=False,
         )
 
-    provider_limitations = tuple(
-        str(item).strip()
-        for item in response.get("limitations", ())
-        if str(item).strip()
-    )
     return LiveCommissioningAnswer(
         question=question,
         target_output=diagnosis.target_output,
