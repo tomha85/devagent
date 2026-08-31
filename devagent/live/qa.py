@@ -228,10 +228,44 @@ _FORBIDDEN_CONTROL_PHRASES = (
     "command the output",
 )
 
+_GENERATED_CONTROL_OBJECTS = (
+    "line",
+    "machine",
+    "motor",
+    "conveyor",
+    "equipment",
+    "output",
+    "tag",
+    "drive",
+    "axis",
+    "robot",
+    "cell",
+    "system",
+    "plc",
+    "controller",
+)
+
+_FORBIDDEN_TURN_CONTROL_PHRASES = tuple(
+    phrase
+    for object_name in _GENERATED_CONTROL_OBJECTS
+    for phrase in (
+        f"turn on the {object_name}",
+        f"turn on {object_name}",
+        f"turn off the {object_name}",
+        f"turn off {object_name}",
+        f"turn the {object_name} on",
+        f"turn {object_name} on",
+        f"turn the {object_name} off",
+        f"turn {object_name} off",
+    )
+)
+
 
 def _contains_forbidden_control_advice(text: str) -> bool:
     lowered = " ".join(str(text or "").casefold().split())
-    return any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES)
+    return any(phrase in lowered for phrase in _FORBIDDEN_CONTROL_PHRASES) or any(
+        phrase in lowered for phrase in _FORBIDDEN_TURN_CONTROL_PHRASES
+    )
 
 
 def answer_commissioning_question(
