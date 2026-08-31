@@ -165,10 +165,11 @@ def _provider_payload(
 
 
 # Generated prose needs a broader guard than the user-request control detector.
-# The guard normalizes lightweight Markdown/quote delimiters, then requires an
-# actual PLC-like or machine action object before treating a control verb as
-# prohibited. This blocks quoted canonical references without rejecting safety
-# boundary prose such as "Write access is disabled" or "Reset commands are unavailable".
+# The guard normalizes lightweight Markdown/quote delimiters and then treats
+# action targets as unsafe by default unless they are explicitly bounded meta
+# nouns. This keeps lowercase engineering tags protected without relying on
+# capitalization heuristics, while allowing safety-boundary prose such as
+# "Write access is disabled" or "Reset commands are unavailable".
 _FORBIDDEN_CONTROL_PHRASES = (
     "download to plc",
     "download to the plc",
@@ -180,7 +181,8 @@ _FORBIDDEN_CONTROL_PHRASES = (
     "change the controller mode",
 )
 
-_PLC_REFERENCE_TOKEN = r"[A-Za-z_][A-Za-z0-9_.:\[\]]*"
+_PLC_REFERENCE_TOKEN = r"[A-Za-z_][A-Za-z0-9_.:\[\]-]*"
+_TURN_TARGET_PHRASE = rf"{_PLC_REFERENCE_TOKEN}(?:\s+{_PLC_REFERENCE_TOKEN}){{0,5}}"
 _REFERENCE_DELIMITER_RE = re.compile(r"[`\"'“”‘’()]", flags=re.UNICODE)
 
 _SAFE_CONTROL_META_TARGETS = frozenset(
@@ -199,11 +201,15 @@ _SAFE_CONTROL_META_TARGETS = frozenset(
         "documentation",
         "docs",
         "evidence",
+        "explanation",
+        "explanations",
         "guidance",
         "instruction",
         "instructions",
         "logging",
         "logs",
+        "message",
+        "messages",
         "note",
         "notes",
         "operation",
@@ -214,8 +220,12 @@ _SAFE_CONTROL_META_TARGETS = frozenset(
         "reports",
         "request",
         "requests",
+        "response",
+        "responses",
         "scope",
         "support",
+        "text",
+        "wording",
     }
 )
 
@@ -264,38 +274,37 @@ _GENERATED_START_STOP_CONTROL_RE = re.compile(
 )
 
 _GENERATED_TURN_PREFIX_RE = re.compile(
-    rf"\bturn\s+(?:on|off)\s+(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\b",
+    rf"\bturn\s+(?:on|off)\s+(?:the\s+)?(?P<target>{_TURN_TARGET_PHRASE})\b",
     flags=re.IGNORECASE,
 )
 
 _GENERATED_TURN_SUFFIX_RE = re.compile(
-    rf"\bturn\s+(?:the\s+)?(?P<target>{_PLC_REFERENCE_TOKEN})\s+(?:on|off)\b",
+    rf"\bturn\s+(?:the\s+)?(?P<target>{_TURN_TARGET_PHRASE})\s+(?:on|off)\b",
     flags=re.IGNORECASE,
 )
 
 _GENERATED_PLC_TRANSFER_RE = re.compile(
     r"\b(?:download|upload)\b[^.!?\n]{0,120}\b(?:to|into|onto)\s+"
-    r"(?:the\s+)?(?:plc|controller)\b",
+    r"(?:the\s+)?(?:[A-Za-z][A-Za-z0-9_-]*\s+){0,4}(?:plc|controller)\b",
     flags=re.IGNORECASE,
 )
 
 
 def _looks_like_plc_action_object(value: str) -> bool:
-    token = str(value or "").strip()
-    lowered = token.casefold()
-    if not token or lowered in _SAFE_CONTROL_META_TARGETS:
+    token = " ".join(str(value or "").split()).strip()
+    if not token:
         return False
-    if lowered in _GENERIC_MACHINE_CONTROL_TARGETS:
+    parts = tuple(part.casefold() for part in token.split())
+    if parts and all(part in _SAFE_CONTROL_META_TARGETS for part in parts):
+        return False
+    if any(part in _GENERIC_MACHINE_CONTROL_TARGETS for part in parts):
         return True
-    if any(char in token for char in "_.:[]"):
-        return True
-    if any(char.isdigit() for char in token):
-        return True
-    if len(token) > 1 and token.isupper():
-        return True
-    return any(char.isupper() for char in token[1:]) and any(
-        char.islower() for char in token
-    )
+
+    # Safety-first: once a generated sentence applies a control verb to a
+    # concrete target that is not an explicitly safe meta noun, reject it.
+    # This intentionally covers valid all-lowercase canonical tags such as
+    # ``out`` or ``ready`` without guessing from capitalization.
+    return any(part not in _SAFE_CONTROL_META_TARGETS for part in parts)
 
 
 def _has_generated_control_target_match(
