@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import devagent.live.realtime_assistant as realtime_assistant_module
 from devagent.live.assistant import LiveAssistantReply, LiveAssistantReplyKind
 from devagent.live.diagnosis import (
     LiveCommissioningDiagnosis,
@@ -133,6 +134,78 @@ def test_slow_answer_fails_closed_when_final_revalidation_loses_session(
     assert "CURRENT STATE NOT REVALIDATED" in reply.text
     assert "RECONNECTING" in reply.text
     assert "old current-state ai wording" not in reply.text
+
+
+def test_revalidation_rebuilds_recursive_trace_when_direct_diagnosis_is_unchanged(
+    monkeypatch,
+) -> None:
+    original = _diagnosis(observed_output=False, blocker_value=False)
+
+    assistant = object.__new__(RealtimeSemanticLiveCommissioningAssistant)
+    assistant.reconciliation = object()
+    assistant.connection = SimpleNamespace(plc_id="plc1")
+    assistant.manager = SimpleNamespace(
+        status=lambda plc_id: SimpleNamespace(
+            connected=True,
+            state=PlcSessionState.CONNECTED,
+        )
+    )
+    assistant.context = SimpleNamespace(
+        rules_for_output=lambda target: (SimpleNamespace(id="rule-1"),)
+    )
+    assistant.trace_max_depth = 6
+    assistant.trace_max_nodes = 64
+
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "required_tag_ids_for_recursive_output",
+        lambda *args, **kwargs: ("tag-run", "tag-downstream", "tag-sensor"),
+    )
+
+    async def fake_evidence(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "build_reconciled_live_agent_evidence",
+        fake_evidence,
+    )
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "observations_from_reconciled",
+        lambda value: (SimpleNamespace(tag_id="tag-sensor", value=True),),
+    )
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "diagnose_output",
+        lambda *args, **kwargs: original,
+    )
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "answer_commissioning_question",
+        lambda *args, **kwargs: SimpleNamespace(
+            render_text=lambda: "fresh direct diagnosis"
+        ),
+    )
+    monkeypatch.setattr(
+        realtime_assistant_module,
+        "trace_recursive_diagnosis",
+        lambda *args, **kwargs: SimpleNamespace(
+            roots=(SimpleNamespace(signal="SensorB"),),
+            limitations=(),
+            render_text=lambda: "FRESH RECURSIVE ROOT: SensorB",
+        ),
+    )
+
+    reply = asyncio.run(
+        assistant._refresh_current_diagnosis("why is RunCmd false?", original)
+    )
+
+    assert reply.kind is LiveAssistantReplyKind.DIAGNOSIS
+    assert reply.diagnosis is original
+    assert "CURRENT STATE REVALIDATED" in reply.text
+    assert "FRESH RECURSIVE ROOT: SensorB" in reply.text
+    assert "fresh direct diagnosis" in reply.text
 
 
 def test_answer_keeps_fast_reply_without_extra_revalidation(monkeypatch) -> None:
