@@ -6,11 +6,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
-from .manager import MultiPlcConnectionManager, PlcReadResult, PlcSessionState
+from .manager import (
+    MultiPlcConnectionManager,
+    PlcConnectionSpec,
+    PlcReadResult,
+    PlcSessionState,
+)
 from .models import Quality, RuntimeValue
 from .opcua_client import (
     _is_graceful_shutdown_status,
     _node_id_text,
+    _require_asyncua,
     _runtime_value_from_datavalue,
     _status_name,
 )
@@ -59,7 +65,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
 
     def __init__(
         self,
-        specs: Iterable[Any],
+        specs: Iterable[PlcConnectionSpec],
         *,
         client_factory: Any = None,
         subscription_enabled: bool = True,
@@ -131,8 +137,8 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         state.epoch += 1
         state.cache.clear()
         state.events.clear()
-        if reason:
-            state.last_subscription_error = reason
+        state.last_snapshot = None
+        state.last_subscription_error = reason
 
     async def connect(self, plc_id: str):
         before = self.status(plc_id).successful_connections
@@ -303,13 +309,21 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         plc_id: str,
         node_ids: tuple[str, ...],
     ) -> tuple[RuntimeValue, ...] | None:
+        status = self.status(plc_id)
+        if not status.connected or status.state is not PlcSessionState.CONNECTED:
+            return None
         state = self._state(plc_id)
         now = self._now()
         values: list[RuntimeValue] = []
         timestamps: list[datetime] = []
         for node_id in node_ids:
             value = state.cache.get(node_id)
-            if value is None or value.quality is not Quality.GOOD or value.replayed:
+            if (
+                value is None
+                or value.quality is not Quality.GOOD
+                or value.stale
+                or value.replayed
+            ):
                 return None
             stamp = self._freshness_timestamp(value)
             age = max(0.0, (now - stamp).total_seconds())
@@ -357,7 +371,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
             return PlcReadResult(
                 plc_id=plc_id,
                 values=cached,
-                state=self.status(plc_id).state,
+                state=PlcSessionState.CONNECTED,
             )
 
         entry = self._entry(plc_id)
@@ -373,7 +387,7 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                 )
             try:
                 client = outer_client._require_connected()
-                _Client, ua = __import__("asyncua", fromlist=["Client", "ua"]).Client, __import__("asyncua", fromlist=["ua"]).ua
+                _Client, ua = _require_asyncua()
                 nodes = [client.get_node(node_id) for node_id in node_ids]
                 data_values = await client.uaclient.read_attributes(
                     [node.nodeid for node in nodes],
@@ -439,14 +453,26 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         if unknown:
             raise KeyError(f"Unknown PLC id(s): {', '.join(unknown)}")
         normalized = {
-            plc_id: tuple(dict.fromkeys(str(node_id).strip() for node_id in node_ids if str(node_id).strip()))
+            plc_id: tuple(
+                dict.fromkeys(
+                    str(node_id).strip()
+                    for node_id in node_ids
+                    if str(node_id).strip()
+                )
+            )
             for plc_id, node_ids in node_ids_by_plc.items()
         }
         await asyncio.gather(
-            *(self.monitor_node_ids(plc_id, node_ids) for plc_id, node_ids in normalized.items())
+            *(
+                self.monitor_node_ids(plc_id, node_ids)
+                for plc_id, node_ids in normalized.items()
+            )
         )
         results = await asyncio.gather(
-            *(self._batch_read_isolated(plc_id, node_ids) for plc_id, node_ids in normalized.items())
+            *(
+                self._batch_read_isolated(plc_id, node_ids)
+                for plc_id, node_ids in normalized.items()
+            )
         )
         return {result.plc_id: result for result in results}
 
