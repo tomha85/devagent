@@ -508,11 +508,11 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
                     )
 
         if (
-            raw_reply.kind in {
-                LiveAssistantReplyKind.DIAGNOSIS,
-                LiveAssistantReplyKind.SYSTEM_OVERVIEW,
-            }
-            and raw_reply.target_output is not None
+            raw_reply.kind is LiveAssistantReplyKind.SYSTEM_OVERVIEW
+            or (
+                raw_reply.kind is LiveAssistantReplyKind.DIAGNOSIS
+                and raw_reply.target_output is not None
+            )
         ):
             self._last_system_health_reply = None
 
