@@ -43,6 +43,12 @@ def test_generated_control_guard_rejects_delimited_canonical_references() -> Non
     assert _contains_forbidden_control_advice("Turn on `Conveyor7`.")
 
 
+def test_generated_control_guard_rejects_lowercase_engineering_targets() -> None:
+    assert _contains_forbidden_control_advice("Force out true.")
+    assert _contains_forbidden_control_advice("Write ready to false.")
+    assert _contains_forbidden_control_advice("Set permissive false.")
+
+
 def test_generated_control_guard_rejects_plc_transfer_with_intervening_object() -> None:
     assert _contains_forbidden_control_advice(
         "Download the project to the PLC."
@@ -50,6 +56,18 @@ def test_generated_control_guard_rejects_plc_transfer_with_intervening_object() 
     assert _contains_forbidden_control_advice(
         "Upload the revised program into the controller."
     )
+    assert _contains_forbidden_control_advice(
+        "Download the project into the target PLC."
+    )
+    assert _contains_forbidden_control_advice(
+        "Upload the program to the backup controller."
+    )
+
+
+def test_generated_control_guard_rejects_multiword_turn_targets() -> None:
+    assert _contains_forbidden_control_advice("Turn the main conveyor off.")
+    assert _contains_forbidden_control_advice("Turn the cooling water pump on.")
+    assert _contains_forbidden_control_advice("Turn off the main conveyor.")
 
 
 def test_generated_control_guard_allows_read_only_meta_wording() -> None:
@@ -69,9 +87,12 @@ def test_generated_control_guard_allows_read_only_meta_wording() -> None:
 
 def test_control_request_guard_accepts_suffix_turn_forms_without_blocking_diagnostics() -> None:
     assert is_plc_control_request("turn the machine off")
+    assert is_plc_control_request("turn the main conveyor off")
     assert is_plc_control_request("Can you turn Conveyor7 on?")
+    assert is_plc_control_request("Could you turn the cooling water pump on?")
     assert is_plc_control_request("please turn the motor off")
     assert not is_plc_control_request("Why did the motor turn off?")
+    assert not is_plc_control_request("Why did the cooling water pump turn off?")
 
 
 def test_suffix_turn_control_request_clears_prior_health_and_target_context(monkeypatch) -> None:
@@ -79,7 +100,7 @@ def test_suffix_turn_control_request_clears_prior_health_and_target_context(monk
     assistant._last_system_health_reply = _health_reply()
     assistant._last_target = "RunCmd"
     refusal = LiveAssistantReply(
-        question="turn the machine off",
+        question="turn the main conveyor off",
         kind=LiveAssistantReplyKind.LIMITATION,
         text="READ ONLY refusal",
         target_output=None,
@@ -94,7 +115,7 @@ def test_suffix_turn_control_request_clears_prior_health_and_target_context(monk
         fake_semantic_answer,
     )
 
-    reply = asyncio.run(assistant.answer("turn the machine off"))
+    reply = asyncio.run(assistant.answer("turn the main conveyor off"))
 
     assert reply is refusal
     assert assistant._last_system_health_reply is None
