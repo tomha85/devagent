@@ -599,6 +599,15 @@ why did RunCmd stop 20 seconds ago?
 what should I check next?
 ```
 
+After a whole-system health answer, immediate bounded follow-ups can be conversational:
+
+```text
+how do I fix this?
+why?
+what should I check first?
+is it still bad?
+```
+
 Example healthy result:
 
 ```text
@@ -626,6 +635,14 @@ RunCmd = False
 
 A question such as `is motor fault?` may resolve to the exact engineering signal `DriveFault`. DevAgent can prove the **current PLC signal value** when trusted evidence exists, but it will not claim a physical motor/device root cause unless that deeper cause is actually supported by imported engineering or device/runtime evidence.
 
+#### Conversational whole-system follow-ups
+
+After a validated whole-system `SYSTEM_HEALTH` result, DevAgent may use one bounded conversational context to understand immediate follow-ups such as `how to fix`, `why`, `what should I check first?`, or `is it still bad?`. The previous answer is **context only, not current engineering truth**.
+
+Before answering an accepted whole-system follow-up, Live re-runs the deterministic **CURRENT** system-health diagnosis from trusted OPC UA evidence. The LLM may explain that newly proven result, but it cannot replace it. If the runtime health truth changes while AI wording is being prepared and the configured final-revalidation threshold is exceeded, the AI wording is discarded and the newest deterministic result wins.
+
+Unrelated or confidently different-topic turns clear the whole-system conversational context. Ambiguous/low-confidence routing remains fail-closed. PLC control/write/force/reset/bypass/upload/download/mode/start/stop/jog/override requests never enter whole-system recovery; they are refused under the READ ONLY boundary and terminate stale conversational context rather than reusing it later.
+
 ### 5. Current state is refreshed when you ask again
 
 Current-state answers are query-driven and evidence-bounded. Each new current-state question reads fresh trusted OPC UA evidence for the required signals. DevAgent does not keep an old fault as current truth just because it appeared earlier in the conversation.
@@ -643,7 +660,7 @@ Example:
        → current status is evaluated from the new OPC UA values
 ```
 
-Conversation context can help interpret follow-ups such as `why?`, but it does not override trusted current PLC evidence.
+Conversation context can help interpret immediate bounded follow-ups, but every accepted whole-system follow-up re-runs current deterministic health before explanation; prior conversational text never overrides trusted current PLC evidence.
 
 Historical questions are separate. Enable a positive retention window such as `--history-seconds 60` or `--history-seconds 900` so Live can retain a bounded rolling timeline of trusted transitions. `--history-seconds 0` disables historical capture.
 
@@ -851,7 +868,7 @@ no write
 no force
 no reset
 no bypass
-no download
+no upload / download
 no mode change
 no start / stop control
 ```
@@ -1051,7 +1068,7 @@ DevAgent uses defense-in-depth controls around repository modification, command 
 - remote branch state is captured and rechecked to block publication races;
 - protected targets are refused and force push is never used;
 - no runtime PR, merge, rebase, force-push, or deployment automation;
-- DevAgent Live exposes no PLC write/force/reset/bypass/download/mode-change/start-stop control surface;
+- DevAgent Live exposes no PLC write/force/reset/bypass/upload/download/mode-change/start-stop control surface;
 - DevAgent Live uses trusted-current/freshness/reconciliation gates before runtime values can support definitive commissioning conclusions.
 
 On Linux, DevAgent can execute engineering commands inside a bubblewrap-based operating-system sandbox. Production qualification exercises required sandbox mode with network access denied. Required mode fails closed when isolation cannot be established rather than silently falling back. Review the report and pushed branch before integrating customer or production code: sandboxing reduces execution risk, but it does not make arbitrary generated changes universally safe.
@@ -1192,7 +1209,7 @@ The current core includes evidence-backed `VERIFIED` / `PARTIALLY_VERIFIED` / `B
 
 Current `main` also includes vendor-dispatched **DevAgent PLC** engineering review for **Rockwell Studio 5000 full-project `.L5X`**, **Siemens TIA Portal exported engineering artifacts**, and **Schneider Electric EcoStruxure Control Expert / Unity Pro XML engineering exports with `.XEF` preferred**. All three feed the canonical PLC engineering/review/FAT/report pipeline while preserving vendor-specific proof boundaries. Siemens qualification is cumulative through its V9 support-accounting stack. Schneider includes V9 support closeout plus additive V10 real-ST local-action modeling and the PLC Report Contract V1, while unsupported or stateful/runtime-dependent regions remain explicitly `PARTIAL`, `OPAQUE`, `PROTECTED`, or FAT-gated. Rockwell remains the mature Studio 5000 path. These are bounded static engineering capabilities; they do not claim simulator, HIL, field wiring, process physics, or real-controller execution unless corresponding runtime evidence is supplied.
 
-Current `main` also includes the independent **DevAgent Live** onsite product branch. Live consumes canonical PLC engineering context through a read-only adapter contract without modifying DevAgent PLC authority, reconciles engineering tags to OPC UA runtime nodes, applies trust/freshness/replay gates, and supports direct/recursive blocker diagnosis, stateful and historical context, numeric/analog comparisons, one-shot/latch awareness, handshake diagnosis, AOI/FB context, fault-code observations, generic sequencer context, motion/PID context, and UDT/array structure context. Unsupported or insufficiently evidenced behavior remains bounded/indeterminate. Live's Commercial V1 field-readiness gate still requires real OPC UA 14/14, real three-vendor endpoint evidence, production doctor evidence, and a qualifying read-only soak; merged feature coverage is not itself a claim of completed field certification.
+Current `main` also includes the independent **DevAgent Live** onsite product branch. Live consumes canonical PLC engineering context through a read-only adapter contract without modifying DevAgent PLC authority, reconciles engineering tags to OPC UA runtime nodes, applies trust/freshness/replay gates, and supports direct/recursive blocker diagnosis, stateful and historical context, numeric/analog comparisons, one-shot/latch awareness, handshake diagnosis, AOI/FB context, fault-code observations, generic sequencer context, motion/PID context, UDT/array structure context, and bounded conversational whole-system follow-ups that re-read current deterministic health before explanation and final-revalidate slow AI wording. Unsupported or insufficiently evidenced behavior remains bounded/indeterminate. Live's Commercial V1 field-readiness gate still requires real OPC UA 14/14, real three-vendor endpoint evidence, production doctor evidence, and a qualifying read-only soak; merged feature coverage is not itself a claim of completed field certification.
 
 These results are **bounded engineering claims**, not universal-correctness or market-superiority claims. They are tied to explicit qualification cases, pinned revisions, deterministic fixtures/external oracles where applicable, and the environments actually exercised by CI or documented local qualification.
 
