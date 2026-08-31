@@ -99,6 +99,7 @@ class _IntegrityState:
     continuity_gap_reason: str | None = None
     capacity_gap_started_at: datetime | None = None
     monitoring_disabled_gap_started_at: datetime | None = None
+    reconfiguration_gap_started_at: datetime | None = None
     setup_gap_starts: dict[str, datetime] = field(default_factory=dict)
 
 
@@ -249,6 +250,38 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         )
         state.continuity_gap_started_at = None
         state.continuity_gap_reason = None
+
+    def _open_reconfiguration_gap(self, plc_id: str) -> None:
+        state = self._integrity_state(plc_id)
+        if state.reconfiguration_gap_started_at is not None:
+            return
+        start = self._now_utc()
+        state.reconfiguration_gap_started_at = start
+        self._record_gap(
+            plc_id,
+            source="MONITOR_SET_RECONFIGURATION",
+            reason=(
+                "the active OPC UA monitored set is being replaced; notification continuity "
+                "during the reconfiguration interval cannot be proven"
+            ),
+            timestamp=start,
+            open_interval=True,
+        )
+
+    def _close_reconfiguration_gap(self, plc_id: str) -> None:
+        state = self._integrity_state(plc_id)
+        start = state.reconfiguration_gap_started_at
+        if start is None:
+            return
+        self._record_gap(
+            plc_id,
+            source="MONITOR_SET_RECONFIGURATION",
+            reason="the replacement monitored set became active",
+            timestamp=start,
+            end_timestamp=self._now_utc(),
+            count_toward_total=False,
+        )
+        state.reconfiguration_gap_started_at = None
 
     def _set_capacity_gap(self, plc_id: str, omitted: tuple[str, ...]) -> None:
         state = self._integrity_state(plc_id)
@@ -454,6 +487,12 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
         async with realtime.lock:
             before = set(realtime.monitored_nodes)
             healthy_task = realtime.task is not None and not realtime.task.done()
+            should_record_reconfiguration = (
+                self.subscription_enabled
+                and healthy_task
+                and bool(before)
+                and before != selected_set
+            )
             realtime.monitored_nodes = selected_set
             if before == selected_set and (
                 not self.subscription_enabled or healthy_task or not selected_set
@@ -463,6 +502,9 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
             generation = realtime.generation
             old_task, realtime.task = realtime.task, None
             integrity.active_nodes.clear()
+
+        if should_record_reconfiguration:
+            self._open_reconfiguration_gap(plc_id)
 
         if old_task is not None:
             old_task.cancel()
@@ -474,6 +516,8 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                 pass
 
         if not self.subscription_enabled or not selected_set:
+            if not selected_set:
+                self._close_reconfiguration_gap(plc_id)
             return
 
         async with realtime.lock:
@@ -571,14 +615,13 @@ class ProductionRealtimeMultiPlcConnectionManager(RealtimeMultiPlcConnectionMana
                         else None
                     )
                     self._close_continuity_gap(plc_id)
+                    self._close_reconfiguration_gap(plc_id)
                     last_subscription_id = getattr(subscription, "subscription_id", None)
 
                     while generation == realtime.generation:
                         try:
                             event = await subscription.next_event(timeout=1.0)
                         except asyncio.TimeoutError:
-                            # A stable machine can legitimately have no DataChange for
-                            # many seconds. Idle time is not a subscription/evidence gap.
                             if not bool(getattr(outer_client, "connected", False)):
                                 self._invalidate_realtime(
                                     plc_id,
@@ -712,9 +755,6 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
         return (gap.plc_id, gap.source, gap.node_id, gap.timestamp)
 
     def record_gap(self, gap: LiveEvidenceGap) -> None:
-        # A connection/setup/capacity gap is first emitted open and later emitted
-        # again with the same key and a closing timestamp. Replace rather than
-        # double-counting it in historical presentation.
         key = self._gap_key(gap)
         items = list(self._evidence_gaps)
         for index, existing in enumerate(items):
@@ -817,17 +857,18 @@ class EvidenceIntegrityTimelineStore(LiveTimelineStore):
                 continue
 
             first = variants[0]
-            conflict_gap = LiveEvidenceGap(
-                timestamp=first.timestamp,
-                end_timestamp=first.timestamp,
-                plc_id=first.plc_id,
-                source="TIMESTAMP_CONFLICT",
-                reason=(
-                    "conflicting values share the same source timestamp; temporal ordering is not defensible"
-                ),
-                node_id=first.node_id,
+            self.record_gap(
+                LiveEvidenceGap(
+                    timestamp=first.timestamp,
+                    end_timestamp=first.timestamp,
+                    plc_id=first.plc_id,
+                    source="TIMESTAMP_CONFLICT",
+                    reason=(
+                        "conflicting values share the same source timestamp; temporal ordering is not defensible"
+                    ),
+                    node_id=first.node_id,
+                )
             )
-            self.record_gap(conflict_gap)
             normalized.append(
                 LiveHistoricalSample(
                     timestamp=first.timestamp,
