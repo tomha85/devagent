@@ -128,15 +128,27 @@ def _prepare_certificate_input(
     uacrypto = _require_uacrypto()
     if is_pkcs12_path(path):
         bundle = load_pkcs12_bundle(path, password=password, label=label)
-        if bundle.certificate is None:
+        if bundle.certificate is not None:
+            selected_certificate = bundle.certificate
+            remaining_chain = bundle.additional_certificates
+        elif len(bundle.additional_certificates) == 1:
+            # Certificate-only PKCS#12 exports have no key-associated primary
+            # certificate; cryptography returns the sole certificate in `cas`.
+            selected_certificate = bundle.additional_certificates[0]
+            remaining_chain = ()
+        elif not bundle.additional_certificates:
             raise LiveConnectionError(f"OPC UA {label} PKCS#12 bundle contains no certificate")
+        else:
+            raise LiveConnectionError(
+                f"OPC UA {label} PKCS#12 bundle contains multiple certificates and no unique primary certificate"
+            )
         certificate = uacrypto.CertProperties(
-            certificate_der(bundle.certificate),
+            certificate_der(selected_certificate),
             extension="der",
         )
         chain = tuple(
             uacrypto.CertProperties(certificate_der(item), extension="der")
-            for item in bundle.additional_certificates
+            for item in remaining_chain
         )
         return certificate, chain
 
