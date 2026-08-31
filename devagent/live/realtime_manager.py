@@ -125,6 +125,10 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         )
         return max(candidates) if candidates else value.received_at
 
+    @staticmethod
+    def _has_authoritative_timestamp(value: RuntimeValue) -> bool:
+        return value.source_timestamp is not None or value.server_timestamp is not None
+
     def _state(self, plc_id: str) -> _RealtimeState:
         try:
             return self._realtime[plc_id]
@@ -141,10 +145,11 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
         """Store a node value only when it is not older than current cache truth.
 
         OPC UA subscription notifications and an in-flight multi-node Read can finish
-        in either order. Evidence timestamps decide first. For an exact timestamp tie,
-        a direct batch read wins over a queued subscription event because it was
-        explicitly requested at question time. Same-source ties use local receipt
-        order. The event queue still retains subscription notifications for history.
+        in either order. Evidence timestamps decide when both sides provide an OPC UA
+        source/server timestamp. If either side lacks those timestamps, cross-source
+        ordering is unknowable, so an explicit question-time batch Read wins over a
+        queued subscription notification. Same-source ties use local receipt order.
+        The event queue still retains subscription notifications for history.
         """
         current = state.cache.get(value.node_id)
         if current is None:
@@ -152,17 +157,28 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
             state.cache_sources[value.node_id] = source
             return True
 
-        incoming_observed = self._cache_observed_at(value)
-        current_observed = self._cache_observed_at(current)
-        replace = incoming_observed > current_observed
-        if incoming_observed == current_observed:
+        current_source = state.cache_sources.get(value.node_id, "")
+        incoming_timed = self._has_authoritative_timestamp(value)
+        current_timed = self._has_authoritative_timestamp(current)
+
+        if source != current_source and (not incoming_timed or not current_timed):
             incoming_rank = self._CACHE_SOURCE_RANK.get(source, 0)
-            current_source = state.cache_sources.get(value.node_id, "")
             current_rank = self._CACHE_SOURCE_RANK.get(current_source, 0)
-            if incoming_rank > current_rank:
-                replace = True
-            elif incoming_rank == current_rank:
+            if incoming_rank != current_rank:
+                replace = incoming_rank > current_rank
+            else:
                 replace = value.received_at >= current.received_at
+        else:
+            incoming_observed = self._cache_observed_at(value)
+            current_observed = self._cache_observed_at(current)
+            replace = incoming_observed > current_observed
+            if incoming_observed == current_observed:
+                incoming_rank = self._CACHE_SOURCE_RANK.get(source, 0)
+                current_rank = self._CACHE_SOURCE_RANK.get(current_source, 0)
+                if incoming_rank > current_rank:
+                    replace = True
+                elif incoming_rank == current_rank:
+                    replace = value.received_at >= current.received_at
 
         if replace:
             state.cache[value.node_id] = value
@@ -455,6 +471,9 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     error=reason,
                 )
             try:
+                state = self._state(plc_id)
+                read_epoch = state.epoch
+                read_client = outer_client
                 client = outer_client._require_connected()
                 _Client, ua = _require_asyncua()
                 nodes = [client.get_node(node_id) for node_id in node_ids]
@@ -462,6 +481,26 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     [node.nodeid for node in nodes],
                     ua.AttributeIds.Value,
                 )
+
+                state = self._state(plc_id)
+                continuity_changed = (
+                    state.epoch != read_epoch
+                    or entry.client is not read_client
+                    or not bool(getattr(outer_client, "connected", False))
+                )
+                if continuity_changed:
+                    reason = (
+                        f"PLC {plc_id} connection continuity changed during coherent batch read"
+                    )
+                    self._set_state(entry, PlcSessionState.RECONNECTING, error=reason)
+                    self._invalidate_realtime(plc_id, reason=reason)
+                    return PlcReadResult(
+                        plc_id=plc_id,
+                        values=(),
+                        state=PlcSessionState.RECONNECTING,
+                        error=reason,
+                    )
+
                 if len(data_values) != len(node_ids):
                     raise RuntimeError(
                         f"OPC UA batch read returned {len(data_values)} values for {len(node_ids)} requested nodes"
@@ -474,13 +513,13 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     )
                     for node_id, data_value in zip(node_ids, data_values, strict=True)
                 )
-                state = self._state(plc_id)
                 for value in batch_values:
                     self._update_cache(state, value, source="BATCH_READ")
 
                 # A subscription notification may have completed while the Read was
-                # in flight. Return whichever per-node value won timestamp ordering,
-                # not blindly the batch response.
+                # in flight. Return whichever per-node value won safe ordering. When
+                # that merge is not coherent enough, fall back to the single batch
+                # response instead of diagnosing across mismatched observation times.
                 values = tuple(state.cache[node_id] for node_id in node_ids)
                 selected_sources = {
                     state.cache_sources.get(node_id, "") for node_id in node_ids
@@ -490,8 +529,19 @@ class RealtimeMultiPlcConnectionManager(MultiPlcConnectionManager):
                     if selected_sources == {"BATCH_READ"}
                     else "REALTIME_MERGED"
                 )
-                evidence_timestamps = [self._evidence_timestamp(value) for value in values]
-                skew = self._timestamp_skew(evidence_timestamps)
+                receipt_timestamps = [value.received_at for value in values]
+                skew = self._timestamp_skew(receipt_timestamps)
+                if (
+                    snapshot_source == "REALTIME_MERGED"
+                    and skew is not None
+                    and skew > self.max_snapshot_skew_seconds
+                ):
+                    values = batch_values
+                    snapshot_source = "OPCUA_BATCH_READ"
+                    skew = self._timestamp_skew(
+                        value.received_at for value in batch_values
+                    )
+
                 state.last_snapshot = RealtimeSnapshotStatus(
                     plc_id=plc_id,
                     connection_epoch=state.epoch,
