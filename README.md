@@ -683,6 +683,125 @@ These separate options control recursive deterministic PLC root-cause tracing:
 
 Therefore a command using `--max-depth 5 --max-nodes 500` may still print a banner such as `Recursive root-cause trace: ENABLED (depth=6, nodes=64)` if the trace options were left at their defaults. That is expected.
 
+### OPC UA connection and security setup
+
+For a real PLC, gateway, Ignition OPC UA server, Kepware/KEPServerEX instance, or other OPC UA server, **start with endpoint discovery instead of guessing the security profile**:
+
+```bash
+devagent live probe opc.tcp://192.168.10.20:4840/
+```
+
+`probe` reports the server-advertised endpoint, SecurityPolicy, MessageSecurityMode, user-token types, certificate requirements, DevAgent compatibility, and a preferred supported profile. DevAgent does not modify the server during discovery or connection.
+
+Use the same OPC UA endpoint/security information already configured for the customer's SCADA or OPC UA client. The server administrator remains responsible for endpoint enablement, accounts, certificates, trust lists, firewall/network access, and permissions.
+
+| Existing OPC UA server profile | DevAgent setup |
+| --- | --- |
+| `NoSecurity` + Anonymous | `--endpoint` only |
+| `NoSecurity` + UserName | `--username`, `--password-env`, and explicit `--allow-insecure-username-password` |
+| Secure + Anonymous | application certificate/key + `--trust-store` or `--server-certificate` |
+| Secure + UserName | application certificate/key + server trust + `--username` / `--password-env` |
+| Secure + X.509 user | application certificate/key + server trust + user certificate/key |
+
+For most customer/factory PKI deployments, prefer a reusable **trust store / CA trust** rather than pinning a separate server certificate for every PLC:
+
+```text
+pki/
+├── devagent-app.der
+├── devagent-app-key.pem
+└── trusted/
+    ├── factory-opcua-root-ca.crt
+    └── factory-opcua-intermediate-ca.cer
+```
+
+Then a typical production connection is:
+
+```bash
+export PLC_OPCUA_PASSWORD='...'
+
+devagent live assist \
+  --project-folder /path/to/customer-line1 \
+  --primary-project plc/Line1.L5X \
+  --endpoint opc.tcp://plc01.factory.local:4840/ \
+  --security-policy Basic256Sha256 \
+  --security-mode SignAndEncrypt \
+  --client-certificate ./pki/devagent-app.der \
+  --client-private-key ./pki/devagent-app-key.pem \
+  --trust-store ./pki/trusted \
+  --username devagent_reader \
+  --password-env PLC_OPCUA_PASSWORD
+```
+
+If PLC01, PLC02, PLC03, and other servers have certificates issued by the same trusted CA chain, the same `--trust-store` can validate them; a separate `--server-certificate` is not required for each PLC. For a self-signed server or when exact per-server pinning is desired, use:
+
+```bash
+--server-certificate ./pki/plc01-server.der
+```
+
+`--server-certificate` and `--trust-store` may also be supplied together for exact pinning plus CA/trust validation. An optional CRL directory can be added with a trust store:
+
+```bash
+--trust-store ./pki/trusted \
+--crl-store ./pki/crl
+```
+
+DevAgent accepts the common certificate formats customers encounter in OPC UA, Windows/enterprise PKI, Ignition, and PLC engineering tools:
+
+| Certificate input | Supported formats |
+| --- | --- |
+| Client application certificate | `.der`, `.pem`, `.cer`, `.crt`, `.pfx`, `.p12` |
+| Pinned server certificate | `.der`, `.pem`, `.cer`, `.crt`, `.pfx`, `.p12` |
+| Trust-store certificates / CA roots | `.der`, `.pem`, `.cer`, `.crt`, `.pfx`, `.p12` |
+| X.509 user certificate | `.der`, `.pem`, `.cer`, `.crt`, `.pfx`, `.p12` |
+| CRL | `.der`, `.pem`, `.crl` |
+
+`.cer` and `.crt` are detected from their content, so either DER-encoded or PEM-encoded certificate files are accepted. A `.pfx/.p12` bundle may contain both the certificate and its private key, so a separate key file is not required for that identity.
+
+Example password-protected application `.pfx`:
+
+```bash
+export DEVAGENT_PFX_PASSWORD='...'
+export PLC_OPCUA_PASSWORD='...'
+
+devagent live assist \
+  --project-folder /path/to/customer-line1 \
+  --primary-project plc/Line1.L5X \
+  --endpoint opc.tcp://plc01.factory.local:4840/ \
+  --security-policy Basic256Sha256 \
+  --security-mode SignAndEncrypt \
+  --client-certificate ./pki/devagent-client.pfx \
+  --private-key-password-env DEVAGENT_PFX_PASSWORD \
+  --trust-store ./pki/trusted \
+  --username devagent_reader \
+  --password-env PLC_OPCUA_PASSWORD
+```
+
+There is intentionally no `--client-private-key` above because the private key is inside the PKCS#12 bundle.
+
+OPC UA **application identity** and **X.509 user identity** are different concepts. `--client-certificate` identifies the DevAgent OPC UA application/SecureChannel; `--user-certificate` is an optional certificate-based user login for the Session. For a server that uses X.509 user authentication:
+
+```bash
+devagent live assist \
+  --project-folder /path/to/customer-line1 \
+  --primary-project plc/Line1.L5X \
+  --endpoint opc.tcp://plc01.factory.local:4840/ \
+  --security-policy Basic256Sha256 \
+  --security-mode SignAndEncrypt \
+  --client-certificate ./pki/devagent-app.der \
+  --client-private-key ./pki/devagent-app-key.pem \
+  --trust-store ./pki/trusted \
+  --user-certificate ./pki/operator-user.der \
+  --user-private-key ./pki/operator-user-key.pem
+```
+
+If the X.509 user identity is a `.pfx/.p12` containing its private key, use `--user-certificate` plus `--user-private-key-password-env` and omit `--user-private-key`.
+
+Passwords and PKCS#12/key passwords are referenced through environment variables; do not put literal secrets on the command line or in commissioning JSON.
+
+Modern executable secure-channel policies include `Basic256Sha256`, `Aes128_Sha256_RsaOaep` / `Aes128Sha256RsaOaep`, and `Aes256_Sha256_RsaPss` / `Aes256Sha256RsaPss`, with `Sign` or `SignAndEncrypt`. `Basic128Rsa15` and `Basic256` remain deprecated compatibility profiles. Recognized ECC policies and IssuedToken/JWT profiles are reported as runtime-unavailable rather than silently downgraded.
+
+For the complete profile matrix, trust-store/CRL rules, PKCS#12 password options, exact-pin behavior, aliases, multi-PLC commissioning JSON, and unsupported-runtime boundaries, see **[DevAgent Live OPC UA Connection Profiles V1](docs/live/opcua-connection-profiles-v1.md)**.
+
 ### 8. Connect to a real customer/site project
 
 A typical handoff workspace can contain one authoritative PLC engineering export plus supplemental engineering files:
