@@ -14,9 +14,9 @@ from .engineering_context import load_live_engineering_context
 from .errors import LiveError
 from .manager import PlcConnectionSpec
 from .project_folder import LiveProjectFolderIntake, inspect_live_project_folder
+from .realtime_assistant import RealtimeSemanticLiveCommissioningAssistant
 from .realtime_manager import RealtimeMultiPlcConnectionManager
 from .recursive_diagnosis import DEFAULT_TRACE_MAX_DEPTH, DEFAULT_TRACE_MAX_NODES
-from .semantic_assistant import SemanticLiveCommissioningAssistant
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -137,8 +137,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=250.0,
         help=(
-            "Maximum age of a trusted subscription snapshot that may answer a current-state "
-            "question without an extra OPC UA Read. Default: 250 ms."
+            "Maximum age of a trusted realtime snapshot that may answer a current-state question "
+            "without an extra OPC UA Read. Default: 250 ms."
         ),
     )
     parser.add_argument(
@@ -162,6 +162,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Disable continuous OPC UA subscriptions and use coherent on-demand reads plus the "
             "historical polling fallback only."
+        ),
+    )
+    parser.add_argument(
+        "--final-revalidate-ms",
+        type=float,
+        default=500.0,
+        help=(
+            "If current-target answer preparation takes at least this long, revalidate the "
+            "deterministic diagnosis before displaying it. Default: 500 ms."
         ),
     )
     parser.add_argument(
@@ -319,7 +328,7 @@ async def _run_session(args: argparse.Namespace) -> int:
         max_snapshot_skew_seconds=args.realtime_max_skew_ms / 1000.0,
         max_monitored_nodes=args.realtime_max_tags,
     )
-    assistant = SemanticLiveCommissioningAssistant(
+    assistant = RealtimeSemanticLiveCommissioningAssistant(
         loaded,
         connection,
         manager=manager,
@@ -331,6 +340,7 @@ async def _run_session(args: argparse.Namespace) -> int:
         history_seconds=args.history_seconds,
         history_poll_seconds=args.history_poll_seconds,
         history_max_tags=args.history_max_tags,
+        final_revalidation_after_seconds=args.final_revalidate_ms / 1000.0,
     )
     assistant.project_workspace = project_intake
 
@@ -378,6 +388,9 @@ async def _run_session(args: argparse.Namespace) -> int:
             f"publishing={args.realtime_publishing_ms:g}ms "
             f"cache_fresh={args.realtime_cache_ms:g}ms "
             f"max_skew={args.realtime_max_skew_ms:g}ms"
+        )
+        print(
+            f"Final current-state revalidation: {args.final_revalidate_ms:g}ms threshold"
         )
         print(
             f"Historical timeline: {'ENABLED' if assistant.history_seconds > 0 else 'OFF'} "
