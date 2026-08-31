@@ -487,7 +487,7 @@ class RealtimeSemanticLiveCommissioningAssistant(SemanticLiveCommissioningAssist
             )
 
         if (
-            self._last_system_health_reply is not None
+            getattr(self, "_last_system_health_reply", None) is not None
             and self.provider is not None
             and not is_plc_control_request(str(question or ""))
             and raw_reply.kind is LiveAssistantReplyKind.LIMITATION
