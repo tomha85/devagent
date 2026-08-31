@@ -14,8 +14,9 @@ from .engineering_context import load_live_engineering_context
 from .errors import LiveError
 from .manager import PlcConnectionSpec
 from .project_folder import LiveProjectFolderIntake, inspect_live_project_folder
+from .realtime_assistant import RealtimeSemanticLiveCommissioningAssistant
+from .realtime_manager import RealtimeMultiPlcConnectionManager
 from .recursive_diagnosis import DEFAULT_TRACE_MAX_DEPTH, DEFAULT_TRACE_MAX_NODES
-from .semantic_assistant import SemanticLiveCommissioningAssistant
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -108,13 +109,69 @@ def _build_parser() -> argparse.ArgumentParser:
         "--history-poll-seconds",
         type=float,
         default=1.0,
-        help="Read-only historical polling interval in seconds. Default: 1.0.",
+        help=(
+            "Historical fallback/heartbeat interval in seconds. Realtime subscription events are "
+            "captured between polls when available. Default: 1.0."
+        ),
     )
     parser.add_argument(
         "--history-max-tags",
         type=int,
         default=64,
         help="Maximum safely reconciled tags retained in the rolling timeline. Default: 64.",
+    )
+    parser.add_argument(
+        "--realtime-sampling-ms",
+        type=float,
+        default=100.0,
+        help="OPC UA monitored-item sampling interval for Live realtime evidence. Default: 100 ms.",
+    )
+    parser.add_argument(
+        "--realtime-publishing-ms",
+        type=float,
+        default=250.0,
+        help="OPC UA subscription publishing interval for Live realtime evidence. Default: 250 ms.",
+    )
+    parser.add_argument(
+        "--realtime-cache-ms",
+        type=float,
+        default=250.0,
+        help=(
+            "Maximum age of a trusted realtime snapshot that may answer a current-state question "
+            "without an extra OPC UA Read. Default: 250 ms."
+        ),
+    )
+    parser.add_argument(
+        "--realtime-max-skew-ms",
+        type=float,
+        default=250.0,
+        help=(
+            "Maximum timestamp skew across cached dependency values before Live forces a coherent "
+            "multi-node OPC UA Read. Default: 250 ms."
+        ),
+    )
+    parser.add_argument(
+        "--realtime-max-tags",
+        type=int,
+        default=256,
+        help="Maximum safely reconciled OPC UA nodes continuously monitored. Default: 256.",
+    )
+    parser.add_argument(
+        "--no-realtime-subscription",
+        action="store_true",
+        help=(
+            "Disable continuous OPC UA subscriptions and use coherent on-demand reads plus the "
+            "historical polling fallback only."
+        ),
+    )
+    parser.add_argument(
+        "--final-revalidate-ms",
+        type=float,
+        default=250.0,
+        help=(
+            "If current-target answer preparation takes at least this long, revalidate the "
+            "deterministic diagnosis before displaying it. Default: 250 ms."
+        ),
     )
     parser.add_argument(
         "--ai",
@@ -181,7 +238,7 @@ def _provider_from_args(args: argparse.Namespace) -> ModelProvider | None:
 
 
 def _print_help() -> None:
-    print(":status       Show OPC UA connection and security state")
+    print(":status       Show OPC UA connection, security, and realtime evidence state")
     print(":overview     Show engineering, mapping, stateful, and history overview")
     print(":workspace    Show project-folder intake and authority boundary")
     print(":mappings     Show accepted/unresolved engineering-to-OPC-UA mapping counts")
@@ -231,6 +288,21 @@ def _print_status(assistant: BaseLiveCommissioningAssistant) -> None:
     print(f"Connection: {status.state.value}")
     print(f"Authentication: {status.authentication_mode}")
     print(f"Security: {status.security_summary}")
+    realtime_status = getattr(assistant.manager, "realtime_status", None)
+    if callable(realtime_status):
+        realtime = realtime_status(assistant.connection.plc_id)
+        print(f"Realtime evidence: {realtime.source}")
+        print(f"Realtime connection epoch: {realtime.connection_epoch}")
+        print(f"Realtime monitored nodes: {realtime.monitored_nodes}")
+        print(f"Realtime cached nodes: {realtime.cached_nodes}")
+        print(f"Realtime event backlog: {realtime.event_backlog}")
+        if realtime.max_timestamp_skew_seconds is not None:
+            print(
+                "Last snapshot max timestamp skew: "
+                f"{realtime.max_timestamp_skew_seconds * 1000.0:.1f} ms"
+            )
+        if realtime.last_subscription_error:
+            print(f"Realtime limitation: {realtime.last_subscription_error}")
     print("Mode: READ ONLY")
     print("PLC write capability: NOT AVAILABLE")
     if status.last_error:
@@ -247,9 +319,19 @@ async def _run_session(args: argparse.Namespace) -> int:
         endpoint=args.endpoint,
         security=security_from_args(args),
     )
-    assistant = SemanticLiveCommissioningAssistant(
+    manager = RealtimeMultiPlcConnectionManager(
+        [connection],
+        subscription_enabled=not args.no_realtime_subscription,
+        sampling_interval_ms=args.realtime_sampling_ms,
+        publishing_interval_ms=args.realtime_publishing_ms,
+        cache_fresh_seconds=args.realtime_cache_ms / 1000.0,
+        max_snapshot_skew_seconds=args.realtime_max_skew_ms / 1000.0,
+        max_monitored_nodes=args.realtime_max_tags,
+    )
+    assistant = RealtimeSemanticLiveCommissioningAssistant(
         loaded,
         connection,
+        manager=manager,
         browse_max_depth=args.max_depth,
         browse_max_nodes=args.max_nodes,
         provider=provider,
@@ -258,11 +340,21 @@ async def _run_session(args: argparse.Namespace) -> int:
         history_seconds=args.history_seconds,
         history_poll_seconds=args.history_poll_seconds,
         history_max_tags=args.history_max_tags,
+        final_revalidation_after_seconds=args.final_revalidate_ms / 1000.0,
     )
     assistant.project_workspace = project_intake
 
     try:
         await assistant.start()
+        if assistant.reconciliation is not None:
+            await manager.monitor_node_ids(
+                connection.plc_id,
+                (
+                    mapping.selected_node_id
+                    for mapping in assistant.reconciliation.accepted_mappings()
+                    if mapping.selected_node_id is not None
+                ),
+            )
         print("DEVAGENT LIVE ASSIST")
         if project_intake is not None:
             print(f"Project workspace: {project_intake.root}")
@@ -289,6 +381,16 @@ async def _run_session(args: argparse.Namespace) -> int:
             f"timers={assistant.stateful_coverage.timers} "
             f"counters={assistant.stateful_coverage.counters} "
             f"state_machines={assistant.stateful_coverage.state_machines}"
+        )
+        print(
+            f"Realtime OPC UA evidence: {'OFF' if args.no_realtime_subscription else 'ENABLED'} "
+            f"sampling={args.realtime_sampling_ms:g}ms "
+            f"publishing={args.realtime_publishing_ms:g}ms "
+            f"cache_fresh={args.realtime_cache_ms:g}ms "
+            f"max_skew={args.realtime_max_skew_ms:g}ms"
+        )
+        print(
+            f"Final current-state revalidation: {args.final_revalidate_ms:g}ms threshold"
         )
         print(
             f"Historical timeline: {'ENABLED' if assistant.history_seconds > 0 else 'OFF'} "
@@ -330,6 +432,14 @@ async def _run_session(args: argparse.Namespace) -> int:
                 continue
             if line == ":refresh":
                 reconciliation = await assistant.refresh_mapping()
+                await manager.monitor_node_ids(
+                    connection.plc_id,
+                    (
+                        mapping.selected_node_id
+                        for mapping in reconciliation.accepted_mappings()
+                        if mapping.selected_node_id is not None
+                    ),
+                )
                 print(
                     "Tag reconciliation refreshed: "
                     f"mapped={len(reconciliation.accepted_mappings())} "
