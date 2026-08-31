@@ -2,13 +2,15 @@
 
 Thanks for your interest in contributing to DevAgent.
 
-DevAgent is an evidence-driven engineering agent. Contributions should preserve its core principle: **do not claim a software change is verified unless the repository evidence and executed checks support that conclusion.**
+DevAgent is an evidence-driven engineering agent. Contributions should preserve its core principle: **do not claim a software or industrial engineering result is verified unless the available evidence and executed checks support that conclusion.**
 
 ## Before you start
 
 For non-trivial changes, consider opening an issue first so the problem, scope, and expected behavior are clear before implementation.
 
 Please keep pull requests focused. Avoid unrelated refactors, formatting churn, dependency upgrades, or broad architectural changes unless they are part of the stated goal.
+
+Read [OPEN_SOURCE.md](OPEN_SOURCE.md) before contributing PLC fixtures, vendor examples, qualification cases, commissioning evidence, or other industrial data.
 
 ## Development setup
 
@@ -42,7 +44,25 @@ Changes should follow these rules:
 7. Do not fabricate command execution or verification results.
 8. Keep provider-specific behavior behind the provider abstraction when possible.
 9. Treat `BLOCKED` or `PARTIALLY_VERIFIED` as valid outcomes when evidence is insufficient.
-10. Keep automated tests deterministic and free of paid cloud-model calls.
+10. Keep automated tests deterministic and free of paid cloud-model calls unless a test is explicitly defined as an opt-in live-provider qualification.
+11. Preserve the DevAgent Live read-only boundary. Do not add PLC write, force, reset, bypass, download, mode-change, start/stop, or equivalent machine-control authority to model-facing Live workflows.
+12. Keep static/simulator evidence distinct from real-vendor or field certification claims.
+
+## Public/private asset boundary
+
+This repository is the open-source core. Do **not** contribute confidential or non-redistributable assets, including:
+
+- customer PLC projects, exports, requirements, reports, or screenshots;
+- customer OPC UA endpoints, credentials, certificates, mappings, namespaces, runtime captures, or site topology;
+- customer incident history, evidence history, or proprietary operating data;
+- private field-failure corpora or production compatibility intelligence;
+- vendor artifacts whose licenses do not permit redistribution;
+- customer-specific semantic/rule packs or private qualification corpora;
+- employer or third-party confidential material.
+
+Use synthetic, independently authored, public-domain, permissively licensed, or otherwise redistribution-safe fixtures.
+
+If you are unsure whether you have the right to publish a PLC export, sample, log, screenshot, document, or vendor artifact, do not include it in a pull request until redistribution rights are confirmed.
 
 ## Tests
 
@@ -50,7 +70,7 @@ Bug fixes should include a regression test that fails before the fix when practi
 
 Features should include tests for the new behavior and relevant edge cases.
 
-Changes to orchestration, safety, verification, review, provider contracts, worktrees, repository discovery, or branch publishing should include focused regression coverage because these areas directly affect the trustworthiness of final outcomes.
+Changes to orchestration, safety, verification, review, provider contracts, worktrees, repository discovery, branch publishing, PLC proof semantics, or Live trust/evidence handling should include focused regression coverage because these areas directly affect the trustworthiness of final outcomes.
 
 Branch-publishing tests should use local bare Git repositories where possible and must prove that protected/non-`VERIFIED` publication attempts are rejected, current development branches continue by fast-forward only, and remote movement/divergence is blocked. CLI tests should also prove that the engineering report is emitted before any commit/push action.
 
@@ -64,7 +84,8 @@ A good pull request includes:
 - tests added or updated,
 - verification commands and results,
 - known limitations,
-- confirmation that no unrelated changes were included.
+- confirmation that no unrelated changes were included,
+- confirmation that no customer, confidential, or non-redistributable vendor material was added.
 
 Please ensure before opening the PR:
 
@@ -90,6 +111,10 @@ Prefer clear commit messages that explain the engineering change rather than the
 
 If your contribution fixes a vulnerability or exposes a sensitive security issue, follow [SECURITY.md](SECURITY.md) instead of opening a public issue with exploit details.
 
-## License
+## License and contribution rights
 
-By contributing to DevAgent, you agree that your contribution will be licensed under the project's [MIT License](LICENSE).
+By contributing to DevAgent, you agree that your accepted contribution will be licensed under the project's [MIT License](LICENSE).
+
+You must have the right to submit the contribution under that license. Do not submit code, documentation, datasets, PLC exports, screenshots, logs, vendor material, customer material, or other content that you are not authorized to redistribute under compatible terms.
+
+The MIT License for repository content does not grant rights to use DevAgent branding in a way that implies official endorsement. See [TRADEMARKS.md](TRADEMARKS.md).
