@@ -150,12 +150,9 @@ def test_late_cross_cycle_event_is_preserved_and_transitions_are_recomputed() ->
     t1 = now - timedelta(seconds=2)
     t2 = now - timedelta(seconds=1)
 
-    # First cycle sees False at t0 and False at t2.
     store.append_many((_sample("tag-1", False, t0), _sample("tag-1", False, t2)))
     assert store.transitions() == ()
 
-    # A delayed t1=True arrives in a later collector cycle. Production history
-    # retains it and recomputes temporal truth instead of dropping it as "old".
     store.append(_sample("tag-1", True, t1))
     transitions = store.transitions()
     assert len(transitions) == 2
@@ -191,9 +188,11 @@ def test_historical_diagnosis_marks_overlapping_evidence_gap_incomplete() -> Non
             _sample("tag-1", True, now - timedelta(seconds=3)),
         )
     )
+    gap_time = now - timedelta(seconds=2)
     store.record_gap(
         LiveEvidenceGap(
-            timestamp=now - timedelta(seconds=2),
+            timestamp=gap_time,
+            end_timestamp=gap_time,
             plc_id="plc1",
             source="SERVER_MONITORED_ITEM_OVERFLOW",
             reason="server queue purged changes",
@@ -220,9 +219,11 @@ def test_historical_diagnosis_marks_overlapping_evidence_gap_incomplete() -> Non
 def test_absence_of_transition_is_not_proof_when_window_has_gap() -> None:
     store = EvidenceIntegrityTimelineStore(retention_seconds=60.0)
     now = datetime.now(timezone.utc)
+    gap_time = now - timedelta(seconds=1)
     store.record_gap(
         LiveEvidenceGap(
-            timestamp=now - timedelta(seconds=1),
+            timestamp=gap_time,
+            end_timestamp=gap_time,
             plc_id="plc1",
             source="CONNECTION_CONTINUITY",
             reason="session reconnect",
@@ -245,9 +246,11 @@ def test_absence_of_transition_is_not_proof_when_window_has_gap() -> None:
 def test_gap_outside_requested_window_does_not_poison_current_window() -> None:
     store = EvidenceIntegrityTimelineStore(retention_seconds=120.0)
     now = datetime.now(timezone.utc)
+    gap_time = now - timedelta(seconds=90)
     store.record_gap(
         LiveEvidenceGap(
-            timestamp=now - timedelta(seconds=90),
+            timestamp=gap_time,
+            end_timestamp=gap_time,
             plc_id="plc1",
             source="CONNECTION_CONTINUITY",
             reason="old reconnect",
@@ -288,7 +291,6 @@ def test_timeline_stress_stays_bounded_and_keeps_latest_truth() -> None:
         )
         for index in range(1000)
     ]
-    # Reverse a large batch to emulate severe delayed/out-of-order delivery.
     store.append_many(reversed(samples))
     assert len(store._samples) <= 500
     assert len(store.transitions()) <= 300
