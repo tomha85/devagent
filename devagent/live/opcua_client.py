@@ -270,7 +270,7 @@ def _prepare_application_identity(security: LiveSecurityConfig) -> tuple[Any, An
         password=None,
         label="client application certificate",
     )
-    assert self.security.client_private_key is not None
+    assert security.client_private_key is not None
     private_key, private_key_password = _prepare_private_key_input(
         security.client_private_key,
         password=security.private_key_password,
