@@ -93,11 +93,7 @@ jobs:
               echo "Release $TAG exists but its Git tag is missing." >&2
               exit 1
             fi
-            if [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
-              echo "Release $TAG already exists at $TAG_SHA, expected $RELEASE_SHA" >&2
-              exit 1
-            fi
-            echo "Release $TAG already exists at $TAG_SHA."
+            echo "Release $TAG already exists at $TAG_SHA; no new tag is created for an unchanged package version."
             echo "create=false" >> "$GITHUB_OUTPUT"
           else
             if [ "$TAG_EXISTS" = "true" ] && [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
