@@ -1,8 +1,6 @@
 name: Production CI
 
 on:
-  push:
-    branches: [main, "feat/rockwell-*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
