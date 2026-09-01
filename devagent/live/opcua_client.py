@@ -903,7 +903,10 @@ class ReadOnlyOpcUaClient:
                 if self.auto_reconnect and (connection_changed or recovering_state):
                     recovery_started = self._last_connection_loss_at or loop.time()
                     await self.wait_until_connected(
-                        timeout_seconds=self.reconnect_request_timeout_seconds
+                        timeout_seconds=max(
+                            self.reconnect_request_timeout_seconds,
+                            timeout_seconds,
+                        )
                     )
                     # asyncua marks the session CONNECTED during ActivateSession
                     # and then restores its tracked subscriptions. Preserve the
