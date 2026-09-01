@@ -1,31 +1,34 @@
-name: Release version after green main CI
+name: Release version after main merge
 
 on:
-  workflow_run:
-    workflows: ["Production CI"]
-    types: [completed]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-version-${{ github.event.workflow_run.head_sha }}
+  group: release-version-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   release:
-    name: Ensure GitHub release
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+    name: Build smoke and ensure GitHub release
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout the exact verified main revision
+      - name: Checkout exact main revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
       - name: Resolve and validate release version
         id: version
@@ -45,24 +48,35 @@ jobs:
           match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_text)
           assert match and match.group(1) == version, (match.group(1) if match else None, version)
 
-          with pathlib.Path("release-version.txt").open("w", encoding="utf-8") as handle:
-              handle.write(f"v{version}\n")
+          pathlib.Path("release-version.txt").write_text(f"v{version}\n", encoding="utf-8")
           PY
           echo "tag=$(cat release-version.txt)" >> "$GITHUB_OUTPUT"
           rm release-version.txt
 
-      - name: Verify the workflow is inspecting the CI-tested main commit
+      - name: Verify exact main revision
         env:
-          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+
+      - name: Build and smoke-test release artifacts
         run: |
-          test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
+          python -m pip install --upgrade pip build twine
+          rm -rf dist build
+          python -m build
+          python -m twine check dist/*
+          python -m venv /tmp/devagent-release-smoke
+          /tmp/devagent-release-smoke/bin/python -m pip install --upgrade pip
+          /tmp/devagent-release-smoke/bin/python -m pip install dist/*.whl
+          /tmp/devagent-release-smoke/bin/devagent --version
+          /tmp/devagent-release-smoke/bin/devagent --help >/dev/null
+          /tmp/devagent-release-smoke/bin/python -m pip check
 
       - name: Check existing tag and release
         id: existing
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_SHA: ${{ github.sha }}
         shell: bash
         run: |
           git fetch --tags --prune
@@ -79,11 +93,15 @@ jobs:
               echo "Release $TAG exists but its Git tag is missing." >&2
               exit 1
             fi
+            if [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
+              echo "Release $TAG already exists at $TAG_SHA, expected $RELEASE_SHA" >&2
+              exit 1
+            fi
             echo "Release $TAG already exists at $TAG_SHA."
             echo "create=false" >> "$GITHUB_OUTPUT"
           else
-            if [ "$TAG_EXISTS" = "true" ] && [ "$TAG_SHA" != "$VERIFIED_SHA" ]; then
-              echo "Existing tag $TAG points to $TAG_SHA, expected new release commit $VERIFIED_SHA" >&2
+            if [ "$TAG_EXISTS" = "true" ] && [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
+              echo "Existing tag $TAG points to $TAG_SHA, expected release commit $RELEASE_SHA" >&2
               exit 1
             fi
             echo "create=true" >> "$GITHUB_OUTPUT"
@@ -94,10 +112,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$VERIFIED_SHA" \
+            --target "$RELEASE_SHA" \
             --title "DevAgent $TAG" \
             --generate-notes
