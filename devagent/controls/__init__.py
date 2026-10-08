@@ -1,17 +1,9 @@
-"""Deterministic company-wide controls engineering platform.
+"""Deterministic controls engineering authoring foundation.
 
-The package owns specification, generation, staging verification, FAT planning,
-and self-service authoring. Production PLC/HMI deployment remains outside this
-authority boundary.
+Keep package import lightweight: generation/verification/portal modules are
+opt-in so importing the schema never pulls PLC analysis or server surfaces.
 """
 
-from devagent.controls.build import (
-    ControlsBuildError,
-    ControlsBuildResult,
-    build_controls_project,
-    build_controls_spec,
-    verify_controls_build,
-)
 from devagent.controls.ir import ControlsIR, build_controls_ir, controls_ir_sha256
 from devagent.controls.parser import load_control_system_spec
 from devagent.controls.schema import (
@@ -23,14 +15,9 @@ from devagent.controls.schema import (
 __all__ = [
     "CONTROL_SPEC_SCHEMA",
     "ControlSpecError",
-    "ControlsBuildError",
-    "ControlsBuildResult",
     "ControlsIR",
     "build_controls_ir",
-    "build_controls_project",
-    "build_controls_spec",
     "controls_ir_sha256",
     "load_control_system_spec",
     "parse_control_system_payload",
-    "verify_controls_build",
 ]
