@@ -89,6 +89,9 @@ def _base_document(controller_name: str, platform: str) -> tuple[ET.Element, ET.
                     f"packaged Rockwell reference template has no {child_name}"
                 )
             existing.clear()
+        data_types = plc.find("DataTypes")
+        if data_types is not None:
+            data_types.clear()
         aois = plc.find("AddOnInstructionDefinitions")
         if aois is not None:
             aois.clear()
@@ -354,19 +357,30 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
     if tags_node is None:
         tags_node = ET.SubElement(plc, "Tags")
     for name in tags:
-        ET.SubElement(
+        tag = ET.SubElement(
             tags_node,
             "Tag",
             {
                 "Name": name,
                 "TagType": "Base",
                 "DataType": "BOOL",
+                "Radix": "Decimal",
+                "Constant": "false",
                 # Standard commands are the only HMI/operator write surface.
                 # Signals, status, and generated outputs are externally read-only.
                 "ExternalAccess": (
                     "Read/Write" if name in externally_writable else "Read Only"
                 ),
+                "OpcUaAccess": "None",
             },
+        )
+        l5k = ET.SubElement(tag, "Data", {"Format": "L5K"})
+        l5k.text = "0"
+        decorated = ET.SubElement(tag, "Data", {"Format": "Decorated"})
+        ET.SubElement(
+            decorated,
+            "DataValue",
+            {"DataType": "BOOL", "Radix": "Decimal", "Value": "0"},
         )
 
     programs = plc.find("Programs")
