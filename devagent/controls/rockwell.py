@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from importlib.resources import files
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,10 @@ from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 ROCKWELL_GENERATOR_VERSION = "1.0.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
+ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
+ROCKWELL_REFERENCE_PATH = "1-production-files/L5Xs/ExampleForCICD_L85E.L5X"
+ROCKWELL_REFERENCE_BLOB_SHA = "ea3814f7d3657de569539228042903dc9ea8a908"
+ROCKWELL_REFERENCE_LICENSE = "MIT"
 
 
 class RockwellGenerationError(ValueError):
@@ -36,6 +41,81 @@ class RockwellArtifact:
     tags: tuple[str, ...]
     rungs: tuple[GeneratedRung, ...]
     symbol_map: tuple[tuple[str, object], ...]
+
+
+def rockwell_reference_provenance() -> dict[str, str]:
+    return {
+        "repository": ROCKWELL_REFERENCE_REPOSITORY,
+        "path": ROCKWELL_REFERENCE_PATH,
+        "blob_sha": ROCKWELL_REFERENCE_BLOB_SHA,
+        "license": ROCKWELL_REFERENCE_LICENSE,
+        "role": "CONTROLLOGIX_STUDIO5000_EXPORTED_DOCUMENT_SHELL",
+        "studio5000_import_validation": "NOT_RUN_FOR_GENERATED_OUTPUT",
+    }
+
+
+def _base_document(controller_name: str, platform: str) -> tuple[ET.Element, ET.Element]:
+    normalized = platform.strip().upper().replace(" ", "")
+    if normalized in {"CONTROLLOGIX", "1756"}:
+        resource = files("devagent.controls").joinpath(
+            "templates/rockwell/ExampleForCICD_L85E.L5X"
+        )
+        root = ET.fromstring(resource.read_bytes())
+        plc = root.find("Controller")
+        if plc is None:
+            raise RockwellGenerationError("packaged Rockwell reference template has no Controller")
+
+        root.set("TargetName", controller_name)
+        root.set("TargetType", "Controller")
+        root.set("SoftwareRevision", ROCKWELL_SOFTWARE_REVISION)
+        root.attrib.pop("ExportDate", None)
+
+        plc.set("Name", controller_name)
+        plc.set("ProcessorType", "1756-L85E")
+        plc.set("MajorRev", "36")
+        plc.set("MinorRev", "11")
+        for stale_attribute in (
+            "MajorFaultProgram",
+            "ProjectCreationDate",
+            "LastModifiedDate",
+            "CommPath",
+        ):
+            plc.attrib.pop(stale_attribute, None)
+
+        for child_name in ("Tags", "Programs", "Tasks"):
+            existing = plc.find(child_name)
+            if existing is not None:
+                plc.remove(existing)
+        aois = plc.find("AddOnInstructionDefinitions")
+        if aois is not None:
+            aois.clear()
+        return root, plc
+
+    root = ET.Element(
+        "RSLogix5000Content",
+        {
+            "SchemaRevision": ROCKWELL_SCHEMA_REVISION,
+            "SoftwareRevision": ROCKWELL_SOFTWARE_REVISION,
+            "TargetName": controller_name,
+            "TargetType": "Controller",
+            "ContainsContext": "false",
+        },
+    )
+    plc = ET.SubElement(
+        root,
+        "Controller",
+        {
+            "Use": "Target",
+            "Name": controller_name,
+            "ProcessorType": _processor_type(platform),
+            "MajorRev": "36",
+            "MinorRev": "11",
+        },
+    )
+    ET.SubElement(plc, "DataTypes")
+    ET.SubElement(plc, "Modules")
+    ET.SubElement(plc, "AddOnInstructionDefinitions")
+    return root, plc
 
 
 def _processor_type(platform: str) -> str:
@@ -258,29 +338,7 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
     )
     controller_name = controller_symbol(controller.id)
 
-    root = ET.Element(
-        "RSLogix5000Content",
-        {
-            "SchemaRevision": ROCKWELL_SCHEMA_REVISION,
-            "SoftwareRevision": ROCKWELL_SOFTWARE_REVISION,
-            "TargetName": controller_name,
-            "TargetType": "Controller",
-        },
-    )
-    plc = ET.SubElement(
-        root,
-        "Controller",
-        {
-            "Use": "Target",
-            "Name": controller_name,
-            "ProcessorType": _processor_type(controller.platform),
-            "MajorRev": "36",
-            "MinorRev": "11",
-        },
-    )
-    ET.SubElement(plc, "DataTypes")
-    ET.SubElement(plc, "Modules")
-    ET.SubElement(plc, "AddOnInstructionDefinitions")
+    root, plc = _base_document(controller_name, controller.platform)
 
     externally_writable: set[str] = set()
     for item in equipment:
