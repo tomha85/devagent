@@ -16,6 +16,7 @@ from devagent.controls.manifest import build_authoring_manifest
 from devagent.controls.normalize import normalized_spec_payload
 from devagent.controls.parser import load_control_system_spec
 from devagent.controls.portal import serve_portal
+from devagent.controls.review import create_review_request
 from devagent.controls.rules import evaluate_controls_rules, rules_pass
 from devagent.controls.schema import ControlSpecError
 
@@ -48,6 +49,14 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="Verify a previously generated controls build")
     verify.add_argument("build_dir", type=Path)
+
+    review = sub.add_parser(
+        "request-review",
+        help="Create a hash-bound engineering review request for a verified build",
+    )
+    review.add_argument("build_dir", type=Path)
+    review.add_argument("--requested-by", required=True)
+    review.add_argument("--output", required=True, type=Path)
 
     portal = sub.add_parser("portal", help="Run the local self-service Controls engineering portal")
     portal.add_argument("--workspace", type=Path, default=Path(".devagent/controls-portal"))
@@ -130,6 +139,20 @@ def _verify(path: Path) -> int:
     return 0 if result["status"] == "PASS" else 2
 
 
+def _request_review(path: Path, *, requested_by: str, output: Path) -> int:
+    request = create_review_request(
+        path,
+        requested_by=requested_by,
+        output_path=output,
+    )
+    print("CONTROLS_REVIEW_REQUEST=PASS")
+    print(f"PROJECT={request['project_id']}")
+    print(f"REQUESTED_BY={request['requested_by']}")
+    print(f"OUTPUT={output.expanduser().resolve(strict=False)}")
+    print("PRODUCTION_RELEASE_READY=false")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     try:
@@ -141,6 +164,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _build(args.spec, args.output_dir)
         if args.command == "verify":
             return _verify(args.build_dir)
+        if args.command == "request-review":
+            return _request_review(
+                args.build_dir,
+                requested_by=args.requested_by,
+                output=args.output,
+            )
         if args.command == "portal":
             serve_portal(
                 args.workspace,
