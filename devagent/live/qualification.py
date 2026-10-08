@@ -290,7 +290,7 @@ async def _reconnect(_ctx: _Context) -> str:
     task: asyncio.Task[list[Any]] | None = None
     client = ReadOnlyOpcUaClient(
         endpoint, timeout_seconds=0.25, auto_reconnect=True,
-        reconnect_max_delay_seconds=0.25, reconnect_request_timeout_seconds=5.0,
+        reconnect_max_delay_seconds=0.25, reconnect_request_timeout_seconds=1.0,
     )
     await first.start()
     assert first.node_ids is not None
