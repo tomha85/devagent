@@ -67,3 +67,20 @@ def test_generated_l5x_reimports_through_existing_production_analyzer(tmp_path) 
     assert [rung.text for rung in result.project.rungs] == [
         rung.text for rung in artifact.rungs
     ]
+
+
+def test_generated_external_access_only_allows_command_writes(tmp_path) -> None:
+    ir = build_controls_ir(_spec())
+    artifact = render_rockwell_project(ir, ir.controllers[0])
+    path = tmp_path / "PLC_PACK_01.L5X"
+    path.write_bytes(artifact.content)
+
+    project = analyze_rockwell_l5x(path)
+    by_name = {tag.name: tag for tag in project.project.tags}
+    symbols = dict(artifact.symbol_map)["CONV_101"]
+
+    for name in dict(symbols["commands"]).values():
+        assert by_name[name].external_access == "Read/Write"
+    for category in ("signals", "status", "outputs"):
+        for name in dict(symbols[category]).values():
+            assert by_name[name].external_access == "Read Only"
