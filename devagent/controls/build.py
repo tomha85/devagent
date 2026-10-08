@@ -17,6 +17,7 @@ from devagent.controls.parser import load_control_system_spec
 from devagent.controls.rockwell import (
     ROCKWELL_GENERATOR_VERSION,
     render_rockwell_project,
+    rockwell_reference_provenance,
 )
 from devagent.controls.rules import evaluate_controls_rules, rules_pass
 from devagent.controls.schema import parse_control_system_payload
@@ -269,6 +270,7 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
             "vendor_runtime_execution": "NOT_RUN",
             "fat_execution": "NOT_RUN",
         },
+        "rockwell_reference": rockwell_reference_provenance(),
         "rockwell_outputs": rockwell_manifest,
         "artifact_sha256": artifacts,
         "authority": {
@@ -380,6 +382,8 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             "fat": "1.0.0",
         }:
             errors.append("generation manifest generator versions do not match this build engine")
+        if manifest.get("rockwell_reference") != rockwell_reference_provenance():
+            errors.append("generation manifest Rockwell reference provenance is invalid")
         if manifest.get("external_qualification") != {
             "studio5000_import_validation": "NOT_RUN",
             "ignition_gateway_import_validation": "NOT_RUN",
