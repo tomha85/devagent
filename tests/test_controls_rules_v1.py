@@ -74,3 +74,11 @@ def test_faceplate_drift_fails_company_standard() -> None:
     results = evaluate_controls_rules(parse_control_system_payload(payload))
     failures = [item for item in results if item.status == "FAIL"]
     assert any(item.id == "CTRL-E410" for item in failures)
+
+
+def test_faulted_standard_without_interlock_source_fails_closed() -> None:
+    payload = _payload()
+    payload["equipment"][0]["interlocks"] = []
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E320" for item in failures)
