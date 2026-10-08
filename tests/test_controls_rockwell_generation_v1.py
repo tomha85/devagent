@@ -50,7 +50,7 @@ def test_rockwell_generator_is_byte_deterministic_and_logix_bounded() -> None:
     assert first.content == second.content
     assert first.sha256 == second.sha256
     assert all(len(name) <= 40 for name in first.tags)
-    assert len(first.rungs) == 2
+    assert len(first.rungs) == 5
 
 
 def test_generated_l5x_reimports_through_existing_production_analyzer(tmp_path) -> None:
@@ -84,3 +84,16 @@ def test_generated_external_access_only_allows_command_writes(tmp_path) -> None:
     for category in ("signals", "status", "outputs"):
         for name in dict(symbols[category]).values():
             assert by_name[name].external_access == "Read Only"
+
+
+def test_required_status_tags_have_exactly_one_generated_writer(tmp_path) -> None:
+    ir = build_controls_ir(_spec())
+    artifact = render_rockwell_project(ir, ir.controllers[0])
+    path = tmp_path / "PLC_PACK_01.L5X"
+    path.write_bytes(artifact.content)
+    project = analyze_rockwell_l5x(path).project
+
+    symbols = dict(artifact.symbol_map)["CONV_101"]
+    for status_tag in dict(symbols["status"]).values():
+        writers = [rung.id for rung in project.rungs if status_tag in rung.writes]
+        assert len(writers) == 1
