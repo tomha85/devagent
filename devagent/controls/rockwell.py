@@ -207,6 +207,13 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
     ET.SubElement(plc, "Modules")
     ET.SubElement(plc, "AddOnInstructionDefinitions")
 
+    externally_writable: set[str] = set()
+    for item in equipment:
+        symbols = equipment_symbol_map(item)
+        externally_writable.update(
+            str(value) for value in dict(symbols["commands"]).values()
+        )
+
     tags_node = ET.SubElement(plc, "Tags")
     for name in tags:
         ET.SubElement(
@@ -216,7 +223,11 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
                 "Name": name,
                 "TagType": "Base",
                 "DataType": "BOOL",
-                "ExternalAccess": "Read/Write",
+                # Standard commands are the only HMI/operator write surface.
+                # Signals, status, and generated outputs are externally read-only.
+                "ExternalAccess": (
+                    "Read/Write" if name in externally_writable else "Read Only"
+                ),
             },
         )
 
