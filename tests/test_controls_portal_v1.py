@@ -53,3 +53,15 @@ def test_portal_service_reuses_same_deterministic_library(tmp_path) -> None:
     assert review["request"]["requested_action"] == "ENGINEERING_REVIEW"
     assert review["request"]["production_release_ready"] is False
     assert review["request"]["human_engineering_approval_required"] is True
+
+
+def test_portal_uses_portable_filesystem_identity(tmp_path) -> None:
+    payload = _payload()
+    payload["project_id"] = "CELL:01"
+    service = PortalService(tmp_path / "portal")
+
+    result = service.build_payload(payload)
+
+    assert result["status"] == "PASS"
+    assert ":" not in result["build_dir"].split("/")[-1]
+    assert "CELL_01" in result["build_dir"].split("/")[-1]
