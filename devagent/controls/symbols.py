@@ -31,6 +31,17 @@ def rockwell_name(value: str, *, maximum: int = _ROCKWELL_MAX_NAME) -> str:
     return f"{prefix}_{digest}"
 
 
+def portable_name(value: str, *, maximum: int = 64) -> str:
+    """Return a deterministic cross-platform filename/path component."""
+
+    safe = _safe_fragment(value)
+    if len(safe) <= maximum:
+        return safe
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8].upper()
+    prefix = safe[: maximum - len(digest) - 1].rstrip("_")
+    return f"{prefix}_{digest}"
+
+
 def controller_symbol(controller_id: str) -> str:
     return rockwell_name(controller_id)
 
