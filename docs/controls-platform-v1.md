@@ -93,6 +93,12 @@ components.
 
 Generated Rockwell tag external access is least-privilege: command tags are
 `Read/Write`; signals, status, and generated outputs are `Read Only`.
+Required logical status tags are also given deterministic PLC writers: READY is
+derived from permissives/interlocks, RUNNING follows the generated run output,
+and FAULTED is derived from explicit interlock/fault sources. Standards that
+require FAULTED fail closed when no fault/interlock source is declared. Valve
+OPEN/CLOSED status follows its generated commanded outputs; physical position
+feedback remains a separate field-signal contract and is not inferred.
 
 ## Rockwell generation
 
