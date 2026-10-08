@@ -84,3 +84,11 @@ def test_entrypoint_routes_controls_build_verify_and_review(tmp_path, capsys) ->
     requested = capsys.readouterr().out
     assert "CONTROLS_REVIEW_REQUEST=PASS" in requested
     assert review.is_file()
+
+
+def test_entrypoint_routes_controls_catalog(capsys) -> None:
+    assert main(["controls", "catalog"]) == 0
+    output = capsys.readouterr().out
+    assert '"devagent-controls-catalog-v1"' in output
+    assert '"conveyor-v1"' in output
+    assert '"motor-v1"' in output
