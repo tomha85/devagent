@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from devagent.controls.catalog import STANDARDS
 from devagent.controls.build import (
     ControlsBuildError,
     build_controls_spec,
@@ -38,6 +39,22 @@ class PortalService:
             f"{portable_name(spec.project_id)}-{controls_ir_sha256(ir)[:12]}"
         )
         return spec, ir, target
+
+    def catalog_payload(self) -> dict[str, Any]:
+        return {
+            "schema": "devagent-controls-catalog-v1",
+            "standards": [
+                {
+                    "id": item.id,
+                    "equipment_type": item.equipment_type,
+                    "required_commands": list(item.required_commands),
+                    "required_status": list(item.required_status),
+                    "generated_outputs": list(item.generated_outputs),
+                    "default_faceplate": item.default_faceplate,
+                }
+                for item in sorted(STANDARDS.values(), key=lambda value: value.id)
+            ],
+        }
 
     def validate_payload(self, payload: Any) -> dict[str, Any]:
         spec = parse_control_system_payload(payload)
@@ -244,6 +261,9 @@ def serve_portal(
                 return
             if self.path == "/health":
                 self._send_json(HTTPStatus.OK, {"status": "PASS"})
+                return
+            if self.path == "/api/catalog":
+                self._send_json(HTTPStatus.OK, service.catalog_payload())
                 return
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
