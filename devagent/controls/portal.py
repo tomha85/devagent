@@ -18,6 +18,7 @@ from devagent.controls.normalize import normalized_spec_payload
 from devagent.controls.review import create_review_request
 from devagent.controls.rules import evaluate_controls_rules
 from devagent.controls.schema import ControlSpecError, parse_control_system_payload
+from devagent.controls.symbols import portable_name
 
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -33,7 +34,9 @@ class PortalService:
     def _build_target(self, payload: Any) -> tuple[Any, Any, Path]:
         spec = parse_control_system_payload(payload)
         ir = build_controls_ir(spec)
-        target = self.workspace / f"{spec.project_id}-{controls_ir_sha256(ir)[:12]}"
+        target = self.workspace / (
+            f"{portable_name(spec.project_id)}-{controls_ir_sha256(ir)[:12]}"
+        )
         return spec, ir, target
 
     def validate_payload(self, payload: Any) -> dict[str, Any]:
@@ -103,7 +106,10 @@ class PortalService:
         review_path = (
             self.workspace
             / "review-requests"
-            / f"{ir.project_id}-{controls_ir_sha256(ir)[:12]}-{requester_hash}.json"
+            / (
+                f"{portable_name(ir.project_id)}-{controls_ir_sha256(ir)[:12]}-"
+                f"{requester_hash}.json"
+            )
         )
         if review_path.exists():
             request = json.loads(review_path.read_text(encoding="utf-8"))
