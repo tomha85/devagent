@@ -91,8 +91,10 @@ class PortalService:
         requested_by: str,
     ) -> dict[str, Any]:
         _spec, ir, target = self._build_target(payload)
-        if not target.exists():
-            self.build_payload(payload)
+        # Always verify or build the deterministic target before reusing/creating
+        # any review request. A stale build from an older generator must not be
+        # silently accepted merely because the directory already exists.
+        self.build_payload(payload)
 
         identity = requested_by.strip()
         if not identity:
