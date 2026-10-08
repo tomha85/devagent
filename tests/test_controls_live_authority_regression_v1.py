@@ -4,22 +4,29 @@ import ast
 from pathlib import Path
 
 
-def test_controls_authoring_has_no_plc_or_live_runtime_dependency() -> None:
+def test_controls_authoring_has_no_runtime_or_control_dependency() -> None:
     root = Path(__file__).resolve().parents[1] / "devagent" / "controls"
     assert root.is_dir()
 
-    forbidden_prefixes = ("devagent.live", "devagent.plc")
+    forbidden_prefixes = (
+        "devagent.live",
+        "devagent.plc",
+        "subprocess",
+        "socket",
+        "ctypes",
+        "asyncio.subprocess",
+    )
     for path in sorted(root.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
                 assert not node.module.startswith(forbidden_prefixes), (
-                    f"{path.name} crosses authority boundary via {node.module}"
+                    f"{path.name} crosses authoring authority boundary via {node.module}"
                 )
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert not alias.name.startswith(forbidden_prefixes), (
-                        f"{path.name} crosses authority boundary via {alias.name}"
+                        f"{path.name} crosses authoring authority boundary via {alias.name}"
                     )
 
 
