@@ -51,12 +51,21 @@ def test_missing_required_reset_fails_company_standard() -> None:
     assert any(item.id == "CTRL-E100" and "RESET" in item.summary for item in failures)
 
 
-def test_high_alarm_without_source_fails_company_standard() -> None:
+def test_any_generated_alarm_without_source_fails_company_standard() -> None:
     payload = _payload()
+    payload["equipment"][0]["alarms"][0]["priority"] = "MEDIUM"
     del payload["equipment"][0]["alarms"][0]["source_signal"]
     results = evaluate_controls_rules(parse_control_system_payload(payload))
     failures = [item for item in results if item.status == "FAIL"]
     assert any(item.id == "CTRL-E500" for item in failures)
+
+
+def test_missing_faceplate_fails_generated_hmi_contract() -> None:
+    payload = _payload()
+    payload["equipment"][0]["hmi"]["faceplate"] = None
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E410" for item in failures)
 
 
 def test_faceplate_drift_fails_company_standard() -> None:
