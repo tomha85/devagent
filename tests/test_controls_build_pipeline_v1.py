@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import json
 
-from devagent.controls.build import build_controls_project, verify_controls_build
+import pytest
+
+from devagent.controls.build import (
+    ControlsBuildError,
+    build_controls_project,
+    build_controls_spec,
+    verify_controls_build,
+)
+from devagent.controls.schema import parse_control_system_payload
 
 
 def _write_spec(tmp_path):
@@ -86,3 +94,29 @@ def test_verifier_detects_post_build_tampering(tmp_path) -> None:
     verification = verify_controls_build(output)
     assert verification["status"] == "FAIL"
     assert any("hash mismatch" in item for item in verification["errors"])
+
+
+def test_controller_names_that_collide_after_rockwell_normalization_fail_closed(tmp_path) -> None:
+    payload = {
+        "schema": "devagent-controls-spec-v1",
+        "project_id": "COLLISION_TEST",
+        "controllers": [
+            {"id": "PLC-1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
+            {"id": "PLC_1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
+        ],
+        "equipment": [],
+    }
+    base = json.loads(_write_spec(tmp_path).read_text(encoding="utf-8"))["equipment"][0]
+    first = dict(base)
+    first["id"] = "CONV_A"
+    first["controller"] = "PLC-1"
+    first["alarms"] = []
+    first["requirements"] = []
+    second = json.loads(json.dumps(first))
+    second["id"] = "CONV_B"
+    second["controller"] = "PLC_1"
+    payload["equipment"] = [first, second]
+
+    spec = parse_control_system_payload(payload)
+    with pytest.raises(ControlsBuildError, match="controller identities collide"):
+        build_controls_spec(spec, tmp_path / "collision-build")
