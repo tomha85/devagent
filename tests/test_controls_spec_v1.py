@@ -71,8 +71,12 @@ def test_unknown_schema_fails_closed() -> None:
         parse_control_system_payload(payload)
 
 
-def test_duplicate_equipment_identity_fails() -> None:
+def test_duplicate_equipment_identity_fails_case_insensitively() -> None:
     payload = _payload()
-    payload["equipment"].append(copy.deepcopy(payload["equipment"][0]))
-    with pytest.raises(ControlSpecError, match="duplicate equipment ids"):
+    duplicate = copy.deepcopy(payload["equipment"][0])
+    duplicate["id"] = "conv_101"
+    duplicate["alarms"] = []
+    duplicate["requirements"] = []
+    payload["equipment"].append(duplicate)
+    with pytest.raises(ControlSpecError, match="case-insensitive duplicate"):
         parse_control_system_payload(payload)
