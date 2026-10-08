@@ -77,6 +77,7 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
                         "id": alarm.id,
                         "priority": alarm.priority,
                         "operator_response": alarm.operator_response,
+                        "source_signal": alarm.source_signal,
                     }
                     for alarm in item.alarms
                 ],
