@@ -142,7 +142,7 @@ def test_simulator_reconnect_restores_subscription_after_server_restart() -> Non
             timeout_seconds=0.25,
             auto_reconnect=True,
             reconnect_max_delay_seconds=0.25,
-            reconnect_request_timeout_seconds=5.0,
+            reconnect_request_timeout_seconds=1.0,
         )
 
         await first.start()
