@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
+import pytest
+
 from devagent.controls.ir import build_controls_ir, controls_ir_payload, controls_ir_sha256
 from devagent.controls.schema import parse_control_system_payload
 
@@ -51,6 +55,19 @@ def test_ir_contains_explicit_spec_identity_and_authoring_intent() -> None:
     assert payload["spec_sha256"] == ir.spec_sha256
     assert payload["equipment"][0]["id"] == "MTR_101"
     assert len(controls_ir_sha256(ir)) == 64
+
+
+def test_ir_graph_is_deeply_immutable() -> None:
+    ir = build_controls_ir(parse_control_system_payload(_payload()))
+    original_hash = controls_ir_sha256(ir)
+
+    with pytest.raises(FrozenInstanceError):
+        ir.equipment[0].standard = "motor-v2"  # type: ignore[misc]
+
+    with pytest.raises(TypeError):
+        ir.equipment[0].commands[0][1] = False  # type: ignore[index]
+
+    assert controls_ir_sha256(ir) == original_hash
 
 
 def test_engineering_change_changes_ir_identity() -> None:
