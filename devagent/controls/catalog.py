@@ -6,74 +6,86 @@ from types import MappingProxyType
 
 @dataclass(frozen=True)
 class EquipmentStandard:
+    id: str
     equipment_type: str
-    standard: str
     required_commands: tuple[str, ...]
     required_status: tuple[str, ...]
+    primary_action: str
+    stop_action: str | None
+    generated_outputs: tuple[str, ...]
     default_faceplate: str
-    requires_requirement: bool = True
 
 
 _STANDARDS = {
-    "MOTOR": {
-        "motor-v1": EquipmentStandard(
-            equipment_type="MOTOR",
-            standard="motor-v1",
-            required_commands=("START", "STOP", "RESET"),
-            required_status=("READY", "RUNNING", "FAULTED"),
-            default_faceplate="motor-v1",
-        ),
-    },
-    "VFD": {
-        "vfd-v1": EquipmentStandard(
-            equipment_type="VFD",
-            standard="vfd-v1",
-            required_commands=("RUN", "RESET"),
-            required_status=("READY", "RUNNING", "FAULTED"),
-            default_faceplate="vfd-v1",
-        ),
-    },
-    "CONVEYOR": {
-        "conveyor-v1": EquipmentStandard(
-            equipment_type="CONVEYOR",
-            standard="conveyor-v1",
-            required_commands=("START", "STOP", "RESET"),
-            required_status=("READY", "RUNNING", "FAULTED"),
-            default_faceplate="conveyor-v1",
-        ),
-    },
-    "VALVE": {
-        "valve-v1": EquipmentStandard(
-            equipment_type="VALVE",
-            standard="valve-v1",
-            required_commands=("OPEN", "CLOSE"),
-            required_status=("OPEN", "CLOSED"),
-            default_faceplate="valve-v1",
-        ),
-    },
+    "motor-v1": EquipmentStandard(
+        id="motor-v1",
+        equipment_type="MOTOR",
+        required_commands=("START", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="START",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="motor-v1",
+    ),
+    "vfd-v1": EquipmentStandard(
+        id="vfd-v1",
+        equipment_type="VFD",
+        required_commands=("RUN", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="RUN",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="vfd-v1",
+    ),
+    "conveyor-v1": EquipmentStandard(
+        id="conveyor-v1",
+        equipment_type="CONVEYOR",
+        required_commands=("START", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="START",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="conveyor-v1",
+    ),
+    "valve-v1": EquipmentStandard(
+        id="valve-v1",
+        equipment_type="VALVE",
+        required_commands=("OPEN", "CLOSE"),
+        required_status=("OPEN", "CLOSED"),
+        primary_action="OPEN",
+        stop_action="CLOSE",
+        generated_outputs=("OPEN", "CLOSE"),
+        default_faceplate="valve-v1",
+    ),
 }
 
+STANDARDS = MappingProxyType(_STANDARDS)
+SUPPORTED_EQUIPMENT_TYPES = frozenset(item.equipment_type for item in STANDARDS.values())
 EQUIPMENT_STANDARDS = MappingProxyType(
-    {key: MappingProxyType(value) for key, value in _STANDARDS.items()}
+    {
+        equipment_type: frozenset(
+            standard.id
+            for standard in STANDARDS.values()
+            if standard.equipment_type == equipment_type
+        )
+        for equipment_type in SUPPORTED_EQUIPMENT_TYPES
+    }
 )
-SUPPORTED_EQUIPMENT_TYPES = frozenset(EQUIPMENT_STANDARDS)
+
+
+def get_standard(standard_id: str) -> EquipmentStandard:
+    try:
+        return STANDARDS[standard_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported equipment standard: {standard_id}") from exc
 
 
 def supported_standards(equipment_type: str) -> frozenset[str]:
     try:
-        return frozenset(EQUIPMENT_STANDARDS[equipment_type])
+        return EQUIPMENT_STANDARDS[equipment_type]
     except KeyError as exc:
         raise ValueError(f"unsupported equipment type: {equipment_type}") from exc
 
 
 def standard_is_supported(equipment_type: str, standard: str) -> bool:
-    return standard in EQUIPMENT_STANDARDS.get(equipment_type, {})
-
-
-def get_standard(equipment_type: str, standard: str) -> EquipmentStandard:
-    try:
-        return EQUIPMENT_STANDARDS[equipment_type][standard]
-    except KeyError as exc:
-        raise ValueError(
-            f"unsupported controls standard {equipment_type}/{standard}"
-        ) from exc
+    return standard in EQUIPMENT_STANDARDS.get(equipment_type, ())
