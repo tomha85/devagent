@@ -1,19 +1,83 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import MappingProxyType
 
-# V1 is deliberately small. A controls specification must pin a standard that
-# this release actually knows, rather than merely matching a version-shaped
-# string such as "conveyor-v999".
-_EQUIPMENT_STANDARDS = {
-    "MOTOR": frozenset({"motor-v1"}),
-    "VFD": frozenset({"vfd-v1"}),
-    "CONVEYOR": frozenset({"conveyor-v1"}),
-    "VALVE": frozenset({"valve-v1"}),
+
+@dataclass(frozen=True)
+class EquipmentStandard:
+    id: str
+    equipment_type: str
+    required_commands: tuple[str, ...]
+    required_status: tuple[str, ...]
+    primary_action: str
+    stop_action: str | None
+    generated_outputs: tuple[str, ...]
+    default_faceplate: str
+
+
+_STANDARDS = {
+    "motor-v1": EquipmentStandard(
+        id="motor-v1",
+        equipment_type="MOTOR",
+        required_commands=("START", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="START",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="motor-v1",
+    ),
+    "vfd-v1": EquipmentStandard(
+        id="vfd-v1",
+        equipment_type="VFD",
+        required_commands=("RUN", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="RUN",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="vfd-v1",
+    ),
+    "conveyor-v1": EquipmentStandard(
+        id="conveyor-v1",
+        equipment_type="CONVEYOR",
+        required_commands=("START", "STOP", "RESET"),
+        required_status=("READY", "RUNNING", "FAULTED"),
+        primary_action="START",
+        stop_action="STOP",
+        generated_outputs=("RUN", "RESET"),
+        default_faceplate="conveyor-v1",
+    ),
+    "valve-v1": EquipmentStandard(
+        id="valve-v1",
+        equipment_type="VALVE",
+        required_commands=("OPEN", "CLOSE"),
+        required_status=("OPEN", "CLOSED"),
+        primary_action="OPEN",
+        stop_action="CLOSE",
+        generated_outputs=("OPEN", "CLOSE"),
+        default_faceplate="valve-v1",
+    ),
 }
 
-EQUIPMENT_STANDARDS = MappingProxyType(_EQUIPMENT_STANDARDS)
-SUPPORTED_EQUIPMENT_TYPES = frozenset(EQUIPMENT_STANDARDS)
+STANDARDS = MappingProxyType(_STANDARDS)
+SUPPORTED_EQUIPMENT_TYPES = frozenset(item.equipment_type for item in STANDARDS.values())
+EQUIPMENT_STANDARDS = MappingProxyType(
+    {
+        equipment_type: frozenset(
+            standard.id
+            for standard in STANDARDS.values()
+            if standard.equipment_type == equipment_type
+        )
+        for equipment_type in SUPPORTED_EQUIPMENT_TYPES
+    }
+)
+
+
+def get_standard(standard_id: str) -> EquipmentStandard:
+    try:
+        return STANDARDS[standard_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported equipment standard: {standard_id}") from exc
 
 
 def supported_standards(equipment_type: str) -> frozenset[str]:
