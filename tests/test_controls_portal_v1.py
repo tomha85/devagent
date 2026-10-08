@@ -41,6 +41,7 @@ def test_portal_service_reuses_same_deterministic_library(tmp_path) -> None:
     validation = service.validate_payload(_payload())
     first = service.build_payload(_payload())
     second = service.build_payload(_payload())
+    review = service.request_review_payload(_payload(), requested_by="Lead Controls Engineer")
 
     assert validation["status"] == "PASS"
     assert first["status"] == "PASS"
@@ -48,3 +49,7 @@ def test_portal_service_reuses_same_deterministic_library(tmp_path) -> None:
     assert first["reused"] is False
     assert second["reused"] is True
     assert second["build_dir"] == first["build_dir"]
+    assert review["status"] == "PASS"
+    assert review["request"]["requested_action"] == "ENGINEERING_REVIEW"
+    assert review["request"]["production_release_ready"] is False
+    assert review["request"]["human_engineering_approval_required"] is True
