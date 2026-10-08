@@ -4,6 +4,11 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from devagent.controls.catalog import (
+    SUPPORTED_EQUIPMENT_TYPES,
+    standard_is_supported,
+    supported_standards,
+)
 from devagent.controls.models import (
     AlarmSpec,
     ControllerSpec,
@@ -16,7 +21,6 @@ from devagent.controls.models import (
 CONTROL_SPEC_SCHEMA = "devagent-controls-spec-v1"
 
 _SUPPORTED_VENDORS = {"ROCKWELL", "SIEMENS", "SCHNEIDER"}
-_SUPPORTED_EQUIPMENT_TYPES = {"MOTOR", "VFD", "CONVEYOR", "VALVE"}
 _PRIORITIES = {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 _CRITICALITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 _ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
@@ -84,15 +88,21 @@ def _bool(value: Any, where: str) -> bool:
     return value
 
 
-def _unique(values: list[str], where: str) -> tuple[str, ...]:
-    seen: set[str] = set()
-    result: list[str] = []
+def _ensure_casefold_unique(values: list[str], where: str) -> None:
+    seen: dict[str, str] = {}
     for value in values:
-        if value in seen:
-            raise ControlSpecError(f"{where} contains duplicate value: {value}")
-        seen.add(value)
-        result.append(value)
-    return tuple(result)
+        key = value.casefold()
+        previous = seen.get(key)
+        if previous is not None:
+            raise ControlSpecError(
+                f"{where} contains case-insensitive duplicate: {previous} / {value}"
+            )
+        seen[key] = value
+
+
+def _unique(values: list[str], where: str) -> tuple[str, ...]:
+    _ensure_casefold_unique(values, where)
+    return tuple(values)
 
 
 def _symbol_list(value: Any, where: str, *, require_nonempty: bool = False) -> tuple[str, ...]:
@@ -172,9 +182,12 @@ def _parse_commands(raw: Any, where: str) -> tuple[tuple[str, bool], ...]:
     if not item:
         raise ControlSpecError(f"{where} must contain at least one command")
     result: list[tuple[str, bool]] = []
+    names: list[str] = []
     for name, enabled in item.items():
         symbol = _symbol(name, f"{where} key")
+        names.append(symbol)
         result.append((symbol, _bool(enabled, f"{where}.{symbol}")))
+    _ensure_casefold_unique(names, where)
     return tuple(result)
 
 
@@ -188,16 +201,16 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
     _fields(item, where=where, required=required)
 
     equipment_type = _text(item["type"], f"{where}.type", maximum=32).upper()
-    if equipment_type not in _SUPPORTED_EQUIPMENT_TYPES:
+    if equipment_type not in SUPPORTED_EQUIPMENT_TYPES:
         raise ControlSpecError(
-            f"{where}.type must be one of: {', '.join(sorted(_SUPPORTED_EQUIPMENT_TYPES))}"
+            f"{where}.type must be one of: {', '.join(sorted(SUPPORTED_EQUIPMENT_TYPES))}"
         )
 
     standard = _text(item["standard"], f"{where}.standard", maximum=96)
-    prefix = equipment_type.lower()
-    if not re.fullmatch(rf"{re.escape(prefix)}[a-z0-9_-]*-v[1-9][0-9]*", standard):
+    if not standard_is_supported(equipment_type, standard):
+        supported = ", ".join(sorted(supported_standards(equipment_type)))
         raise ControlSpecError(
-            f"{where}.standard must be an explicit {prefix}*-vN version, for example {prefix}-v1"
+            f"{where}.standard is not in the V1 {equipment_type} catalog; supported: {supported}"
         )
 
     signals = _symbol_list(item["signals"], f"{where}.signals", require_nonempty=True)
@@ -219,8 +232,7 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
         _parse_alarm(value, f"{where}.alarms[{alarm_index}]")
         for alarm_index, value in enumerate(alarms_raw)
     )
-    if len({alarm.id for alarm in alarms}) != len(alarms):
-        raise ControlSpecError(f"{where}.alarms contains duplicate alarm ids")
+    _ensure_casefold_unique([alarm.id for alarm in alarms], f"{where}.alarms")
 
     requirements_raw = item["requirements"]
     if not isinstance(requirements_raw, list):
@@ -229,8 +241,9 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
         _parse_requirement(value, f"{where}.requirements[{requirement_index}]")
         for requirement_index, value in enumerate(requirements_raw)
     )
-    if len({requirement.id for requirement in requirements}) != len(requirements):
-        raise ControlSpecError(f"{where}.requirements contains duplicate requirement ids")
+    _ensure_casefold_unique(
+        [requirement.id for requirement in requirements], f"{where}.requirements"
+    )
 
     return EquipmentSpec(
         id=_identifier(item["id"], f"{where}.id"),
@@ -265,8 +278,7 @@ def parse_control_system_payload(payload: Any) -> ControlSystemSpec:
     controllers = tuple(_parse_controller(item, index) for index, item in enumerate(raw_controllers))
 
     controller_ids = [item.id for item in controllers]
-    if len(set(controller_ids)) != len(controller_ids):
-        raise ControlSpecError("controls specification contains duplicate controller ids")
+    _ensure_casefold_unique(controller_ids, "controls specification.controllers")
 
     raw_equipment = root["equipment"]
     if not isinstance(raw_equipment, list) or not raw_equipment:
@@ -274,8 +286,7 @@ def parse_control_system_payload(payload: Any) -> ControlSystemSpec:
     equipment = tuple(_parse_equipment(item, index) for index, item in enumerate(raw_equipment))
 
     equipment_ids = [item.id for item in equipment]
-    if len(set(equipment_ids)) != len(equipment_ids):
-        raise ControlSpecError("controls specification contains duplicate equipment ids")
+    _ensure_casefold_unique(equipment_ids, "controls specification.equipment")
 
     known_controllers = set(controller_ids)
     for item in equipment:
@@ -288,13 +299,13 @@ def parse_control_system_payload(payload: Any) -> ControlSystemSpec:
     requirement_owners: dict[str, str] = {}
     for item in equipment:
         for alarm in item.alarms:
-            previous = alarm_owners.setdefault(alarm.id, item.id)
+            previous = alarm_owners.setdefault(alarm.id.casefold(), item.id)
             if previous != item.id:
                 raise ControlSpecError(
                     f"alarm id {alarm.id} is duplicated by equipment {previous} and {item.id}"
                 )
         for requirement in item.requirements:
-            previous = requirement_owners.setdefault(requirement.id, item.id)
+            previous = requirement_owners.setdefault(requirement.id.casefold(), item.id)
             if previous != item.id:
                 raise ControlSpecError(
                     f"requirement id {requirement.id} is duplicated by equipment {previous} and {item.id}"
