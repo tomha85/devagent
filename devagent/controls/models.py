@@ -15,6 +15,7 @@ class AlarmSpec:
     id: str
     priority: str
     operator_response: str
+    source_signal: str | None = None
 
 
 @dataclass(frozen=True)
