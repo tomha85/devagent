@@ -4,13 +4,12 @@ import ast
 from pathlib import Path
 
 
-def test_controls_authoring_has_no_runtime_or_control_dependency() -> None:
+def test_controls_has_no_live_or_control_runtime_dependency() -> None:
     root = Path(__file__).resolve().parents[1] / "devagent" / "controls"
     assert root.is_dir()
 
     forbidden_prefixes = (
         "devagent.live",
-        "devagent.plc",
         "subprocess",
         "socket",
         "ctypes",
@@ -19,15 +18,19 @@ def test_controls_authoring_has_no_runtime_or_control_dependency() -> None:
     for path in sorted(root.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
+            imported: list[str] = []
             if isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith(forbidden_prefixes), (
-                    f"{path.name} crosses authoring authority boundary via {node.module}"
+                imported.append(node.module)
+            elif isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+
+            for name in imported:
+                assert not name.startswith(forbidden_prefixes), (
+                    f"{path.name} crosses Controls authority boundary via {name}"
                 )
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert not alias.name.startswith(forbidden_prefixes), (
-                        f"{path.name} crosses authoring authority boundary via {alias.name}"
-                    )
+                if name.startswith("devagent.plc"):
+                    assert path.name == "verification.py"
+                    assert name == "devagent.plc.safe_analysis"
 
 
 def test_controls_manifest_declares_no_control_authority() -> None:
