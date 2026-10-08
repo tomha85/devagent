@@ -155,6 +155,28 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     model_simulation = run_model_simulation(ir, fat_cases)
     _write_json(root / "tests" / "model-simulation.json", model_simulation)
 
+    _write_json(
+        root / "engineering-handoff.json",
+        {
+            "schema": "devagent-controls-engineering-handoff-v1",
+            "project_id": spec.project_id,
+            "controls_ir_sha256": controls_ir_sha256(ir),
+            "plc_review": [
+                {
+                    "controller_id": item["controller_id"],
+                    "project_path": item["path"],
+                    "next_command": f"devagent plc {item['path']} --output-dir <engineer-selected-output>",
+                }
+                for item in rockwell_manifest
+            ],
+            "ignition_staging_path": "ignition/",
+            "fat_plan_path": "tests/fat-plan.json",
+            "qualified_runtime_evidence_required": True,
+            "human_engineering_approval_required": True,
+            "production_deployment_performed": False,
+        },
+    )
+
     roundtrip_ok = all(item["status"] == "PASS" for item in roundtrips)
     ignition_ok = ignition_check["status"] == "PASS"
     model_ok = model_simulation["status"] == "PASS"
