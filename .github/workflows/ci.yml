@@ -219,6 +219,9 @@ jobs:
           /tmp/devagent-wheel-smoke/bin/devagent benchmark --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent controls --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent controls validate examples/controls/conveyor_v1.json >/dev/null
+          rm -rf /tmp/devagent-controls-wheel-build
+          /tmp/devagent-wheel-smoke/bin/devagent controls build examples/controls/conveyor_v1.json --output-dir /tmp/devagent-controls-wheel-build >/dev/null
+          /tmp/devagent-wheel-smoke/bin/devagent controls verify /tmp/devagent-controls-wheel-build >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent-ui-check --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent-autonomy --help >/dev/null
           /tmp/devagent-wheel-smoke/bin/devagent-skills --help >/dev/null
