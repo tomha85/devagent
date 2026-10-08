@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from devagent.controls.parser import load_control_system_spec
@@ -39,10 +41,11 @@ def test_unknown_controller_reference_fails() -> None:
         parse_control_system_payload(payload)
 
 
-def test_invalid_standard_version_fails() -> None:
+@pytest.mark.parametrize("standard", ["latest", "conveyor-v2", "conveyor-custom-v999"])
+def test_unqualified_standard_version_fails_closed(standard: str) -> None:
     payload = _payload()
-    payload["equipment"][0]["standard"] = "latest"
-    with pytest.raises(ControlSpecError, match="explicit conveyor.*-vN"):
+    payload["equipment"][0]["standard"] = standard
+    with pytest.raises(ControlSpecError, match="not in the V1 CONVEYOR catalog"):
         parse_control_system_payload(payload)
 
 
@@ -53,27 +56,41 @@ def test_undeclared_permissive_or_interlock_fails() -> None:
         parse_control_system_payload(payload)
 
 
-def test_duplicate_alarm_identity_across_equipment_fails() -> None:
+def test_duplicate_alarm_identity_across_equipment_fails_case_insensitively() -> None:
     payload = _payload()
     first = payload["equipment"][0]
     first["alarms"] = [
         {"id": "ALM_SHARED", "priority": "HIGH", "operator_response": "Inspect fault."}
     ]
-    second = {
-        **first,
-        "id": "CONV_102",
-        "signals": list(first["signals"]),
-        "commands": dict(first["commands"]),
-        "status": list(first["status"]),
-        "permissives": list(first["permissives"]),
-        "interlocks": list(first["interlocks"]),
-        "alarms": [dict(first["alarms"][0])],
-        "hmi": dict(first["hmi"]),
-        "requirements": [],
-    }
+    second = copy.deepcopy(first)
+    second["id"] = "CONV_102"
+    second["alarms"][0]["id"] = "alm_shared"
     payload["equipment"].append(second)
 
-    with pytest.raises(ControlSpecError, match="alarm id ALM_SHARED is duplicated"):
+    with pytest.raises(ControlSpecError, match="alarm id alm_shared is duplicated"):
+        parse_control_system_payload(payload)
+
+
+def test_duplicate_controller_identity_fails_case_insensitively() -> None:
+    payload = _payload()
+    payload["controllers"].append(
+        {"id": "plc1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
+    )
+    with pytest.raises(ControlSpecError, match="case-insensitive duplicate"):
+        parse_control_system_payload(payload)
+
+
+def test_duplicate_signal_identity_fails_case_insensitively() -> None:
+    payload = _payload()
+    payload["equipment"][0]["signals"].append("safe")
+    with pytest.raises(ControlSpecError, match="case-insensitive duplicate"):
+        parse_control_system_payload(payload)
+
+
+def test_duplicate_command_identity_fails_case_insensitively() -> None:
+    payload = _payload()
+    payload["equipment"][0]["commands"]["start"] = True
+    with pytest.raises(ControlSpecError, match="case-insensitive duplicate"):
         parse_control_system_payload(payload)
 
 
