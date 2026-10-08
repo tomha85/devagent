@@ -52,3 +52,35 @@ def test_entrypoint_routes_controls_inspect(tmp_path, capsys) -> None:
     output = capsys.readouterr().out
     assert '"devagent-controls-authoring-manifest-v1"' in output
     assert '"devagent-controls-ir-v1"' in output
+
+
+def test_entrypoint_routes_controls_build_verify_and_review(tmp_path, capsys) -> None:
+    path = _write_spec(tmp_path)
+    build = tmp_path / "build"
+    review = tmp_path / "review-request.json"
+
+    assert main(
+        ["controls", "build", str(path), "--output-dir", str(build)]
+    ) == 0
+    built = capsys.readouterr().out
+    assert "CONTROLS_BUILD=PASS" in built
+    assert "READINESS=READY_FOR_ENGINEERING_REVIEW" in built
+
+    assert main(["controls", "verify", str(build)]) == 0
+    verified = capsys.readouterr().out
+    assert "CONTROLS_BUILD_VERIFY=PASS" in verified
+
+    assert main(
+        [
+            "controls",
+            "request-review",
+            str(build),
+            "--requested-by",
+            "Lead Controls Engineer",
+            "--output",
+            str(review),
+        ]
+    ) == 0
+    requested = capsys.readouterr().out
+    assert "CONTROLS_REVIEW_REQUEST=PASS" in requested
+    assert review.is_file()
