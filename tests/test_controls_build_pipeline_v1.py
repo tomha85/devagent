@@ -11,6 +11,7 @@ from devagent.controls.build import (
     verify_controls_build,
 )
 from devagent.controls.schema import parse_control_system_payload
+from devagent.plc.requirements import ingest_requirements
 
 
 def _write_spec(tmp_path):
@@ -43,7 +44,13 @@ def _write_spec(tmp_path):
                             }
                         ],
                         "hmi": {"faceplate": "conveyor-v1", "historian": True},
-                        "requirements": [],
+                        "requirements": [
+                            {
+                                "id": "REQ_CONV101_GUARD",
+                                "text": "CONV_101 must not run while GUARD_OPEN is active.",
+                                "criticality": "HIGH",
+                            }
+                        ],
                     }
                 ],
             },
@@ -67,6 +74,14 @@ def test_build_is_end_to_end_self_verified_and_never_claims_runtime_release(tmp_
     assert (output / "rockwell" / "PLC1.L5X").is_file()
     assert (output / "ignition" / "equipment.json").is_file()
     assert (output / "tests" / "fat-plan.json").is_file()
+    requirements_path = output / "requirements" / "controls-requirements.json"
+    assert requirements_path.is_file()
+    requirements = ingest_requirements([requirements_path])
+    assert [item.id for item in requirements] == ["REQ_CONV101_GUARD"]
+    assert requirements[0].criticality.value == "HIGH"
+    handoff = json.loads((output / "engineering-handoff.json").read_text(encoding="utf-8"))
+    assert handoff["plc_review"][0]["requirements_path"] == "requirements/controls-requirements.json"
+    assert "--requirements requirements/controls-requirements.json" in handoff["plc_review"][0]["next_command"]
     assert readiness["status"] == "READY_FOR_ENGINEERING_REVIEW"
     assert readiness["fat_execution"] == "NOT_RUN"
     assert readiness["production_release_ready"] is False
