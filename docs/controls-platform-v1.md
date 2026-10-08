@@ -66,9 +66,10 @@ V1 explicitly qualifies four standard IDs:
 A version-shaped but unqualified name such as `conveyor-v999` fails closed.
 Required command/status contracts are checked by the company rules engine.
 
-HIGH and CRITICAL alarms require an explicit `source_signal`; lower-priority
-alarms without a source are retained as warnings. This prevents a generated
-HMI from pretending that an alarm is bound when its PLC source is unknown.
+Every generated alarm requires an explicit `source_signal`. V1 also requires
+an explicit qualified faceplate for every equipment object. Missing bindings
+fail closed rather than allowing generated HMI configuration to pretend that
+an alarm or faceplate relationship is known.
 
 ## Determinism
 
@@ -86,6 +87,12 @@ Engineering-significant changes do change the IR hash.
 
 Rockwell identifiers are deterministically normalized to Logix-safe names and
 bounded to 40 characters. Long identifiers receive a stable hash suffix.
+Controller identities that would collide after normalization fail closed.
+Portal/build filesystem names are separately normalized to portable path
+components.
+
+Generated Rockwell tag external access is least-privilege: command tags are
+`Read/Write`; signals, status, and generated outputs are `Read Only`.
 
 ## Rockwell generation
 
