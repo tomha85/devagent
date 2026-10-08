@@ -149,6 +149,22 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
         },
     )
 
+    requirement_payload = {
+        "schema": "devagent-controls-requirements-v1",
+        "requirements": [
+            {
+                "id": requirement.id,
+                "text": requirement.text,
+                "criticality": requirement.criticality,
+                "verification_mode": "DYNAMIC",
+                "equipment_id": item.id,
+            }
+            for item in ir.equipment
+            for requirement in item.requirements
+        ],
+    }
+    _write_json(root / "requirements" / "controls-requirements.json", requirement_payload)
+
     ignition = generate_ignition_payloads(ir)
     for name, payload in ignition.items():
         _write_json(root / "ignition" / name, payload)
@@ -172,7 +188,12 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
                 {
                     "controller_id": item["controller_id"],
                     "project_path": item["path"],
-                    "next_command": f"devagent plc {item['path']} --output-dir <engineer-selected-output>",
+                    "requirements_path": "requirements/controls-requirements.json",
+                    "next_command": (
+                        f"devagent plc {item['path']} "
+                        "--requirements requirements/controls-requirements.json "
+                        "--output-dir <engineer-selected-output>"
+                    ),
                 }
                 for item in rockwell_manifest
             ],
