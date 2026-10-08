@@ -65,9 +65,10 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     )
 
     if item.hmi.faceplate is None:
-        faceplate_status = "WARN"
+        faceplate_status = "FAIL"
         faceplate_summary = (
-            f"No HMI faceplate selected; company default is {standard.default_faceplate}."
+            f"V1 generated HMI requires explicit qualified faceplate "
+            f"{standard.default_faceplate!r}; no faceplate was selected."
         )
     elif item.hmi.faceplate != standard.default_faceplate:
         faceplate_status = "FAIL"
@@ -88,14 +89,12 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     )
 
     for alarm in item.alarms:
-        if alarm.priority in {"HIGH", "CRITICAL"} and alarm.source_signal is None:
+        if alarm.source_signal is None:
             alarm_status = "FAIL"
             alarm_summary = (
-                f"{alarm.priority} alarm {alarm.id} requires an explicit source_signal."
+                f"Alarm {alarm.id} requires an explicit source_signal for deterministic "
+                "PLC/HMI binding."
             )
-        elif alarm.source_signal is None:
-            alarm_status = "WARN"
-            alarm_summary = f"Alarm {alarm.id} has no explicit source_signal."
         else:
             alarm_status = "PASS"
             alarm_summary = (
