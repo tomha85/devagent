@@ -168,6 +168,15 @@ Verify an existing build:
 devagent controls verify /tmp/controls-build
 ```
 
+Create a hash-bound engineering review request without granting release or
+deployment authority:
+
+```bash
+devagent controls request-review /tmp/controls-build \
+  --requested-by "Lead Controls Engineer" \
+  --output /tmp/controls-review-request.json
+```
+
 Run the local self-service portal:
 
 ```bash
@@ -191,6 +200,7 @@ build/
   company-standards.json
   generation-manifest.json
   release-readiness.json
+  engineering-handoff.json
 
   rockwell/
     <controller>.L5X
@@ -249,6 +259,9 @@ CONV_101
   + historian
   + deterministic FAT
 ```
+
+The portal exposes the same validate/build/review-request library operations;
+it does not contain a second copy of controls business logic.
 
 The branch acceptance target is:
 
