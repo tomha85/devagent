@@ -65,3 +65,12 @@ def test_portal_uses_portable_filesystem_identity(tmp_path) -> None:
     assert result["status"] == "PASS"
     assert ":" not in result["build_dir"].split("/")[-1]
     assert "CELL_01" in result["build_dir"].split("/")[-1]
+
+
+def test_portal_exposes_same_versioned_catalog(tmp_path) -> None:
+    service = PortalService(tmp_path / "portal")
+    catalog = service.catalog_payload()
+
+    assert catalog["schema"] == "devagent-controls-catalog-v1"
+    ids = {item["id"] for item in catalog["standards"]}
+    assert ids == {"motor-v1", "vfd-v1", "conveyor-v1", "valve-v1"}
