@@ -133,18 +133,26 @@ def _parse_controller(raw: Any, index: int) -> ControllerSpec:
 def _parse_alarm(raw: Any, where: str) -> AlarmSpec:
     item = _object(raw, where)
     required = {"id", "priority", "operator_response"}
-    _fields(item, where=where, required=required)
+    allowed = {*required, "source_signal"}
+    _fields(item, where=where, required=required, allowed=allowed)
     priority = _text(item["priority"], f"{where}.priority", maximum=16).upper()
     if priority not in _PRIORITIES:
         raise ControlSpecError(
             f"{where}.priority must be one of: {', '.join(sorted(_PRIORITIES))}"
         )
+    source_signal_raw = item.get("source_signal")
+    source_signal = (
+        None
+        if source_signal_raw is None
+        else _symbol(source_signal_raw, f"{where}.source_signal")
+    )
     return AlarmSpec(
         id=_identifier(item["id"], f"{where}.id"),
         priority=priority,
         operator_response=_text(
             item["operator_response"], f"{where}.operator_response", maximum=1024
         ),
+        source_signal=source_signal,
     )
 
 
@@ -233,6 +241,18 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
         for alarm_index, value in enumerate(alarms_raw)
     )
     _ensure_casefold_unique([alarm.id for alarm in alarms], f"{where}.alarms")
+    unknown_alarm_signals = sorted(
+        {
+            alarm.source_signal
+            for alarm in alarms
+            if alarm.source_signal is not None and alarm.source_signal not in signal_set
+        }
+    )
+    if unknown_alarm_signals:
+        raise ControlSpecError(
+            f"{where}.alarms references undeclared source signal(s): "
+            + ", ".join(unknown_alarm_signals)
+        )
 
     requirements_raw = item["requirements"]
     if not isinstance(requirements_raw, list):
