@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from devagent.controls.catalog import STANDARDS
 from devagent.controls.build import (
     ControlsBuildError,
     build_controls_project,
@@ -32,6 +33,8 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("catalog", help="Print the qualified V1 equipment standards catalog")
 
     validate = sub.add_parser("validate", help="Validate a controls specification and company standards")
     validate.add_argument("spec", type=Path)
@@ -81,6 +84,25 @@ def _rule_payload(spec) -> list[dict[str, str]]:
         }
         for item in evaluate_controls_rules(spec)
     ]
+
+
+def _catalog() -> int:
+    payload = {
+        "schema": "devagent-controls-catalog-v1",
+        "standards": [
+            {
+                "id": item.id,
+                "equipment_type": item.equipment_type,
+                "required_commands": list(item.required_commands),
+                "required_status": list(item.required_status),
+                "generated_outputs": list(item.generated_outputs),
+                "default_faceplate": item.default_faceplate,
+            }
+            for item in sorted(STANDARDS.values(), key=lambda value: value.id)
+        ],
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
 
 
 def _validate(path: Path) -> int:
@@ -156,6 +178,8 @@ def _request_review(path: Path, *, requested_by: str, output: Path) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     try:
+        if args.command == "catalog":
+            return _catalog()
         if args.command == "validate":
             return _validate(args.spec)
         if args.command == "inspect":
