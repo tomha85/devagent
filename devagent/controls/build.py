@@ -366,10 +366,64 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             errors.append("spec_sha256 does not match canonical input")
         if manifest.get("controls_ir_sha256") != controls_ir_sha256(ir):
             errors.append("controls_ir_sha256 does not match canonical input")
+        if spec_payload != normalized_spec_payload(spec):
+            errors.append("input/spec.json is not the canonical normalized specification")
+        if _load_json(root / "controls-ir.json") != controls_ir_payload(ir):
+            errors.append("controls-ir.json does not match deterministic Controls IR")
+        if manifest.get("catalog") != sorted({item.standard for item in spec.equipment}):
+            errors.append("generation manifest catalog does not match specification")
+        if manifest.get("artifact_class") != "STAGING_ENGINEERING_BUILD":
+            errors.append("generation manifest artifact_class is not staging-only")
+        if manifest.get("generator") != {
+            "rockwell": ROCKWELL_GENERATOR_VERSION,
+            "ignition": "1.0.0",
+            "fat": "1.0.0",
+        }:
+            errors.append("generation manifest generator versions do not match this build engine")
+        if manifest.get("external_qualification") != {
+            "studio5000_import_validation": "NOT_RUN",
+            "ignition_gateway_import_validation": "NOT_RUN",
+            "vendor_runtime_execution": "NOT_RUN",
+            "fat_execution": "NOT_RUN",
+        }:
+            errors.append("generation manifest external qualification boundary is invalid")
+        if manifest.get("authority") != {
+            "plc_write": False,
+            "plc_force": False,
+            "plc_download": False,
+            "plc_mode_change": False,
+            "live_control": False,
+            "ignition_gateway_deploy": False,
+        }:
+            errors.append("generation manifest authority boundary is invalid")
 
         rules = evaluate_controls_rules(spec)
         if not rules_pass(rules):
             errors.append("company controls standards no longer pass")
+        expected_rules = {
+            "schema": "devagent-controls-rules-v1",
+            "status": "PASS",
+            "results": [asdict(item) for item in rules],
+        }
+        if _load_json(root / "company-standards.json") != expected_rules:
+            errors.append("company-standards.json does not match deterministic rules")
+
+        expected_requirements = {
+            "schema": "devagent-controls-requirements-v1",
+            "requirements": [
+                {
+                    "id": requirement.id,
+                    "text": requirement.text,
+                    "criticality": requirement.criticality,
+                    "verification_mode": "DYNAMIC",
+                    "equipment_id": item.id,
+                }
+                for item in ir.equipment
+                for requirement in item.requirements
+            ],
+        }
+        if _load_json(root / "requirements" / "controls-requirements.json") != expected_requirements:
+            errors.append("generated requirements handoff does not match Controls IR")
 
         _ensure_generation_scope(ir)
         for controller in ir.controllers:
@@ -408,12 +462,52 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             errors.append("model simulation artifact mismatch")
 
         readiness = _load_json(root / "release-readiness.json")
+        if readiness.get("status") != "READY_FOR_ENGINEERING_REVIEW":
+            errors.append("verified authoring build must be ready for engineering review")
+        if manifest.get("readiness") != readiness.get("status"):
+            errors.append("manifest/readiness status mismatch")
+        for field in (
+            "studio5000_import_validation",
+            "ignition_gateway_import_validation",
+            "vendor_runtime_execution",
+            "fat_execution",
+        ):
+            if readiness.get(field) != "NOT_RUN":
+                errors.append(f"authoring build must keep {field}=NOT_RUN")
         if readiness.get("production_release_ready") is not False:
             errors.append("authoring build must never claim production release readiness")
-        if readiness.get("fat_execution") != "NOT_RUN":
-            errors.append("authoring build must not claim external FAT execution")
+        if readiness.get("production_deployment_performed") is not False:
+            errors.append("authoring build must never claim production deployment")
         if readiness.get("human_engineering_approval_required") is not True:
             errors.append("human engineering approval must remain required")
+
+        expected_handoff = {
+            "schema": "devagent-controls-engineering-handoff-v1",
+            "project_id": spec.project_id,
+            "controls_ir_sha256": controls_ir_sha256(ir),
+            "plc_review": [
+                {
+                    "controller_id": controller.id,
+                    "project_path": (
+                        f"rockwell/{controller_symbol(controller.id)}.L5X"
+                    ),
+                    "requirements_path": "requirements/controls-requirements.json",
+                    "next_command": (
+                        f"devagent plc rockwell/{controller_symbol(controller.id)}.L5X "
+                        "--requirements requirements/controls-requirements.json "
+                        "--output-dir <engineer-selected-output>"
+                    ),
+                }
+                for controller in sorted(ir.controllers, key=lambda value: value.id)
+            ],
+            "ignition_staging_path": "ignition/",
+            "fat_plan_path": "tests/fat-plan.json",
+            "qualified_runtime_evidence_required": True,
+            "human_engineering_approval_required": True,
+            "production_deployment_performed": False,
+        }
+        if _load_json(root / "engineering-handoff.json") != expected_handoff:
+            errors.append("engineering-handoff.json does not match verified build intent")
 
         return {
             "status": "PASS" if not errors else "FAIL",
