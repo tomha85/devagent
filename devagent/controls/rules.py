@@ -50,6 +50,22 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
         )
     )
 
+    if "FAULTED" in standard.required_status:
+        results.append(
+            ControlsRuleResult(
+                id="CTRL-E320",
+                status="PASS" if item.interlocks else "FAIL",
+                subject=item.id,
+                summary=(
+                    "At least one explicit interlock/fault source is available for "
+                    "the generated FAULTED status."
+                    if item.interlocks
+                    else "Standard requires FAULTED status but no interlock/fault "
+                    "source was declared."
+                ),
+            )
+        )
+
     overlap = sorted(set(item.permissives) & set(item.interlocks))
     results.append(
         ControlsRuleResult(
