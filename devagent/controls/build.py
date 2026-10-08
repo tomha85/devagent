@@ -20,6 +20,7 @@ from devagent.controls.rockwell import (
 )
 from devagent.controls.rules import evaluate_controls_rules, rules_pass
 from devagent.controls.schema import parse_control_system_payload
+from devagent.controls.symbols import controller_symbol
 from devagent.controls.verification import verify_rockwell_roundtrip
 
 BUILD_MANIFEST_SCHEMA = "devagent-controls-generation-manifest-v1"
@@ -64,6 +65,12 @@ def _controller_map(ir: ControlsIR) -> dict[str, Any]:
 
 
 def _ensure_generation_scope(ir: ControlsIR) -> None:
+    generated_controller_names = [controller_symbol(item.id) for item in ir.controllers]
+    if len(generated_controller_names) != len(set(generated_controller_names)):
+        raise ControlsBuildError(
+            "controller identities collide after Rockwell normalization"
+        )
+
     unsupported = [
         f"{item.id}:{item.vendor}"
         for item in ir.controllers
@@ -109,7 +116,7 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     for controller_id in sorted(controllers):
         controller = controllers[controller_id]
         artifact = render_rockwell_project(ir, controller)
-        target = root / "rockwell" / f"{controller_id}.L5X"
+        target = root / "rockwell" / f"{controller_symbol(controller_id)}.L5X"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(artifact.content)
         symbol_maps[controller_id] = {
@@ -345,7 +352,7 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
 
         _ensure_generation_scope(ir)
         for controller in ir.controllers:
-            target = root / "rockwell" / f"{controller.id}.L5X"
+            target = root / "rockwell" / f"{controller_symbol(controller.id)}.L5X"
             expected = render_rockwell_project(ir, controller)
             if not target.is_file():
                 errors.append(f"missing Rockwell artifact for {controller.id}")
