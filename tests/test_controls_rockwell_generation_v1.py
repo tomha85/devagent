@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from devagent.controls.ir import build_controls_ir
+from devagent.controls.rockwell import render_rockwell_project
+from devagent.controls.schema import parse_control_system_payload
+from devagent.plc.safe_analysis import analyze_rockwell_l5x
+
+
+def _spec():
+    return parse_control_system_payload(
+        {
+            "schema": "devagent-controls-spec-v1",
+            "project_id": "PACK01",
+            "controllers": [
+                {"id": "PLC_PACK_01", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
+            ],
+            "equipment": [
+                {
+                    "id": "CONV_101",
+                    "type": "CONVEYOR",
+                    "standard": "conveyor-v1",
+                    "controller": "PLC_PACK_01",
+                    "signals": ["SAFETY_OK", "DOWNSTREAM_READY", "GUARD_OPEN", "DRIVE_FAULT"],
+                    "commands": {"START": True, "STOP": True, "RESET": True},
+                    "status": ["READY", "RUNNING", "FAULTED"],
+                    "permissives": ["SAFETY_OK", "DOWNSTREAM_READY"],
+                    "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+                    "alarms": [
+                        {
+                            "id": "ALM_DRIVE_FAULT",
+                            "priority": "HIGH",
+                            "operator_response": "Inspect drive fault.",
+                            "source_signal": "DRIVE_FAULT",
+                        }
+                    ],
+                    "hmi": {"faceplate": "conveyor-v1", "historian": True},
+                    "requirements": [],
+                }
+            ],
+        }
+    )
+
+
+def test_rockwell_generator_is_byte_deterministic_and_logix_bounded() -> None:
+    ir = build_controls_ir(_spec())
+    controller = ir.controllers[0]
+    first = render_rockwell_project(ir, controller)
+    second = render_rockwell_project(ir, controller)
+
+    assert first.content == second.content
+    assert first.sha256 == second.sha256
+    assert all(len(name) <= 40 for name in first.tags)
+    assert len(first.rungs) == 2
+
+
+def test_generated_l5x_reimports_through_existing_production_analyzer(tmp_path) -> None:
+    ir = build_controls_ir(_spec())
+    artifact = render_rockwell_project(ir, ir.controllers[0])
+    path = tmp_path / "PLC_PACK_01.L5X"
+    path.write_bytes(artifact.content)
+
+    result = analyze_rockwell_l5x(path)
+
+    assert result.outcome.value == "STATICALLY_VERIFIED"
+    assert not result.project.unknown_instruction_names
+    assert sorted(tag.name for tag in result.project.tags) == sorted(artifact.tags)
+    assert [rung.text for rung in result.project.rungs] == [
+        rung.text for rung in artifact.rungs
+    ]
