@@ -16,38 +16,45 @@ DevAgent is free during public beta. If it saves you engineering time, consider 
 
 ## General Architecture
 
-DevAgent has **three sibling product branches** under one evidence-driven core. Each branch owns a distinct engineering responsibility, input model, safety boundary, and qualification path.
+DevAgent has **four sibling product branches** under one evidence-driven core. Each branch owns a distinct engineering responsibility, input model, safety boundary, and qualification path.
 
 ```text
-                         DevAgent Core
-              Evidence-Driven Engineering Platform
-                              |
-          +-------------------+-------------------+
-          |                   |                   |
-          v                   v                   v
- Software Engineering     DevAgent PLC        DevAgent Live
- Product Branch #1        Product Branch #2   Product Branch #3
-          |                   |                   |
- Local / GitHub repo      PLC export           Engineering context
-          |               Siemens              + OPC UA endpoint(s)
-          |               Rockwell                  |
-          |               Schneider                 v
-          |                   |              Reconcile / Trust
-          v                   v              Freshness / History
- Understand / Plan       Canonical PLC               |
- Modify / Test / Review  Engineering Model           v
-          |                   |              Deterministic
-          v                   v              Commissioning Diagnosis
- Engineering Report      Analyze / Verify             |
- + Safe Branch           FAT / Release Readiness      v
-                                                Evidence / Explanation
-                                                + Next Safe Check
+                              DevAgent Core
+                   Evidence-Driven Engineering Platform
+                                   |
+          +------------------------+------------------------+
+          |                        |                        |
+          v                        v                        v
+ Software Engineering        DevAgent PLC          DevAgent Controls
+ Product Branch #1           Product Branch #2     Product Branch #3
+          |                        |                        |
+ Local / GitHub repo          PLC export             Controls specification
+          |                   Siemens/Rockwell/       |
+          |                   Schneider               v
+          v                        |             Deterministic Controls IR
+ Understand / Plan                 v                        |
+ Modify / Test / Review      Canonical PLC Model            v
+          |                        |             Generate / Round-trip Verify
+          v                        v             Rockwell + Ignition staging
+ Engineering Report          Analyze / Verify                |
+ + Safe Branch               FAT / Release Readiness         v
+                                                   Engineering Review Handoff
+
+                              DevAgent Live
+                              Product Branch #4
+                                   |
+                        Engineering context + OPC UA
+                                   |
+                          Trust / Diagnose / Explain
+                                   |
+                           Evidence + Next Check
 ```
 
 | Product branch | Primary input | Authority |
 | --- | --- | --- |
 | **Software Engineering** | Local / GitHub repository | Understand, modify, verify, review, report, publish a safe branch |
 | **DevAgent PLC** | Exported PLC engineering artifacts | Offline engineering review, requirements, FAT, evidence, release readiness |
+| **DevAgent Controls** | Versioned controls specification | Standards, deterministic Rockwell/Ignition staging generation, round-trip proof, FAT planning, engineering review handoff - **no production deployment** |
 | **DevAgent Live** | Read-only engineering context + OPC UA runtime | Onsite commissioning diagnosis, runtime evidence, history, Q&A - **no PLC control** |
 
 ### Read-only PLC to Live integration contract
