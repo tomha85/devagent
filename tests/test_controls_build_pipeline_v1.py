@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -135,3 +136,48 @@ def test_controller_names_that_collide_after_rockwell_normalization_fail_closed(
     spec = parse_control_system_payload(payload)
     with pytest.raises(ControlsBuildError, match="controller identities collide"):
         build_controls_spec(spec, tmp_path / "collision-build")
+
+
+def _refresh_manifest_hash(output, relative_path: str) -> None:
+    manifest_path = output / "generation-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = output / relative_path
+    manifest["artifact_sha256"][relative_path] = hashlib.sha256(payload.read_bytes()).hexdigest()
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_verifier_rederives_requirements_even_if_manifest_hash_is_updated(tmp_path) -> None:
+    spec = _write_spec(tmp_path)
+    output = tmp_path / "build"
+    build_controls_project(spec, output)
+
+    relative = "requirements/controls-requirements.json"
+    path = output / relative
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["requirements"][0]["text"] = "Tampered requirement."
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _refresh_manifest_hash(output, relative)
+
+    verification = verify_controls_build(output)
+    assert verification["status"] == "FAIL"
+    assert any("requirements handoff" in item for item in verification["errors"])
+
+
+def test_verifier_rejects_release_claim_even_if_manifest_hash_is_updated(tmp_path) -> None:
+    spec = _write_spec(tmp_path)
+    output = tmp_path / "build"
+    build_controls_project(spec, output)
+
+    relative = "release-readiness.json"
+    path = output / relative
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["production_release_ready"] = True
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _refresh_manifest_hash(output, relative)
+
+    verification = verify_controls_build(output)
+    assert verification["status"] == "FAIL"
+    assert any("production release readiness" in item for item in verification["errors"])
