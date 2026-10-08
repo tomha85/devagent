@@ -48,6 +48,11 @@ requirement metadata.
 Unknown fields and unknown schema versions fail closed. Engineering-significant
 fields are explicit; the parser avoids behavior-changing implicit defaults.
 
+V1 accepts only catalog-qualified standards: `motor-v1`, `vfd-v1`,
+`conveyor-v1`, and `valve-v1`. A version-shaped but unqualified name such as
+`conveyor-v999` fails closed. Engineering identities are also checked for
+case-insensitive collisions so cross-vendor naming does not become ambiguous.
+
 ## Determinism contract
 
 Semantically unordered collections are normalized before hashing. Reordering
@@ -59,7 +64,9 @@ The authoring surface exposes:
 - `spec_sha256`: canonical validated specification identity;
 - `controls_ir_sha256`: canonical Controls IR identity.
 
-A semantic engineering change must change the Controls IR hash.
+A semantic engineering change must change the Controls IR hash. The in-memory
+Controls IR is deeply immutable: it contains frozen dataclasses and tuples,
+not mutable dictionaries or lists. This prevents post-hash authoring drift.
 
 ## Future phases
 
