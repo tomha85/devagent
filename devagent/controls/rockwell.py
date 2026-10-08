@@ -84,8 +84,11 @@ def _base_document(controller_name: str, platform: str) -> tuple[ET.Element, ET.
 
         for child_name in ("Tags", "Programs", "Tasks"):
             existing = plc.find(child_name)
-            if existing is not None:
-                plc.remove(existing)
+            if existing is None:
+                raise RockwellGenerationError(
+                    f"packaged Rockwell reference template has no {child_name}"
+                )
+            existing.clear()
         aois = plc.find("AddOnInstructionDefinitions")
         if aois is not None:
             aois.clear()
@@ -347,7 +350,9 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
             str(value) for value in dict(symbols["commands"]).values()
         )
 
-    tags_node = ET.SubElement(plc, "Tags")
+    tags_node = plc.find("Tags")
+    if tags_node is None:
+        tags_node = ET.SubElement(plc, "Tags")
     for name in tags:
         ET.SubElement(
             tags_node,
@@ -364,7 +369,9 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
             },
         )
 
-    programs = ET.SubElement(plc, "Programs")
+    programs = plc.find("Programs")
+    if programs is None:
+        programs = ET.SubElement(plc, "Programs")
     program = ET.SubElement(
         programs,
         "Program",
@@ -380,7 +387,9 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
         text = ET.SubElement(rung_node, "Text")
         text.text = rung.text
 
-    tasks = ET.SubElement(plc, "Tasks")
+    tasks = plc.find("Tasks")
+    if tasks is None:
+        tasks = ET.SubElement(plc, "Tasks")
     task = ET.SubElement(tasks, "Task", {"Name": "MainTask", "Type": "CONTINUOUS"})
     scheduled = ET.SubElement(task, "ScheduledPrograms")
     ET.SubElement(scheduled, "ScheduledProgram", {"Name": "DevAgentGenerated"})
