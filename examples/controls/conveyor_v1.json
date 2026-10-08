@@ -23,7 +23,8 @@
         {
           "id": "ALM_CONV101_DRIVE_FAULT",
           "priority": "HIGH",
-          "operator_response": "Inspect the drive fault and correct the cause before reset."
+          "operator_response": "Inspect the drive fault and correct the cause before reset.",
+          "source_signal": "DRIVE_FAULT"
         }
       ],
       "hmi": {"faceplate": "conveyor-v1", "historian": true},
