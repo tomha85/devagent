@@ -81,6 +81,79 @@ def _series(
     )
 
 
+def _status_rungs(
+    equipment: EquipmentSpec,
+    symbols: dict[str, object],
+) -> tuple[GeneratedRung, ...]:
+    standard = get_standard(equipment.standard)
+    signals = dict(symbols["signals"])
+    status = dict(symbols["status"])
+    outputs = dict(symbols["outputs"])
+    rungs: list[GeneratedRung] = []
+
+    if standard.equipment_type in {"MOTOR", "VFD", "CONVEYOR"}:
+        ready_contacts = [
+            *(f"XIC({signals[name]})" for name in equipment.permissives),
+            *(f"XIO({signals[name]})" for name in equipment.interlocks),
+        ]
+        if not ready_contacts:
+            raise RockwellGenerationError(
+                f"{equipment.id} cannot derive READY without permissive/interlock inputs"
+            )
+        ready_tag = status["READY"]
+        rungs.append(
+            GeneratedRung(
+                equipment_id=equipment.id,
+                purpose="STATUS_READY",
+                text="".join([*ready_contacts, f"OTE({ready_tag});"]),
+                output_tag=str(ready_tag),
+            )
+        )
+
+        running_tag = status["RUNNING"]
+        rungs.append(
+            GeneratedRung(
+                equipment_id=equipment.id,
+                purpose="STATUS_RUNNING",
+                text=f"XIC({outputs['RUN']})OTE({running_tag});",
+                output_tag=str(running_tag),
+            )
+        )
+
+        if not equipment.interlocks:
+            raise RockwellGenerationError(
+                f"{equipment.id} cannot derive FAULTED without an interlock/fault source"
+            )
+        fault_contacts = [f"XIC({signals[name]})" for name in equipment.interlocks]
+        fault_logic = (
+            fault_contacts[0]
+            if len(fault_contacts) == 1
+            else "[" + ",".join(fault_contacts) + "]"
+        )
+        faulted_tag = status["FAULTED"]
+        rungs.append(
+            GeneratedRung(
+                equipment_id=equipment.id,
+                purpose="STATUS_FAULTED",
+                text=f"{fault_logic}OTE({faulted_tag});",
+                output_tag=str(faulted_tag),
+            )
+        )
+    elif standard.equipment_type == "VALVE":
+        for member in ("OPEN", "CLOSED"):
+            output_name = "OPEN" if member == "OPEN" else "CLOSE"
+            status_tag = status[member]
+            rungs.append(
+                GeneratedRung(
+                    equipment_id=equipment.id,
+                    purpose=f"STATUS_{member}",
+                    text=f"XIC({outputs[output_name]})OTE({status_tag});",
+                    output_tag=str(status_tag),
+                )
+            )
+    return tuple(rungs)
+
+
 def generated_rungs(equipment: EquipmentSpec) -> tuple[GeneratedRung, ...]:
     standard = get_standard(equipment.standard)
     commands = _enabled_commands(equipment)
@@ -143,6 +216,8 @@ def generated_rungs(equipment: EquipmentSpec) -> tuple[GeneratedRung, ...]:
         raise RockwellGenerationError(
             f"unsupported equipment type for Rockwell generation: {standard.equipment_type}"
         )
+
+    rungs.extend(_status_rungs(equipment, symbols))
     return tuple(rungs)
 
 
