@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from devagent.controls.ir import ControlsIR
@@ -62,6 +63,19 @@ def verify_rockwell_roundtrip(
             "generated output writer count must equal one: "
             + ", ".join(f"{name}={count}" for name, count in sorted(bad_writer_counts.items()))
         )
+    physical_writes = sorted(
+        {
+            written
+            for rung in project.rungs
+            for written in rung.writes
+            if re.match(r"(?i)^(?:O:|Local:[^:]+:O\\.)", written)
+        }
+    )
+    if physical_writes:
+        mismatches.append(
+            "CTRL-E201 direct physical output write(s) are prohibited in generated "
+            "standard logic: " + ", ".join(physical_writes)
+        )
     if engineering.outcome.value != "STATICALLY_VERIFIED":
         mismatches.append(
             f"existing DevAgent PLC verifier outcome is {engineering.outcome.value}"
@@ -79,6 +93,7 @@ def verify_rockwell_roundtrip(
         "actual_rung_count": len(actual_rungs),
         "output_writer_counts": writer_counts,
         "unknown_instruction_names": list(project.unknown_instruction_names),
+        "direct_physical_output_writes": physical_writes,
         "mismatches": mismatches,
         "status": "PASS" if not mismatches else "FAIL",
         "authority": {
