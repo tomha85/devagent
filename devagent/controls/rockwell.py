@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.6.0"
+ROCKWELL_GENERATOR_VERSION = "1.7.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
@@ -382,10 +382,14 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
     root, plc = _base_document(controller_name, controller.platform)
 
     externally_writable: set[str] = set()
+    externally_hidden: set[str] = set()
     for item in equipment:
         symbols = equipment_symbol_map(item)
         externally_writable.update(
             str(value) for value in dict(symbols["commands"]).values()
+        )
+        externally_hidden.update(
+            str(value) for value in dict(symbols["internal"]).values()
         )
 
     tags_node = plc.find("Tags")
@@ -402,9 +406,14 @@ def render_rockwell_project(ir: ControlsIR, controller: ControllerSpec) -> Rockw
                 "Radix": "Decimal",
                 "Constant": "false",
                 # Standard commands are the only HMI/operator write surface.
-                # Signals, status, and generated outputs are externally read-only.
+                # Signals/status/outputs are read-only; edge-memory internals
+                # are hidden from external clients entirely.
                 "ExternalAccess": (
-                    "Read/Write" if name in externally_writable else "Read Only"
+                    "Read/Write"
+                    if name in externally_writable
+                    else "None"
+                    if name in externally_hidden
+                    else "Read Only"
                 ),
                 "OpcUaAccess": "None",
             },
