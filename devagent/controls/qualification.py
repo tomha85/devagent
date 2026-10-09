@@ -743,8 +743,17 @@ def write_controls_qualification(
     evidence_dir: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    result = qualify_controls_build(build_dir, evidence_dir)
+    build = build_dir.expanduser().resolve(strict=True)
+    result = qualify_controls_build(build, evidence_dir)
     target = output_path.expanduser().resolve(strict=False)
+    if target == build or build in target.parents:
+        raise ControlsQualificationError(
+            "qualification output must be outside the immutable verified build directory"
+        )
+    if target.exists():
+        raise ControlsQualificationError(
+            f"qualification output already exists: {target}"
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n",
