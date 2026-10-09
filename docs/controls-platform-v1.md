@@ -181,10 +181,12 @@ The generator emits bounded RLL using the supported deterministic instruction
 surface and does not create `.ACD` files. It never asks an LLM to invent ladder
 logic.
 
-For Motor/VFD/Conveyor standards, the primary run request uses one-writer
-STOP-dominant seal-in logic. Loss of a permissive or activation of an interlock
-drops the request; clearing the condition does not restore a dropped request
-without a new primary command. `RUNNING` is not inferred from the command
+For Motor/VFD/Conveyor standards, the primary run request uses deterministic
+rising-edge memory plus one-writer STOP-dominant seal-in logic built only from
+XIC/XIO/OTE. A held primary request is consumed once; loss of a permissive,
+activation of an interlock, or STOP drops the request. Clearing the condition
+does not re-establish the request until a fresh false-to-true primary edge is
+observed. `RUNNING` is not inferred from the command
 output: it is driven by the required `RUN_FB` feedback signal. Valve `OPEN`
 and `CLOSED` status similarly use required `OPEN_FB`/`CLOSED_FB` feedback
 rather than assuming commanded position equals physical position.
