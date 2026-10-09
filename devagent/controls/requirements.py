@@ -63,6 +63,11 @@ def requirements_payload(
         if controller_id is not None and item.controller != controller_id:
             continue
         for requirement in item.requirements:
+            plc_verifiable = requirement_is_plc_verifiable(item, requirement)
+            if controller_id is not None and not plc_verifiable:
+                # HMI-only requirements are qualified by the Controls HMI/FAT
+                # evidence surface, not misrepresented as PLC requirements.
+                continue
             rows.append(
                 {
                     "id": requirement.id,
@@ -72,8 +77,9 @@ def requirements_payload(
                     "verification_mode": "DYNAMIC",
                     "equipment_id": item.id,
                     "controller_id": item.controller,
+                    "domain": "PLC" if plc_verifiable else "HMI_OR_CROSS_DOMAIN",
                     "structured_assertion": requirement.assertion is not None,
-                    "plc_verifiable": requirement_is_plc_verifiable(item, requirement),
+                    "plc_verifiable": plc_verifiable,
                 }
             )
     rows.sort(key=lambda value: (value["controller_id"], value["equipment_id"], value["id"]))
