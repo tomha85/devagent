@@ -374,6 +374,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     assert qualified["integrated_fat"]["tests_total"] > 0
     assert qualified["runtime"][0]["readiness"] == "APPROVED_FOR_RELEASE"
     assert qualified["engineering_approval"]["status"] == "APPROVED"
-    assert qualified["production_release_ready"] is True
+    assert qualified["release_handoff_ready"] is True
+    assert qualified["production_release_ready"] is False
     assert qualified["production_deployment_performed"] is False
     assert qualified["deployment_authority_present"] is False
