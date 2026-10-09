@@ -58,19 +58,29 @@
       },
       "io": [
         {
-          "member": "SIGNAL.GUARD_OPEN",
+          "member": "SIGNAL.SAFETY_OK",
           "direction": "INPUT",
           "address": "Local:1:I.Data.0"
         },
         {
-          "member": "SIGNAL.DRIVE_FAULT",
+          "member": "SIGNAL.DOWNSTREAM_READY",
           "direction": "INPUT",
           "address": "Local:1:I.Data.1"
         },
         {
-          "member": "SIGNAL.RUN_FB",
+          "member": "SIGNAL.GUARD_OPEN",
           "direction": "INPUT",
           "address": "Local:1:I.Data.2"
+        },
+        {
+          "member": "SIGNAL.DRIVE_FAULT",
+          "direction": "INPUT",
+          "address": "Local:1:I.Data.3"
+        },
+        {
+          "member": "SIGNAL.RUN_FB",
+          "direction": "INPUT",
+          "address": "Local:1:I.Data.4"
         },
         {
           "member": "OUTPUT.RUN",
