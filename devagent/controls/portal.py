@@ -265,7 +265,9 @@ portal never performs PLC writes/downloads or Ignition Gateway deployment.</p>
 <div class="full"><label>Fault sources</label><input id="faults" value="DRIVE_FAULT"></div>
 <div><label>Alarm ID</label><input id="alarmId" value="ALM_CONV101_DRIVE_FAULT"></div>
 <div><label>Alarm source signal</label><input id="alarmSource" value="DRIVE_FAULT"></div>
+<div class="full"><label>Alarm description</label><input id="alarmDescription" value="Conveyor drive fault is active."></div>
 <div><label>Alarm priority</label><select id="alarmPriority"><option>HIGH</option><option>CRITICAL</option><option>MEDIUM</option><option>LOW</option><option>INFO</option></select></div>
+<div><label>Alarm on-delay (ms)</label><input id="alarmDelay" type="number" min="0" max="3600000" value="250"></div>
 <div><label>Historian</label><select id="historian"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
 <div class="full"><label>Operator response</label><input id="operatorResponse" value="Inspect drive fault and correct the cause before reset."></div>
 <div class="full"><label>I/O mappings</label><textarea id="ioMappings" placeholder="One per line: INPUT SIGNAL.GUARD_OPEN Local:1:I.Data.0&#10;OUTPUT OUTPUT.RUN Local:2:O.Data.0"></textarea><small>Mappings are staged metadata only. Generated standard logic never writes a physical I/O address directly.</small></div>
@@ -358,7 +360,9 @@ function generateSpec(){
      faults:csv('faults'),
      alarms:[{
        id:document.getElementById('alarmId').value.trim(),
+       description:document.getElementById('alarmDescription').value.trim(),
        priority:document.getElementById('alarmPriority').value,
+       on_delay_ms:Number.parseInt(document.getElementById('alarmDelay').value,10),
        operator_response:document.getElementById('operatorResponse').value.trim(),
        source_signal:document.getElementById('alarmSource').value.trim()
      }],
