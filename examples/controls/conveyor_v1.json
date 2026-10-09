@@ -98,6 +98,9 @@
             }
           }
         }
+      ],
+      "faults": [
+        "DRIVE_FAULT"
       ]
     }
   ]
