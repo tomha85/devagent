@@ -179,7 +179,9 @@ def test_simulator_reconnect_restores_subscription_after_server_restart() -> Non
             assert replacement.node_ids is not None
             assert replacement.node_ids.production_count == production_count_id
 
-            await client.wait_until_connected(\n            timeout_seconds=client.reconnect_request_timeout_seconds + 3.0\n        )
+            await client.wait_until_connected(
+                timeout_seconds=client.reconnect_request_timeout_seconds + 3.0
+            )
             assert client.connected is True
 
             changes = await asyncio.wait_for(collect_task, timeout=5.0)
