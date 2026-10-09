@@ -61,9 +61,13 @@ def test_duplicate_alarm_identity_across_equipment_fails_case_insensitively() ->
     payload = _payload()
     first = payload["equipment"][0]
     first["alarms"] = [
-        {"id": "ALM_SHARED", "priority": "HIGH", "operator_response": "Inspect fault."}
-        "description": "Equipment alarm.",
-        "on_delay_ms": 0,
+        {
+            "id": "ALM_SHARED",
+            "description": "Equipment alarm.",
+            "priority": "HIGH",
+            "on_delay_ms": 0,
+            "operator_response": "Inspect fault.",
+        }
     ]
     second = copy.deepcopy(first)
     second["id"] = "CONV_102"
