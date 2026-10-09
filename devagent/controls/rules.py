@@ -23,6 +23,31 @@ def _result(rule_id: str, passed: bool, subject: str, pass_text: str, fail_text:
     )
 
 
+def required_release_io_refs(item: EquipmentSpec) -> tuple[str, ...]:
+    """Logical I/O members that must be bound before production release handoff."""
+
+    standard = get_standard(item.standard)
+    refs = [
+        *(f"SIGNAL.{name}" for name in standard.required_feedback_signals),
+        *(f"OUTPUT.{name}" for name in standard.generated_outputs),
+    ]
+    return tuple(sorted(refs))
+
+
+def release_io_mapping_check(spec: ControlSystemSpec) -> dict[str, object]:
+    missing: dict[str, list[str]] = {}
+    for item in spec.equipment:
+        mapped = {mapping.member for mapping in item.io}
+        absent = sorted(set(required_release_io_refs(item)) - mapped)
+        if absent:
+            missing[item.id] = absent
+    return {
+        "schema": "devagent-controls-release-io-coverage-v1",
+        "status": "PASS" if not missing else "FAIL",
+        "missing": missing,
+    }
+
+
 def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     standard = get_standard(item.standard)
     commands = {name: enabled for name, enabled in item.commands}
@@ -262,6 +287,25 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
             item.id,
             "I/O semantic members are uniquely mapped.",
             "One or more logical I/O members are mapped more than once.",
+        )
+    )
+
+    missing_release_io = sorted(
+        set(required_release_io_refs(item)) - mapped_members
+    )
+    results.append(
+        ControlsRuleResult(
+            id="CTRL-W710",
+            status="PASS" if not missing_release_io else "WARN",
+            subject=item.id,
+            summary=(
+                "Required release I/O coverage is complete."
+                if not missing_release_io
+                else (
+                    "Engineering staging may continue, but release handoff requires "
+                    "I/O mapping for: " + ", ".join(missing_release_io)
+                )
+            ),
         )
     )
 
