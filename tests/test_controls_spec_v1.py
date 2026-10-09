@@ -29,6 +29,7 @@ def _payload():
                 "status": ["READY", "RUNNING", "FAULTED"],
                 "permissives": ["SAFE", "DOWNSTREAM_READY"],
                 "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+                "faults": ["DRIVE_FAULT"],
                 "alarms": [
                     {
                         "id": "ALM_DRIVE_FAULT",
@@ -140,4 +141,11 @@ def test_structured_assertion_rejects_unknown_logical_reference() -> None:
         "OUTPUT.NOT_DECLARED": False
     }
     with pytest.raises(ControlSpecError, match="undeclared output"):
+        parse_control_system_payload(payload)
+
+
+def test_fault_must_be_declared_as_interlock() -> None:
+    payload = _payload()
+    payload["equipment"][0]["interlocks"] = ["GUARD_OPEN"]
+    with pytest.raises(ControlSpecError, match="faults must also be declared as interlocks"):
         parse_control_system_payload(payload)
