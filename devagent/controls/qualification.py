@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from devagent.controls.build import ControlsBuildError, verify_controls_build
+from devagent.controls.ignition import ignition_semantic_projection
 from devagent.controls.ir import build_controls_ir, controls_ir_sha256
 from devagent.controls.schema import parse_control_system_payload
 from devagent.controls.symbols import controller_symbol
@@ -35,6 +36,16 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _timestamp(value: Any, *, field: str) -> str:
@@ -173,21 +184,26 @@ def _ignition_gateway_qualification(
     trust_store,
 ) -> dict[str, Any]:
     evidence_path = evidence_root / "ignition-gateway-import.json"
-    if not evidence_path.is_file():
+    export_evidence_path = evidence_root / "ignition-gateway-export.json"
+    if not evidence_path.is_file() or not export_evidence_path.is_file():
         raise ControlsQualificationError(
-            f"Ignition qualification requires signed {evidence_path.name}"
+            "Ignition qualification requires signed ignition-gateway-import.json "
+            "and ignition-gateway-export.json"
         )
-    metadata, signature = _signed_snapshot(
+
+    metadata, import_signature = _signed_snapshot(
         evidence_path,
         purpose="CONTROLS_IGNITION_GATEWAY_IMPORT",
         trust_store=trust_store,
     )
     if metadata.get("schema") != "devagent-controls-ignition-gateway-import-evidence-v1":
-        raise ControlsQualificationError("Ignition Gateway evidence has unsupported schema")
+        raise ControlsQualificationError("Ignition Gateway import evidence has unsupported schema")
     if metadata.get("status") != "PASS":
-        raise ControlsQualificationError("Ignition Gateway evidence status must be PASS")
+        raise ControlsQualificationError("Ignition Gateway import evidence status must be PASS")
     if metadata.get("controls_ir_sha256") != controls_ir_sha256(ir):
-        raise ControlsQualificationError("Ignition Gateway evidence Controls IR hash mismatch")
+        raise ControlsQualificationError(
+            "Ignition Gateway import evidence Controls IR hash mismatch"
+        )
 
     expected_hashes = {
         relative: digest
@@ -197,25 +213,214 @@ def _ignition_gateway_qualification(
     supplied = metadata.get("artifact_sha256")
     if supplied != expected_hashes:
         raise ControlsQualificationError(
-            "Ignition Gateway evidence artifact_sha256 does not exactly match "
+            "Ignition Gateway import evidence artifact_sha256 does not exactly match "
             "the verified staging artifacts"
         )
     gateway_version = str(metadata.get("gateway_version") or "").strip()
     if not gateway_version:
         raise ControlsQualificationError(
-            "Ignition Gateway evidence requires gateway_version"
+            "Ignition Gateway import evidence requires gateway_version"
         )
     imported_at = _timestamp(
         metadata.get("imported_at"),
         field="Ignition Gateway imported_at",
     )
+
+    staging_payloads = {
+        name: _load_json(build / "ignition" / name)
+        for name in (
+            "udts.json",
+            "equipment.json",
+            "alarms.json",
+            "history.json",
+            "views.json",
+            "navigation.json",
+        )
+    }
+    expected_projection = ignition_semantic_projection(staging_payloads)
+    expected_projection_sha256 = _json_sha256(expected_projection)
+
+    export_metadata, export_signature = _signed_snapshot(
+        export_evidence_path,
+        purpose="CONTROLS_IGNITION_GATEWAY_EXPORT",
+        trust_store=trust_store,
+    )
+    if (
+        export_metadata.get("schema")
+        != "devagent-controls-ignition-gateway-export-evidence-v1"
+    ):
+        raise ControlsQualificationError("Ignition Gateway export evidence has unsupported schema")
+    if export_metadata.get("status") != "PASS":
+        raise ControlsQualificationError("Ignition Gateway export evidence status must be PASS")
+    if export_metadata.get("controls_ir_sha256") != controls_ir_sha256(ir):
+        raise ControlsQualificationError(
+            "Ignition Gateway export evidence Controls IR hash mismatch"
+        )
+    if str(export_metadata.get("gateway_version") or "").strip() != gateway_version:
+        raise ControlsQualificationError(
+            "Ignition Gateway import/export evidence gateway_version mismatch"
+        )
+    adapter = str(export_metadata.get("adapter") or "").strip()
+    adapter_version = str(export_metadata.get("adapter_version") or "").strip()
+    if not adapter or not adapter_version:
+        raise ControlsQualificationError(
+            "Ignition Gateway export evidence requires adapter and adapter_version"
+        )
+    exported_at = _timestamp(
+        export_metadata.get("exported_at"),
+        field="Ignition Gateway exported_at",
+    )
+    actual_projection = export_metadata.get("projection")
+    if not isinstance(actual_projection, dict):
+        raise ControlsQualificationError(
+            "Ignition Gateway export evidence projection must be a JSON object"
+        )
+    actual_projection_sha256 = _json_sha256(actual_projection)
+    if export_metadata.get("projection_sha256") != actual_projection_sha256:
+        raise ControlsQualificationError(
+            "Ignition Gateway export evidence projection_sha256 mismatch"
+        )
+    if actual_projection != expected_projection:
+        raise ControlsQualificationError(
+            "Ignition Gateway exported semantic projection does not match "
+            "the deterministic staging intent"
+        )
+
     return {
         "status": "PASS",
         "gateway_version": gateway_version,
         "imported_at": imported_at,
+        "exported_at": exported_at,
         "artifact_sha256": expected_hashes,
-        "evidence_mode": "SIGNED_IMPORT_EVIDENCE",
-        "semantic_gateway_export_reimport": "NOT_IMPLEMENTED",
+        "evidence_mode": "SIGNED_IMPORT_AND_SEMANTIC_EXPORT_EVIDENCE",
+        "semantic_gateway_export_reimport": "PASS",
+        "expected_projection_sha256": expected_projection_sha256,
+        "actual_projection_sha256": actual_projection_sha256,
+        "adapter": adapter,
+        "adapter_version": adapter_version,
+        "import_signature": import_signature,
+        "export_signature": export_signature,
+    }
+
+
+def _controls_fat_qualification(
+    *,
+    build: Path,
+    evidence_root: Path,
+    ir,
+    manifest: dict[str, Any],
+    trust_store,
+    runtime_backend_ids: list[str],
+) -> dict[str, Any]:
+    evidence_path = evidence_root / "controls-fat-results.json"
+    if not evidence_path.is_file():
+        raise ControlsQualificationError(
+            "integrated Controls FAT requires signed controls-fat-results.json"
+        )
+    metadata, signature = _signed_snapshot(
+        evidence_path,
+        purpose="CONTROLS_FAT_RESULTS",
+        trust_store=trust_store,
+    )
+    if metadata.get("schema") != "devagent-controls-fat-results-v1":
+        raise ControlsQualificationError("Controls FAT evidence has unsupported schema")
+    if metadata.get("status") != "PASS":
+        raise ControlsQualificationError("Controls FAT evidence status must be PASS")
+    if metadata.get("controls_ir_sha256") != controls_ir_sha256(ir):
+        raise ControlsQualificationError("Controls FAT evidence Controls IR hash mismatch")
+
+    manifest_sha256 = _sha256(build / "generation-manifest.json")
+    if metadata.get("generation_manifest_sha256") != manifest_sha256:
+        raise ControlsQualificationError(
+            "Controls FAT evidence generation_manifest_sha256 mismatch"
+        )
+    fat_plan_path = build / "tests" / "fat-plan.json"
+    fat_plan_sha256 = _sha256(fat_plan_path)
+    if metadata.get("fat_plan_sha256") != fat_plan_sha256:
+        raise ControlsQualificationError(
+            "Controls FAT evidence fat_plan_sha256 mismatch"
+        )
+
+    plan = _load_json(fat_plan_path)
+    expected_ids = [str(item["id"]) for item in plan.get("cases", [])]
+    if not expected_ids:
+        raise ControlsQualificationError("Controls FAT plan has no cases")
+    if len(expected_ids) != len(set(expected_ids)):
+        raise ControlsQualificationError("Controls FAT plan contains duplicate test ids")
+
+    results = metadata.get("results")
+    if not isinstance(results, list):
+        raise ControlsQualificationError("Controls FAT evidence results must be a list")
+    result_ids = [str(item.get("test_id") or "") for item in results if isinstance(item, dict)]
+    if len(result_ids) != len(results) or any(not item for item in result_ids):
+        raise ControlsQualificationError(
+            "Controls FAT evidence contains an invalid test_id"
+        )
+    if len(result_ids) != len(set(result_ids)):
+        raise ControlsQualificationError(
+            "Controls FAT evidence contains duplicate test ids"
+        )
+    if set(result_ids) != set(expected_ids):
+        raise ControlsQualificationError(
+            "Controls FAT evidence test set does not exactly match generated FAT plan"
+        )
+
+    failures: list[str] = []
+    for item in results:
+        test_id = str(item["test_id"])
+        if item.get("status") != "PASS":
+            failures.append(f"{test_id}:{item.get('status')}")
+        _timestamp(
+            item.get("timestamp"),
+            field=f"Controls FAT {test_id} timestamp",
+        )
+        observed = str(item.get("observed") or "").strip()
+        evidence = item.get("evidence")
+        if not observed:
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} observed result is required"
+            )
+        if not isinstance(evidence, list) or not evidence or not all(
+            isinstance(value, str) and value.strip() for value in evidence
+        ):
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} requires non-empty evidence references"
+            )
+    if failures:
+        raise ControlsQualificationError(
+            "Controls FAT contains failing test(s): " + ", ".join(sorted(failures))
+        )
+
+    supplied_backend_ids = metadata.get("runtime_backend_ids")
+    if not isinstance(supplied_backend_ids, list):
+        raise ControlsQualificationError(
+            "Controls FAT evidence runtime_backend_ids must be a list"
+        )
+    supplied_backend_ids = sorted(
+        {str(value).strip() for value in supplied_backend_ids if str(value).strip()}
+    )
+    expected_backend_ids = sorted(set(runtime_backend_ids))
+    if supplied_backend_ids != expected_backend_ids:
+        raise ControlsQualificationError(
+            "Controls FAT runtime_backend_ids do not match the qualified controller "
+            f"backends: {supplied_backend_ids!r} != {expected_backend_ids!r}"
+        )
+    run_id = str(metadata.get("run_id") or "").strip()
+    if not run_id:
+        raise ControlsQualificationError("Controls FAT evidence run_id is required")
+    executed_at = _timestamp(
+        metadata.get("executed_at"),
+        field="Controls FAT executed_at",
+    )
+    return {
+        "status": "PASS",
+        "run_id": run_id,
+        "executed_at": executed_at,
+        "fat_plan_sha256": fat_plan_sha256,
+        "generation_manifest_sha256": manifest_sha256,
+        "runtime_backend_ids": expected_backend_ids,
+        "tests_total": len(expected_ids),
+        "tests_passed": len(expected_ids),
         "signature": signature,
     }
 
@@ -319,15 +524,32 @@ def qualify_controls_build(
         manifest=manifest,
         trust_store=trust_store,
     )
+    integrated_fat_result = _controls_fat_qualification(
+        build=build,
+        evidence_root=evidence_root,
+        ir=ir,
+        manifest=manifest,
+        trust_store=trust_store,
+        runtime_backend_ids=[
+            str(item["backend_id"])
+            for item in runtime_results
+            if item.get("backend_id")
+        ],
+    )
 
-    runtime_ready = all(
+    external_vendor_ready = (
+        all(item["status"] == "PASS" for item in studio_results)
+        and ignition_result["status"] == "PASS"
+        and integrated_fat_result["status"] == "PASS"
+    )
+    runtime_ready = external_vendor_ready and all(
         item["readiness"] in {
             "READY_FOR_ENGINEERING_APPROVAL",
             "APPROVED_FOR_RELEASE",
         }
         for item in runtime_results
     )
-    approved = runtime_ready and all(
+    approved = external_vendor_ready and runtime_ready and all(
         item["readiness"] == "APPROVED_FOR_RELEASE"
         for item in runtime_results
     )
@@ -348,6 +570,7 @@ def qualify_controls_build(
         "trust_store_sha256": trust_store.source_sha256,
         "studio5000": studio_results,
         "ignition_gateway": ignition_result,
+        "integrated_fat": integrated_fat_result,
         "runtime": runtime_results,
         "human_engineering_approval_required": True,
         "production_release_ready": approved,
