@@ -91,6 +91,18 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     )
     results.append(
         _result(
+            "CTRL-E325",
+            len(item.faults) >= standard.min_faults,
+            item.id,
+            f"Fault-source contract satisfies minimum {standard.min_faults}.",
+            (
+                f"{standard.id} requires at least {standard.min_faults} explicit fault "
+                f"source(s); found {len(item.faults)}."
+            ),
+        )
+    )
+    results.append(
+        _result(
             "CTRL-E330",
             len(item.alarms) >= standard.min_alarms,
             item.id,
@@ -116,7 +128,7 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     if standard.fault_status_member is not None:
         fault_status_ok = (
             standard.fault_status_member in status
-            and len(item.interlocks) >= standard.min_interlocks
+            and len(item.faults) >= standard.min_faults
         )
         results.append(
             _result(
@@ -124,12 +136,11 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
                 fault_status_ok,
                 item.id,
                 (
-                    f"{standard.fault_status_member} has explicit interlock/fault-source "
-                    "coverage."
+                    f"{standard.fault_status_member} has explicit fault-source coverage."
                 ),
                 (
                     f"{standard.id} requires {standard.fault_status_member} with explicit "
-                    "interlock/fault-source coverage."
+                    "fault-source coverage."
                 ),
             )
         )
@@ -172,6 +183,20 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
                 f"Alarm {alarm.id} is missing operator response guidance.",
             )
         )
+
+    alarm_sources = {
+        alarm.source_signal for alarm in item.alarms if alarm.source_signal is not None
+    }
+    missing_fault_alarm = sorted(set(item.faults) - alarm_sources)
+    results.append(
+        _result(
+            "CTRL-E331",
+            not missing_fault_alarm,
+            item.id,
+            "Every declared fault has an operator-visible alarm binding.",
+            "Fault source(s) missing alarm coverage: " + ", ".join(missing_fault_alarm),
+        )
+    )
 
     for requirement in item.requirements:
         assertion_required = requirement.criticality in {"HIGH", "CRITICAL"}
