@@ -12,6 +12,7 @@ from devagent.controls.build import (
     build_controls_project,
     verify_controls_build,
 )
+from devagent.controls.diff import diff_project_files
 from devagent.controls.ir import build_controls_ir, controls_ir_payload
 from devagent.controls.manifest import build_authoring_manifest
 from devagent.controls.normalize import normalized_spec_payload
@@ -56,6 +57,13 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="Verify a previously generated controls build")
     verify.add_argument("build_dir", type=Path)
+
+    diff = sub.add_parser(
+        "diff",
+        help="Compare a candidate controls specification against a verified baseline build",
+    )
+    diff.add_argument("baseline_build_dir", type=Path)
+    diff.add_argument("candidate_spec", type=Path)
 
     qualify = sub.add_parser(
         "qualify",
@@ -182,6 +190,12 @@ def _verify(path: Path) -> int:
     return 0 if result["status"] == "PASS" else 2
 
 
+def _diff(baseline_build_dir: Path, candidate_spec: Path) -> int:
+    result = diff_project_files(baseline_build_dir, candidate_spec)
+    print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def _qualify(build_dir: Path, *, evidence_dir: Path, output: Path) -> int:
     result = write_controls_qualification(build_dir, evidence_dir, output)
     print(f"CONTROLS_EXTERNAL_QUALIFICATION={result['status']}")
@@ -219,6 +233,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _build(args.spec, args.output_dir)
         if args.command == "verify":
             return _verify(args.build_dir)
+        if args.command == "diff":
+            return _diff(args.baseline_build_dir, args.candidate_spec)
         if args.command == "qualify":
             return _qualify(
                 args.build_dir,
