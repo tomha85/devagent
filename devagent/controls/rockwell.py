@@ -183,11 +183,11 @@ def _status_rungs(
             )
         )
 
-        if not equipment.interlocks:
+        if not equipment.faults:
             raise RockwellGenerationError(
-                f"{equipment.id} cannot derive FAULTED without an interlock/fault source"
+                f"{equipment.id} cannot derive FAULTED without an explicit fault source"
             )
-        fault_contacts = [f"XIC({signals[name]})" for name in equipment.interlocks]
+        fault_contacts = [f"XIC({signals[name]})" for name in equipment.faults]
         fault_logic = (
             fault_contacts[0]
             if len(fault_contacts) == 1
