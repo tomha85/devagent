@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.1.0"
+FAT_GENERATOR_VERSION = "2.2.0"
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class ControlsFATCase:
     expected_output: str
     expected_value: bool
     requirement_ids: tuple[str, ...]
+    prior_state: tuple[tuple[str, bool], ...] = ()
     execution_status: str = "NOT_RUN"
     method: str = "DETERMINISTIC_STANDARD_MODEL"
 
@@ -56,6 +57,7 @@ def _case(
     expected_output: str,
     expected: bool,
     requirement_ids: tuple[str, ...] = (),
+    prior_state: dict[str, bool] | None = None,
     method: str = "DETERMINISTIC_STANDARD_MODEL",
 ) -> ControlsFATCase:
     return ControlsFATCase(
@@ -67,6 +69,7 @@ def _case(
         expected_output=expected_output,
         expected_value=expected,
         requirement_ids=tuple(sorted(requirement_ids)),
+        prior_state=tuple(sorted((prior_state or {}).items())),
         method=method,
     )
 
@@ -117,16 +120,35 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                 expected=True,
             )
         )
+        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT":
+            held = _safe_baseline_inputs(item)
+            cases.append(
+                _case(
+                    item,
+                    suffix="PRIMARY-SEAL-IN-HOLD",
+                    title=f"{item.id} holds run request after the momentary primary command",
+                    action="HOLD",
+                    inputs=held,
+                    prior_state={"OUTPUT.RUN": True},
+                    expected_output="OUTPUT.RUN",
+                    expected=True,
+                )
+            )
         if standard.stop_action is not None:
-            stopped = dict(base)
+            stopped = _safe_baseline_inputs(item)
             stopped[f"COMMAND.{standard.stop_action}"] = True
             cases.append(
                 _case(
                     item,
                     suffix="STOP-INHIBIT",
-                    title=f"{item.id} stop command inhibits run output",
-                    action=action,
+                    title=f"{item.id} stop command drops an established run request",
+                    action=standard.stop_action,
                     inputs=stopped,
+                    prior_state=(
+                        {"OUTPUT.RUN": True}
+                        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+                        else {}
+                    ),
                     expected_output="OUTPUT.RUN",
                     expected=False,
                 )
@@ -146,15 +168,20 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                 )
             )
         for name in item.interlocks:
-            blocked = dict(base)
+            blocked = _safe_baseline_inputs(item)
             blocked[f"SIGNAL.{name}"] = True
             cases.append(
                 _case(
                     item,
                     suffix=f"INTERLOCK-{name}-TRUE",
-                    title=f"{item.id} is inhibited by interlock {name}",
-                    action=action,
+                    title=f"{item.id} active interlock drops an established run request",
+                    action="INTERLOCK_ASSERT",
                     inputs=blocked,
+                    prior_state=(
+                        {"OUTPUT.RUN": True}
+                        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+                        else {}
+                    ),
                     expected_output="OUTPUT.RUN",
                     expected=False,
                 )
@@ -232,6 +259,21 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     )
                 )
 
+    for status_member, signal_name in standard.status_signal_map:
+        feedback_inputs = _safe_baseline_inputs(item)
+        feedback_inputs[f"SIGNAL.{signal_name}"] = True
+        cases.append(
+            _case(
+                item,
+                suffix=f"FEEDBACK-{status_member}-{signal_name}",
+                title=f"{item.id} {status_member} status follows physical feedback {signal_name}",
+                action="FEEDBACK_ASSERT",
+                inputs=feedback_inputs,
+                expected_output=f"STATUS.{status_member}",
+                expected=True,
+            )
+        )
+
     for alarm in item.alarms:
         if alarm.source_signal is None:
             continue
@@ -265,6 +307,8 @@ def generate_controls_fat(ir: ControlsIR) -> tuple[ControlsFATCase, ...]:
 def evaluate_standard_state(
     item: EquipmentSpec,
     inputs: dict[str, bool],
+    *,
+    prior_state: dict[str, bool] | None = None,
 ) -> dict[str, bool]:
     standard = get_standard(item.standard)
     result: dict[str, bool] = {}
@@ -288,12 +332,17 @@ def evaluate_standard_state(
             if standard.stop_action is None
             else not commands.get(standard.stop_action, False)
         )
-        run = primary and stop_clear and permissives_ok and interlocks_clear
+        prior_run = bool((prior_state or {}).get("OUTPUT.RUN", False))
+        run_request = (
+            primary or prior_run
+            if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+            else primary
+        )
+        run = run_request and stop_clear and permissives_ok and interlocks_clear
         result["OUTPUT.RUN"] = run
         if "RESET" in standard.generated_outputs:
             result["OUTPUT.RESET"] = commands.get("RESET", False)
         result["STATUS.READY"] = permissives_ok and interlocks_clear
-        result["STATUS.RUNNING"] = run
         if standard.fault_status_member is not None:
             result[f"STATUS.{standard.fault_status_member}"] = fault_active
 
@@ -312,8 +361,9 @@ def evaluate_standard_state(
         )
         result["OUTPUT.OPEN"] = open_output
         result["OUTPUT.CLOSE"] = close_output
-        result["STATUS.OPEN"] = open_output
-        result["STATUS.CLOSED"] = close_output
+
+    for status_member, signal_name in standard.status_signal_map:
+        result[f"STATUS.{status_member}"] = signals.get(signal_name, False)
 
     for alarm in item.alarms:
         result[f"ALARM.{alarm.id}"] = (
@@ -348,7 +398,11 @@ def run_model_simulation(
     results: list[dict[str, Any]] = []
     for case in cases:
         item = equipment[case.equipment_id]
-        state = evaluate_standard_state(item, dict(case.inputs))
+        state = evaluate_standard_state(
+            item,
+            dict(case.inputs),
+            prior_state=dict(case.prior_state),
+        )
         present = case.expected_output in state
         actual = state.get(case.expected_output)
         passed = present and bool(actual) == case.expected_value
@@ -374,7 +428,7 @@ def run_model_simulation(
 
 def fat_payload(cases: tuple[ControlsFATCase, ...]) -> dict[str, Any]:
     return {
-        "schema": "devagent-controls-fat-plan-v2",
+        "schema": "devagent-controls-fat-plan-v3",
         "execution_status": "NOT_RUN",
         "execution_owner": "CONTROLS_ENGINEER",
         "cases": [
@@ -387,6 +441,7 @@ def fat_payload(cases: tuple[ControlsFATCase, ...]) -> dict[str, Any]:
                 "expected_output": case.expected_output,
                 "expected_value": case.expected_value,
                 "requirement_ids": list(case.requirement_ids),
+                "prior_state": dict(case.prior_state),
                 "execution_status": case.execution_status,
                 "method": case.method,
             }
