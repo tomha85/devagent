@@ -50,7 +50,11 @@ def expected_plc_projection(ir: ControlsIR, controller: ControllerSpec) -> dict[
                         "name": str(tag_name),
                         "data_type": "BOOL",
                         "external_access": (
-                            "Read/Write" if category == "commands" else "Read Only"
+                            "Read/Write"
+                            if category == "commands"
+                            else "None"
+                            if category == "internal"
+                            else "Read Only"
                         ),
                         "equipment_id": item.id,
                         "logical_ref": f"{logical_kind}.{logical_name}",
