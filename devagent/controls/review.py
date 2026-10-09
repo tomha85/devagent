@@ -58,6 +58,10 @@ def create_review_request(
         ),
     }
     target = output_path.expanduser().resolve(strict=False)
+    if target == build or build in target.parents:
+        raise ControlsBuildError(
+            "review request output must be outside the immutable verified build directory"
+        )
     if target.exists():
         raise ControlsBuildError(f"review request output already exists: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
