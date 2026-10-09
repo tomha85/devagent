@@ -213,6 +213,56 @@ def ignition_binding_check(
     }
 
 
+def normalize_ignition_projection(projection: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize an Ignition semantic export independent of vendor list ordering."""
+
+    if projection.get("schema") != "devagent-controls-ignition-semantic-projection-v1":
+        raise ValueError("unsupported Ignition semantic projection schema")
+
+    def rows(name: str) -> list[dict[str, Any]]:
+        value = projection.get(name)
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            raise ValueError(f"Ignition semantic projection {name} must be a list of objects")
+        return [dict(item) for item in value]
+
+    udts = rows("udt_definitions")
+    instances = rows("instances")
+    alarms = rows("alarms")
+    history = rows("history")
+    views = rows("views")
+    navigation = rows("navigation")
+
+    return {
+        "schema": "devagent-controls-ignition-semantic-projection-v1",
+        "udt_definitions": sorted(udts, key=lambda value: str(value.get("id", ""))),
+        "instances": sorted(instances, key=lambda value: str(value.get("id", ""))),
+        "alarms": sorted(alarms, key=lambda value: str(value.get("id", ""))),
+        "history": sorted(
+            history,
+            key=lambda value: (
+                str(value.get("equipment_id", "")),
+                str(value.get("member", "")),
+                str(value.get("plc_tag", "")),
+            ),
+        ),
+        "views": sorted(
+            views,
+            key=lambda value: (
+                str(value.get("equipment_id", "")),
+                str(value.get("faceplate", "")),
+            ),
+        ),
+        "navigation": sorted(
+            navigation,
+            key=lambda value: (
+                str(value.get("area") or ""),
+                str(value.get("equipment_id", "")),
+                str(value.get("target", "")),
+            ),
+        ),
+    }
+
+
 def ignition_semantic_projection(
     payloads: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -237,13 +287,14 @@ def ignition_semantic_projection(
             + ", ".join(missing)
         )
 
-    projection = {
-        "schema": "devagent-controls-ignition-semantic-projection-v1",
-        "udt_definitions": payloads["udts.json"]["udt_definitions"],
-        "instances": payloads["equipment.json"]["instances"],
-        "alarms": payloads["alarms.json"]["alarms"],
-        "history": payloads["history.json"]["history"],
-        "views": payloads["views.json"]["views"],
-        "navigation": payloads["navigation.json"]["navigation"],
-    }
-    return projection
+    return normalize_ignition_projection(
+        {
+            "schema": "devagent-controls-ignition-semantic-projection-v1",
+            "udt_definitions": payloads["udts.json"]["udt_definitions"],
+            "instances": payloads["equipment.json"]["instances"],
+            "alarms": payloads["alarms.json"]["alarms"],
+            "history": payloads["history.json"]["history"],
+            "views": payloads["views.json"]["views"],
+            "navigation": payloads["navigation.json"]["navigation"],
+        }
+    )
