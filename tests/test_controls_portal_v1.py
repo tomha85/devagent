@@ -5,7 +5,7 @@ from devagent.controls.portal import PortalService
 
 def _payload():
     return {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "CELL01",
         "controllers": [
             {"id": "PLC1", "vendor": "ROCKWELL", "platform": "COMPACTLOGIX"}
@@ -71,6 +71,6 @@ def test_portal_exposes_same_versioned_catalog(tmp_path) -> None:
     service = PortalService(tmp_path / "portal")
     catalog = service.catalog_payload()
 
-    assert catalog["schema"] == "devagent-controls-catalog-v1"
+    assert catalog["schema"] == "devagent-controls-catalog-v2"
     ids = {item["id"] for item in catalog["standards"]}
     assert ids == {"motor-v1", "vfd-v1", "conveyor-v1", "valve-v1"}
