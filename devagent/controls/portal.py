@@ -238,7 +238,7 @@ function assertionConditions(){
 function ioRows(){
  const lines=document.getElementById('ioMappings').value.split(/\n+/).map(x=>x.trim()).filter(Boolean);
  return lines.map(line=>{
-   const parts=line.split(/\s+/);
+   const parts=line.split(/\\s+/);
    if(parts.length<3) throw new Error('I/O line must be: INPUT|OUTPUT MEMBER ADDRESS');
    return {direction:parts[0].toUpperCase(),member:parts[1],address:parts.slice(2).join(' ')};
  });
