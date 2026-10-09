@@ -34,6 +34,7 @@ def _payload():
                         "id": "ALM_DRIVE_FAULT",
                         "priority": "HIGH",
                         "operator_response": "Inspect drive fault before reset.",
+                        "source_signal": "DRIVE_FAULT",
                     }
                 ],
                 "hmi": {"faceplate": "conveyor-v1", "historian": True},
@@ -42,6 +43,13 @@ def _payload():
                         "id": "REQ_GUARD",
                         "text": "Conveyor must not run with the guard open.",
                         "criticality": "HIGH",
+                        "assertion": {
+                            "conditions": {
+                                "COMMAND.START": True,
+                                "SIGNAL.GUARD_OPEN": True,
+                            },
+                            "expect": {"OUTPUT.RUN": False},
+                        },
                     }
                 ],
             }
@@ -79,4 +87,57 @@ def test_duplicate_equipment_identity_fails_case_insensitively() -> None:
     duplicate["requirements"] = []
     payload["equipment"].append(duplicate)
     with pytest.raises(ControlSpecError, match="case-insensitive duplicate"):
+        parse_control_system_payload(payload)
+
+
+def test_v2_parses_engineering_metadata_io_and_structured_assertion() -> None:
+    payload = _payload()
+    payload["controllers"][0]["network"] = "PACKAGING_NET"
+    equipment = payload["equipment"][0]
+    equipment["area"] = "PACKAGING"
+    equipment["safety_zone"] = "SZ03"
+    equipment["io"] = [
+        {
+            "member": "SIGNAL.GUARD_OPEN",
+            "direction": "INPUT",
+            "address": "Local:1:I.Data.0",
+        },
+        {
+            "member": "OUTPUT.RUN",
+            "direction": "OUTPUT",
+            "address": "Local:2:O.Data.0",
+        },
+    ]
+
+    result = parse_control_system_payload(payload)
+
+    assert result.controllers[0].network == "PACKAGING_NET"
+    assert result.equipment[0].area == "PACKAGING"
+    assert result.equipment[0].safety_zone == "SZ03"
+    assert result.equipment[0].io[1].member == "OUTPUT.RUN"
+    assertion = result.equipment[0].requirements[0].assertion
+    assert assertion is not None
+    assert assertion.expected_ref == "OUTPUT.RUN"
+    assert assertion.expected_value is False
+
+
+def test_io_direction_must_match_logical_member_kind() -> None:
+    payload = _payload()
+    payload["equipment"][0]["io"] = [
+        {
+            "member": "OUTPUT.RUN",
+            "direction": "INPUT",
+            "address": "Local:1:I.Data.0",
+        }
+    ]
+    with pytest.raises(ControlSpecError, match="INPUT mapping"):
+        parse_control_system_payload(payload)
+
+
+def test_structured_assertion_rejects_unknown_logical_reference() -> None:
+    payload = _payload()
+    payload["equipment"][0]["requirements"][0]["assertion"]["expect"] = {
+        "OUTPUT.NOT_DECLARED": False
+    }
+    with pytest.raises(ControlSpecError, match="undeclared output"):
         parse_control_system_payload(payload)
