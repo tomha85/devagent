@@ -14,6 +14,12 @@ from devagent.plc.models import CanonicalPLCProject
 _CONTACT_RE = re.compile(r"\b(?:XIC|XIO)\(([^)]+)\)")
 
 
+def _normalize_rung_text(value: str) -> str:
+    # Studio 5000 may rewrite insignificant whitespace on import/export.
+    # Rung order, instructions, operands, reads, and writes remain authoritative.
+    return re.sub(r"\s+", "", value or "")
+
+
 def _sha256(value: Any) -> str:
     payload = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -50,7 +56,7 @@ def expected_plc_projection(ir: ControlsIR, controller: ControllerSpec) -> dict[
                 {
                     "equipment_id": generated.equipment_id,
                     "purpose": generated.purpose,
-                    "text": generated.text,
+                    "text": _normalize_rung_text(generated.text),
                     "reads": list(reads),
                     "writes": [generated.output_tag],
                 }
@@ -93,7 +99,7 @@ def actual_plc_projection(
     ]
     rungs = [
         {
-            "text": rung.text,
+            "text": _normalize_rung_text(rung.text),
             "reads": list(sorted(set(rung.reads))),
             "writes": list(sorted(set(rung.writes))),
         }
