@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from devagent.controls.build import ControlsBuildError, verify_controls_build
-from devagent.controls.ignition import ignition_semantic_projection
+from devagent.controls.ignition import (
+    ignition_semantic_projection,
+    normalize_ignition_projection,
+)
 from devagent.controls.ir import build_controls_ir, controls_ir_sha256
 from devagent.controls.schema import parse_control_system_payload
 from devagent.controls.symbols import controller_symbol
@@ -270,11 +273,17 @@ def _ignition_gateway_qualification(
         export_metadata.get("exported_at"),
         field="Ignition Gateway exported_at",
     )
-    actual_projection = export_metadata.get("projection")
-    if not isinstance(actual_projection, dict):
+    raw_projection = export_metadata.get("projection")
+    if not isinstance(raw_projection, dict):
         raise ControlsQualificationError(
             "Ignition Gateway export evidence projection must be a JSON object"
         )
+    try:
+        actual_projection = normalize_ignition_projection(raw_projection)
+    except ValueError as exc:
+        raise ControlsQualificationError(
+            f"invalid Ignition Gateway semantic projection: {exc}"
+        ) from exc
     actual_projection_sha256 = _json_sha256(actual_projection)
     if export_metadata.get("projection_sha256") != actual_projection_sha256:
         raise ControlsQualificationError(
