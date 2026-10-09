@@ -14,6 +14,15 @@ class ControlsRuleResult:
     summary: str
 
 
+def _result(rule_id: str, passed: bool, subject: str, pass_text: str, fail_text: str) -> ControlsRuleResult:
+    return ControlsRuleResult(
+        id=rule_id,
+        status="PASS" if passed else "FAIL",
+        subject=subject,
+        summary=pass_text if passed else fail_text,
+    )
+
+
 def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
     standard = get_standard(item.standard)
     commands = {name: enabled for name, enabled in item.commands}
@@ -24,106 +33,185 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
         name for name in standard.required_commands if not commands.get(name, False)
     ]
     results.append(
-        ControlsRuleResult(
-            id="CTRL-E100",
-            status="FAIL" if missing_commands else "PASS",
-            subject=item.id,
-            summary=(
-                "Missing or disabled required command(s): " + ", ".join(missing_commands)
-                if missing_commands
-                else f"Required command contract satisfied for {standard.id}."
-            ),
+        _result(
+            "CTRL-E100",
+            not missing_commands,
+            item.id,
+            f"Required command contract satisfied for {standard.id}.",
+            "Missing or disabled required command(s): " + ", ".join(missing_commands),
         )
     )
 
     missing_status = [name for name in standard.required_status if name not in status]
     results.append(
-        ControlsRuleResult(
-            id="CTRL-E110",
-            status="FAIL" if missing_status else "PASS",
-            subject=item.id,
-            summary=(
-                "Missing required status member(s): " + ", ".join(missing_status)
-                if missing_status
-                else f"Required status contract satisfied for {standard.id}."
+        _result(
+            "CTRL-E110",
+            not missing_status,
+            item.id,
+            f"Required status contract satisfied for {standard.id}.",
+            "Missing required status member(s): " + ", ".join(missing_status),
+        )
+    )
+
+    reset_required = "RESET" in standard.required_commands
+    reset_ok = not reset_required or commands.get("RESET", False)
+    results.append(
+        _result(
+            "CTRL-E417",
+            reset_ok,
+            item.id,
+            "Reset contract is satisfied or not required by this standard.",
+            f"{standard.id} requires an enabled RESET command.",
+        )
+    )
+
+    results.append(
+        _result(
+            "CTRL-E310",
+            len(item.permissives) >= standard.min_permissives,
+            item.id,
+            f"Permissive contract satisfies minimum {standard.min_permissives}.",
+            (
+                f"{standard.id} requires at least {standard.min_permissives} permissive(s); "
+                f"found {len(item.permissives)}."
+            ),
+        )
+    )
+    results.append(
+        _result(
+            "CTRL-E320",
+            len(item.interlocks) >= standard.min_interlocks,
+            item.id,
+            f"Interlock/fault-source contract satisfies minimum {standard.min_interlocks}.",
+            (
+                f"{standard.id} requires at least {standard.min_interlocks} interlock/fault "
+                f"source(s); found {len(item.interlocks)}."
+            ),
+        )
+    )
+    results.append(
+        _result(
+            "CTRL-E330",
+            len(item.alarms) >= standard.min_alarms,
+            item.id,
+            f"Alarm contract satisfies minimum {standard.min_alarms}.",
+            (
+                f"{standard.id} requires at least {standard.min_alarms} alarm(s); "
+                f"found {len(item.alarms)}."
             ),
         )
     )
 
-    if "FAULTED" in standard.required_status:
+    overlap = sorted(set(item.permissives) & set(item.interlocks))
+    results.append(
+        _result(
+            "CTRL-E311",
+            not overlap,
+            item.id,
+            "Permissive/interlock ownership is unambiguous.",
+            "Signal(s) cannot be both permissive and interlock: " + ", ".join(overlap),
+        )
+    )
+
+    if standard.fault_status_member is not None:
+        fault_status_ok = (
+            standard.fault_status_member in status
+            and len(item.interlocks) >= standard.min_interlocks
+        )
         results.append(
-            ControlsRuleResult(
-                id="CTRL-E320",
-                status="PASS" if item.interlocks else "FAIL",
-                subject=item.id,
-                summary=(
-                    "At least one explicit interlock/fault source is available for "
-                    "the generated FAULTED status."
-                    if item.interlocks
-                    else "Standard requires FAULTED status but no interlock/fault "
-                    "source was declared."
+            _result(
+                "CTRL-E321",
+                fault_status_ok,
+                item.id,
+                (
+                    f"{standard.fault_status_member} has explicit interlock/fault-source "
+                    "coverage."
+                ),
+                (
+                    f"{standard.id} requires {standard.fault_status_member} with explicit "
+                    "interlock/fault-source coverage."
                 ),
             )
         )
 
-    overlap = sorted(set(item.permissives) & set(item.interlocks))
+    faceplate_ok = item.hmi.faceplate == standard.default_faceplate
     results.append(
-        ControlsRuleResult(
-            id="CTRL-E310",
-            status="FAIL" if overlap else "PASS",
-            subject=item.id,
-            summary=(
-                "Signal(s) cannot be both permissive and interlock: " + ", ".join(overlap)
-                if overlap
-                else "Permissive/interlock ownership is unambiguous."
+        _result(
+            "CTRL-E410",
+            faceplate_ok,
+            item.id,
+            f"Qualified faceplate {standard.default_faceplate} selected.",
+            (
+                f"Faceplate {item.hmi.faceplate!r} does not match qualified standard "
+                f"{standard.default_faceplate!r}."
             ),
         )
     )
 
-    if item.hmi.faceplate is None:
-        faceplate_status = "FAIL"
-        faceplate_summary = (
-            f"V1 generated HMI requires explicit qualified faceplate "
-            f"{standard.default_faceplate!r}; no faceplate was selected."
-        )
-    elif item.hmi.faceplate != standard.default_faceplate:
-        faceplate_status = "FAIL"
-        faceplate_summary = (
-            f"Faceplate {item.hmi.faceplate!r} does not match qualified standard "
-            f"{standard.default_faceplate!r}."
-        )
-    else:
-        faceplate_status = "PASS"
-        faceplate_summary = f"Qualified faceplate {item.hmi.faceplate} selected."
-    results.append(
-        ControlsRuleResult(
-            id="CTRL-E410",
-            status=faceplate_status,
-            subject=item.id,
-            summary=faceplate_summary,
-        )
-    )
-
     for alarm in item.alarms:
-        if alarm.source_signal is None:
-            alarm_status = "FAIL"
-            alarm_summary = (
-                f"Alarm {alarm.id} requires an explicit source_signal for deterministic "
-                "PLC/HMI binding."
+        source_ok = alarm.source_signal is not None
+        results.append(
+            _result(
+                "CTRL-E500",
+                source_ok,
+                f"{item.id}:{alarm.id}",
+                f"Alarm {alarm.id} is explicitly bound to signal {alarm.source_signal}.",
+                (
+                    f"Alarm {alarm.id} requires an explicit source_signal for deterministic "
+                    "PLC/HMI binding."
+                ),
             )
-        else:
-            alarm_status = "PASS"
-            alarm_summary = (
-                f"Alarm {alarm.id} is explicitly bound to signal {alarm.source_signal}."
+        )
+        response_ok = bool(alarm.operator_response.strip())
+        results.append(
+            _result(
+                "CTRL-W500",
+                response_ok,
+                f"{item.id}:{alarm.id}",
+                f"Alarm {alarm.id} includes operator response guidance.",
+                f"Alarm {alarm.id} is missing operator response guidance.",
             )
+        )
+
+    for requirement in item.requirements:
+        assertion_required = requirement.criticality in {"HIGH", "CRITICAL"}
+        assertion_ok = requirement.assertion is not None
         results.append(
             ControlsRuleResult(
-                id="CTRL-E500",
-                status=alarm_status,
-                subject=f"{item.id}:{alarm.id}",
-                summary=alarm_summary,
+                id="CTRL-E600" if assertion_required else "CTRL-W600",
+                status=(
+                    "PASS"
+                    if assertion_ok
+                    else "FAIL"
+                    if assertion_required
+                    else "WARN"
+                ),
+                subject=f"{item.id}:{requirement.id}",
+                summary=(
+                    "Requirement has a deterministic structured assertion."
+                    if assertion_ok
+                    else (
+                        f"{requirement.criticality} requirement requires a structured "
+                        "assertion for deterministic FAT generation."
+                        if assertion_required
+                        else "Text-only requirement remains traceable but cannot produce "
+                        "deterministic requirement-specific FAT proof."
+                    )
+                ),
             )
         )
+
+    mapped_members = {mapping.member for mapping in item.io}
+    duplicate_io_semantics = len(mapped_members) != len(item.io)
+    results.append(
+        _result(
+            "CTRL-E700",
+            not duplicate_io_semantics,
+            item.id,
+            "I/O semantic members are uniquely mapped.",
+            "One or more logical I/O members are mapped more than once.",
+        )
+    )
 
     return results
 
@@ -133,15 +221,12 @@ def evaluate_controls_rules(spec: ControlSystemSpec) -> tuple[ControlsRuleResult
     assigned = {item.controller for item in spec.equipment}
     for controller in spec.controllers:
         results.append(
-            ControlsRuleResult(
-                id="CTRL-E020",
-                status="PASS" if controller.id in assigned else "FAIL",
-                subject=controller.id,
-                summary=(
-                    "Controller has at least one assigned equipment object."
-                    if controller.id in assigned
-                    else "Controller has no assigned equipment; empty generated projects are prohibited."
-                ),
+            _result(
+                "CTRL-E020",
+                controller.id in assigned,
+                controller.id,
+                "Controller has at least one assigned equipment object.",
+                "Controller has no assigned equipment; empty generated projects are prohibited.",
             )
         )
     for item in spec.equipment:
