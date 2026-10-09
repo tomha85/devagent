@@ -110,12 +110,25 @@ def _spec():
     )
 
 
-def _private_and_store(root: Path) -> tuple[Ed25519PrivateKey, Path]:
-    private = Ed25519PrivateKey.generate()
-    public = private.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
+def _private_and_store(
+    root: Path,
+) -> tuple[Ed25519PrivateKey, Ed25519PrivateKey, Path]:
+    evidence_private = Ed25519PrivateKey.generate()
+    approval_private = Ed25519PrivateKey.generate()
+
+    def signer(key_id: str, private: Ed25519PrivateKey, purposes: list[str]) -> dict:
+        public = private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return {
+            "id": key_id,
+            "algorithm": "ED25519",
+            "public_key_base64": base64.b64encode(public).decode("ascii"),
+            "purposes": purposes,
+            "status": "TRUSTED",
+        }
+
     store = root / "trust-store.json"
     store.write_text(
         json.dumps(
@@ -124,23 +137,42 @@ def _private_and_store(root: Path) -> tuple[Ed25519PrivateKey, Path]:
                 "approved_by": "Plant Security Owner",
                 "approved_at": "2026-10-08T18:00:00Z",
                 "signers": [
-                    {
-                        "id": "plant-controls-root",
-                        "algorithm": "ED25519",
-                        "public_key_base64": base64.b64encode(public).decode("ascii"),
-                        "purposes": ["*"],
-                        "status": "TRUSTED",
-                    }
+                    signer(
+                        "plant-controls-evidence",
+                        evidence_private,
+                        [
+                            "CONTROLS_STUDIO5000_IMPORT",
+                            "CONTROLS_IGNITION_GATEWAY_IMPORT",
+                            "CONTROLS_IGNITION_GATEWAY_EXPORT",
+                            "CONTROLS_FAT_RESULTS",
+                            "EXECUTION_BACKEND_REGISTRY",
+                            "EXECUTION_RESULTS",
+                        ],
+                    ),
+                    signer(
+                        "plant-controls-approval",
+                        approval_private,
+                        [
+                            "HUMAN_APPROVAL",
+                            "CONTROLS_ENGINEERING_APPROVAL",
+                        ],
+                    ),
                 ],
             },
             sort_keys=True,
         ),
         encoding="utf-8",
     )
-    return private, store
+    return evidence_private, approval_private, store
 
 
-def _signed_json(path: Path, private: Ed25519PrivateKey, payload: dict) -> Path:
+def _signed_json(
+    path: Path,
+    private: Ed25519PrivateKey,
+    payload: dict,
+    *,
+    key_id: str = "plant-controls-evidence",
+) -> Path:
     canonical = json.dumps(
         payload,
         sort_keys=True,
@@ -150,13 +182,12 @@ def _signed_json(path: Path, private: Ed25519PrivateKey, payload: dict) -> Path:
     signed = dict(payload)
     signed["signature"] = {
         "algorithm": "ED25519",
-        "key_id": "plant-controls-root",
+        "key_id": key_id,
         "value_base64": base64.b64encode(private.sign(canonical)).decode("ascii"),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(signed, sort_keys=True), encoding="utf-8")
     return path
-
 
 def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: Path) -> None:
     build = tmp_path / "build"
@@ -164,7 +195,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
 
     evidence = tmp_path / "evidence"
     evidence.mkdir()
-    private, trust_store = _private_and_store(evidence)
+    evidence_private, approval_private, trust_store = _private_and_store(evidence)
     manifest = json.loads((build / "generation-manifest.json").read_text(encoding="utf-8"))
 
     controller_evidence = evidence / "PLC1"
@@ -175,7 +206,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
 
     _signed_json(
         controller_evidence / "studio5000-import.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-controls-studio5000-import-evidence-v1",
             "status": "PASS",
@@ -196,7 +227,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     }
     _signed_json(
         evidence / "ignition-gateway-import.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-controls-ignition-gateway-import-evidence-v1",
             "status": "PASS",
@@ -229,7 +260,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     ).hexdigest()
     _signed_json(
         evidence / "ignition-gateway-export.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-controls-ignition-gateway-export-evidence-v1",
             "status": "PASS",
@@ -252,7 +283,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     project_sha = static.engineering.project.metadata.source_sha256
     registry = _signed_json(
         controller_evidence / "backend-registry.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-plc-execution-backend-registry-v1",
             "approved_by": "Controls Platform Owner",
@@ -270,7 +301,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     )
     execution = _signed_json(
         controller_evidence / "execution-results.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-plc-execution-results-v1",
             "project_sha256": project_sha,
@@ -314,8 +345,9 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     }
     _signed_json(
         controller_evidence / "approval.json",
-        private,
+        approval_private,
         approval_payload,
+        key_id="plant-controls-approval",
     )
 
     fat_plan_path = build / "tests" / "fat-plan.json"
@@ -329,7 +361,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     }
     _signed_json(
         evidence / "controls-fat-results.json",
-        private,
+        evidence_private,
         {
             "schema": "devagent-controls-fat-results-v1",
             "status": "PASS",
@@ -366,7 +398,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
 
     _signed_json(
         evidence / "controls-engineering-approval.json",
-        private,
+        approval_private,
         {
             "schema": "devagent-controls-engineering-approval-v1",
             "project_id": manifest["project_id"],
@@ -377,6 +409,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
             "approved_by": "Lead Controls Engineer",
             "approved_at": "2026-10-08T18:40:00Z",
         },
+        key_id="plant-controls-approval",
     )
 
     qualified = qualify_controls_build(build, evidence)
