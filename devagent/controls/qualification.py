@@ -13,6 +13,7 @@ from devagent.controls.ignition import (
 )
 from devagent.controls.ir import build_controls_ir, controls_ir_sha256
 from devagent.controls.schema import parse_control_system_payload
+from devagent.controls.rules import release_io_mapping_check
 from devagent.controls.symbols import controller_symbol
 from devagent.controls.verification import verify_rockwell_roundtrip
 from devagent.plc.production_v5 import run_production_verification_v5
@@ -589,6 +590,17 @@ def qualify_controls_build(
     spec = parse_control_system_payload(_load_json(build / "input" / "spec.json"))
     ir = build_controls_ir(spec)
 
+    release_io = release_io_mapping_check(spec)
+    if release_io["status"] != "PASS":
+        details = "; ".join(
+            f"{equipment_id}: {', '.join(members)}"
+            for equipment_id, members in sorted(release_io["missing"].items())
+        )
+        raise ControlsQualificationError(
+            "external qualification requires complete release I/O mapping for "
+            "all required feedback signals and generated outputs: " + details
+        )
+
     trust_store_path = evidence_root / "trust-store.json"
     if not trust_store_path.is_file():
         raise ControlsQualificationError(
@@ -741,6 +753,7 @@ def qualify_controls_build(
         "studio5000": studio_results,
         "ignition_gateway": ignition_result,
         "integrated_fat": integrated_fat_result,
+        "release_io_mapping": release_io,
         "runtime": runtime_results,
         "approval_context": approval_context,
         "approval_context_sha256": approval_context_sha256,
