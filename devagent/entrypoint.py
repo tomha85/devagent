@@ -20,6 +20,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from devagent.live.cli import main as live_main
 
         return live_main(arguments[1:])
+    if arguments and arguments[0] == "controls":
+        from devagent.controls.cli import main as controls_main
+
+        return controls_main(arguments[1:])
     if len(arguments) >= 2 and arguments[0] == "plc" and arguments[1] == "inspect":
         from devagent.plc.inspect_cli import main as plc_inspect_main
 

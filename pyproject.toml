@@ -50,6 +50,12 @@ Sponsor = "https://github.com/sponsors/tomha85"
 [tool.setuptools.packages.find]
 include = ["devagent*", "agent*"]
 
+[tool.setuptools.package-data]
+"devagent.controls" = [
+  "templates/rockwell/*.L5X",
+  "THIRD_PARTY_NOTICES.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

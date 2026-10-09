@@ -455,6 +455,7 @@ class ReadOnlyOpcUaClient:
         self._client: Any | None = None
         self._connection_epoch = 0
         self._last_connection_loss_at: float | None = None
+        self._fresh_reconnect_lock: asyncio.Lock | None = None
 
     @property
     def connection_state(self) -> str:
@@ -480,13 +481,83 @@ class ReadOnlyOpcUaClient:
     def security_summary(self) -> str:
         return self.security.channel_summary
 
-    async def wait_until_connected(self, *, timeout_seconds: float = 30.0) -> None:
-        """Wait for asyncua's reconnect supervisor to restore the session.
+    def _get_fresh_reconnect_lock(self) -> asyncio.Lock:
+        lock = self._fresh_reconnect_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._fresh_reconnect_lock = lock
+        return lock
 
-        This method does not perform a second reconnect loop. It only observes
-        asyncua's public state-subscription API so DevAgent has one reconnect
-        authority and does not race the library's session/subscription recovery.
+    async def _new_connected_asyncua_client(self) -> Any:
+        """Create one fully configured asyncua client without changing public authority."""
+
+        Client, ua = _require_asyncua()
+        client = Client(url=self.endpoint, timeout=self.timeout_seconds)
+
+        async def note_connection_loss(_exc: Exception) -> None:
+            self._connection_epoch += 1
+            self._last_connection_loss_at = asyncio.get_running_loop().time()
+
+        if self.auto_reconnect and hasattr(client, "connection_lost_callback"):
+            client.connection_lost_callback = note_connection_loss
+
+        try:
+            await self._configure_client_security(client, ua)
+            await client.connect(
+                auto_reconnect=self.auto_reconnect,
+                reconnect_max_delay=self.reconnect_max_delay_seconds,
+                reconnect_request_timeout=self.reconnect_request_timeout_seconds,
+            )
+        except LiveDependencyError:
+            raise
+        except Exception as exc:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            message = self.security.redact(str(exc))
+            raise LiveConnectionError(
+                f"Unable to connect OPC UA session {self.endpoint}: {message}"
+            ) from None
+        return client
+
+    async def _fresh_session_reconnect(self) -> None:
+        """Create a new read-only session if asyncua reconnect cannot recover.
+
+        Normal reconnect remains owned by asyncua. This bounded fallback is used
+        only after the reconnect observation deadline expires, which covers a
+        complete server restart where the prior server-side session vanished.
         """
+
+        if not self.auto_reconnect:
+            raise LiveConnectionError("OPC UA auto reconnect is disabled")
+
+        async with self._get_fresh_reconnect_lock():
+            if self.connected:
+                return
+
+            previous = self._client
+            if previous is None:
+                raise LiveConnectionError("OPC UA session is not connected")
+
+            try:
+                await asyncio.wait_for(
+                    previous.disconnect(),
+                    timeout=max(2.0, self.timeout_seconds * 2.0),
+                )
+            except Exception:
+                pass
+            finally:
+                if self._client is previous:
+                    self._client = None
+
+            replacement = await self._new_connected_asyncua_client()
+            self._client = replacement
+            self._connection_epoch += 1
+            self._last_connection_loss_at = asyncio.get_running_loop().time()
+
+    async def wait_until_connected(self, *, timeout_seconds: float = 30.0) -> None:
+        """Wait for reconnect and use a bounded fresh-session fallback if needed."""
 
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be > 0")
@@ -500,6 +571,7 @@ class ReadOnlyOpcUaClient:
             raise LiveConnectionError("Installed asyncua does not expose reconnect state notifications")
 
         deadline = asyncio.get_running_loop().time() + timeout_seconds
+        timed_out = False
         try:
             async with subscribe_state() as states:
                 while True:
@@ -511,19 +583,26 @@ class ReadOnlyOpcUaClient:
 
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise LiveConnectionError(
-                            f"Timed out waiting for OPC UA reconnect; state={self.connection_state}"
-                        )
+                        timed_out = True
+                        break
                     try:
                         await states.next_change(timeout=remaining)
-                    except asyncio.TimeoutError as exc:
-                        raise LiveConnectionError(
-                            f"Timed out waiting for OPC UA reconnect; state={self.connection_state}"
-                        ) from exc
+                    except asyncio.TimeoutError:
+                        timed_out = True
+                        break
         except LiveConnectionError:
             raise
         except Exception as exc:
             raise LiveConnectionError(f"Unable to observe OPC UA reconnect state: {exc}") from exc
+
+        if timed_out and self.auto_reconnect:
+            await self._fresh_session_reconnect()
+            if self.connected:
+                return
+
+        raise LiveConnectionError(
+            f"Timed out waiting for OPC UA reconnect; state={self.connection_state}"
+        )
 
     async def discover_endpoints(self) -> list[EndpointSummary]:
         Client, _ua = _require_asyncua()
@@ -672,37 +751,7 @@ class ReadOnlyOpcUaClient:
     async def connect(self) -> None:
         if self._client is not None:
             return
-        Client, ua = _require_asyncua()
-        # asyncua 2.0 exposes reconnect controls on connect(); 2.0.1 also
-        # accepts them in the constructor. Keep construction compatible with
-        # both supported releases and configure reconnect in one place.
-        client = Client(url=self.endpoint, timeout=self.timeout_seconds)
-
-        async def note_connection_loss(_exc: Exception) -> None:
-            self._connection_epoch += 1
-            self._last_connection_loss_at = asyncio.get_running_loop().time()
-
-        if self.auto_reconnect and hasattr(client, "connection_lost_callback"):
-            client.connection_lost_callback = note_connection_loss
-        try:
-            await self._configure_client_security(client, ua)
-            await client.connect(
-                auto_reconnect=self.auto_reconnect,
-                reconnect_max_delay=self.reconnect_max_delay_seconds,
-                reconnect_request_timeout=self.reconnect_request_timeout_seconds,
-            )
-        except LiveDependencyError:
-            raise
-        except Exception as exc:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            message = self.security.redact(str(exc))
-            raise LiveConnectionError(
-                f"Unable to connect OPC UA session {self.endpoint}: {message}"
-            ) from None
-        self._client = client
+        self._client = await self._new_connected_asyncua_client()
 
     async def disconnect(self) -> None:
         client, self._client = self._client, None
@@ -858,29 +907,59 @@ class ReadOnlyOpcUaClient:
     ) -> list[RuntimeValue]:
         if count < 1:
             raise ValueError("count must be >= 1")
-        client = self._require_connected()
+
+        requested_node_ids = tuple(node_ids)
+        if not requested_node_ids:
+            return []
+
         _Client, _ua = _require_asyncua()
         from asyncua.common.subscription import DataChangeEvent, StatusChangeEvent
-
-        nodes = [client.get_node(node_id) for node_id in node_ids]
-        if not nodes:
-            return []
 
         values: list[RuntimeValue] = []
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
-        subscription_epoch = self._connection_epoch
-        poll_seconds = min(
-            0.25,
-            max(0.05, publishing_interval_ms / 1000.0),
-        )
+        subscription: Any | None = None
+        subscription_client: Any | None = None
+        subscription_epoch = -1
+        poll_seconds = min(0.25, max(0.05, publishing_interval_ms / 1000.0))
 
-        async with await client.create_subscription(publishing_interval_ms) as subscription:
+        async def discard_subscription() -> None:
+            nonlocal subscription, subscription_client
+            current, subscription = subscription, None
+            subscription_client = None
+            if current is None:
+                return
+            try:
+                await current.delete()
+            except Exception:
+                pass
+
+        async def ensure_subscription() -> None:
+            nonlocal subscription, subscription_client, subscription_epoch
+            if not self.connected:
+                await self.wait_until_connected(
+                    timeout_seconds=max(
+                        self.reconnect_request_timeout_seconds,
+                        timeout_seconds,
+                    )
+                )
+            active_client = self._require_connected()
+            if subscription is not None and subscription_client is active_client:
+                return
+
+            await discard_subscription()
+            nodes = [active_client.get_node(node_id) for node_id in requested_node_ids]
+            subscription = await active_client.create_subscription(publishing_interval_ms)
             await subscription.subscribe_data_change(
                 nodes,
                 queuesize=queue_size,
                 sampling_interval=sampling_interval_ms,
             )
+            subscription_client = active_client
+            subscription_epoch = self._connection_epoch
+
+        try:
+            await ensure_subscription()
             while len(values) < count:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
@@ -888,13 +967,28 @@ class ReadOnlyOpcUaClient:
 
                 event = None
                 try:
+                    assert subscription is not None
                     event = await subscription.next_event(
                         timeout=min(remaining, poll_seconds)
                     )
                 except asyncio.TimeoutError:
                     event = None
+                except Exception as exc:
+                    recovering = self.auto_reconnect and self.connection_state in {
+                        "CONNECTING",
+                        "DISCONNECTED",
+                        "RECONNECTING",
+                    }
+                    if not recovering:
+                        message = self.security.redact(str(exc))
+                        raise LiveConnectionError(
+                            f"Subscription observation failed: {message}"
+                        ) from None
 
-                connection_changed = self._connection_epoch != subscription_epoch
+                connection_changed = (
+                    self._connection_epoch != subscription_epoch
+                    or self._client is not subscription_client
+                )
                 recovering_state = self.connection_state in {
                     "CONNECTING",
                     "DISCONNECTED",
@@ -908,12 +1002,11 @@ class ReadOnlyOpcUaClient:
                             timeout_seconds,
                         )
                     )
-                    # asyncua marks the session CONNECTED during ActivateSession
-                    # and then restores its tracked subscriptions. Preserve the
-                    # library as the sole restoration authority and give the
-                    # restored subscription a fresh connected observation window.
-                    await asyncio.sleep(0)
                     deadline += max(0.0, loop.time() - recovery_started)
+
+                    if self._client is not subscription_client:
+                        await discard_subscription()
+                        await ensure_subscription()
                     subscription_epoch = self._connection_epoch
                     continue
 
@@ -947,4 +1040,7 @@ class ReadOnlyOpcUaClient:
                         replayed=event.replayed,
                     )
                 )
+        finally:
+            await discard_subscription()
         return values
+

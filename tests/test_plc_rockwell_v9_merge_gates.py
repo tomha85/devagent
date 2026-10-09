@@ -114,12 +114,22 @@ def test_v9_regression_packages_baseline_and_current_evidence_without_id_collisi
     assert current_items[0].payload["paths"] == [[{"tag": "B", "required": True}]]
 
 
-def test_release_triggering_production_ci_contains_rockwell_v9_gate() -> None:
+def test_main_merge_release_keeps_rockwell_v9_as_premerge_gate() -> None:
     root = Path(__file__).resolve().parents[1]
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (root / ".github" / "workflows" / "release-on-ci.yml").read_text(encoding="utf-8")
 
+    # Production CI is the pre-merge qualification surface and must retain
+    # the Rockwell V9 gate. Release intentionally starts from an exact main
+    # merge and performs its own build/twine/wheel smoke on that exact SHA.
     assert "name: Production CI" in ci
+    assert "pull_request:" in ci
     assert "scripts/qualify_rockwell_official.py" in ci
     assert ".devagent/rockwell-official-qualification-v9.json" in ci
-    assert 'workflows: ["Production CI"]' in release
+
+    assert "name: Release version after main merge" in release
+    assert "push:" in release
+    assert "branches: [main]" in release
+    assert "ref: ${{ github.sha }}" in release
+    assert 'test "$(git rev-parse HEAD)" = "$RELEASE_SHA"' in release
+    assert "python -m twine check dist/*" in release

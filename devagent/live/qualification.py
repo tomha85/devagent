@@ -315,7 +315,9 @@ async def _reconnect(_ctx: _Context) -> str:
         assert replacement.node_ids is not None
         if replacement.node_ids.production_count != node_id:
             raise AssertionError("replacement changed deterministic NodeId")
-        await client.wait_until_connected(timeout_seconds=5.0)
+        await client.wait_until_connected(
+            timeout_seconds=client.reconnect_request_timeout_seconds + 3.0
+        )
         changes = await asyncio.wait_for(task, timeout=5.0)
         if len(changes) != 3 or any(item.quality is not Quality.GOOD for item in changes):
             raise AssertionError("active subscription was not restored")

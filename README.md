@@ -22,7 +22,7 @@ For a normal verified software run the deterministic harness prints the complete
 
 ## General Architecture
 
-DevAgent has **three sibling product branches** under one evidence-driven core. Each branch owns a distinct engineering responsibility, input model, safety boundary, and qualification path.
+DevAgent has **four sibling product branches** under one evidence-driven core. Each branch owns a distinct engineering responsibility, input model, safety boundary, and qualification path.
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear", "nodeSpacing": 50, "rankSpacing": 55}}}%%
@@ -31,7 +31,8 @@ flowchart TB
 
     CORE --> SW["Software Engineering<br/>Product Branch #1"]
     CORE --> PLC["DevAgent PLC<br/>Product Branch #2"]
-    CORE --> LIVE["DevAgent Live<br/>Product Branch #3"]
+    CORE --> CONTROLS["DevAgent Controls<br/>Product Branch #3"]
+    CORE --> LIVE["DevAgent Live<br/>Product Branch #4"]
 
     SW --> SW_IN["Local / GitHub Repository"]
     SW_IN --> SW_FLOW["Understand · Plan · Modify · Test · Review"]
@@ -41,6 +42,10 @@ flowchart TB
     PLC_IN --> PLC_VENDOR["Siemens · Rockwell · Schneider"]
     PLC_VENDOR --> PLC_MODEL["Canonical PLC Engineering Model"]
     PLC_MODEL --> PLC_OUT["Analyze · Verify · FAT · Release Readiness"]
+
+    CONTROLS --> CTRL_IN["Controls Specification"]
+    CTRL_IN --> CTRL_IR["Deterministic Controls IR"]
+    CTRL_IR --> CTRL_OUT["Generate · Round-trip Verify · Stage · Review"]
 
     LIVE --> LIVE_IN["Engineering Context + OPC UA Endpoint(s)"]
     LIVE_IN --> LIVE_TRUST["Reconcile · Trust · Freshness · History"]
@@ -52,6 +57,7 @@ flowchart TB
 | --- | --- | --- |
 | **Software Engineering** | Local / GitHub repository | Understand, modify, verify, review, report, publish a safe branch |
 | **DevAgent PLC** | Exported PLC engineering artifacts | Offline engineering review, requirements, FAT, evidence, release readiness |
+| **DevAgent Controls** | Versioned controls specification | Deterministic standards, Rockwell/Ignition staging generation, round-trip verification, FAT planning, engineering review handoff — **no production deployment** |
 | **DevAgent Live** | Read-only engineering context + OPC UA runtime | Onsite commissioning diagnosis, runtime evidence, history, Q&A — **no PLC control** |
 
 ### Read-only PLC → Live integration contract

@@ -329,7 +329,7 @@
     {
       "id": "release-gated-by-green-exact-main",
       "category": "release_integrity",
-      "pytest_node": "tests/test_production_v040.py::test_release_workflow_requires_green_exact_main_revision",
+      "pytest_node": "tests/test_production_v040.py::test_release_workflow_smoke_checks_exact_main_revision",
       "expected": "PASS"
     },
     {
