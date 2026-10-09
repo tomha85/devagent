@@ -74,6 +74,11 @@
           "member": "OUTPUT.RUN",
           "direction": "OUTPUT",
           "address": "Local:2:O.Data.0"
+        },
+        {
+          "member": "OUTPUT.RESET",
+          "direction": "OUTPUT",
+          "address": "Local:2:O.Data.1"
         }
       ],
       "requirements": [
