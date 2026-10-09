@@ -1,11 +1,12 @@
 {
-  "schema": "devagent-controls-spec-v1",
+  "schema": "devagent-controls-spec-v2",
   "project_id": "PACKAGING_LINE_04",
   "controllers": [
     {
       "id": "PLC_PACK_01",
       "vendor": "ROCKWELL",
-      "platform": "CONTROLLOGIX"
+      "platform": "CONTROLLOGIX",
+      "network": "PACKAGING_CONTROL_NET"
     }
   ],
   "equipment": [
@@ -14,11 +15,32 @@
       "type": "CONVEYOR",
       "standard": "conveyor-v1",
       "controller": "PLC_PACK_01",
-      "signals": ["SAFETY_OK", "DOWNSTREAM_READY", "GUARD_OPEN", "DRIVE_FAULT"],
-      "commands": {"START": true, "STOP": true, "RESET": true},
-      "status": ["READY", "RUNNING", "FAULTED"],
-      "permissives": ["SAFETY_OK", "DOWNSTREAM_READY"],
-      "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+      "area": "PACKAGING",
+      "safety_zone": "SZ03",
+      "signals": [
+        "SAFETY_OK",
+        "DOWNSTREAM_READY",
+        "GUARD_OPEN",
+        "DRIVE_FAULT"
+      ],
+      "commands": {
+        "START": true,
+        "STOP": true,
+        "RESET": true
+      },
+      "status": [
+        "READY",
+        "RUNNING",
+        "FAULTED"
+      ],
+      "permissives": [
+        "SAFETY_OK",
+        "DOWNSTREAM_READY"
+      ],
+      "interlocks": [
+        "GUARD_OPEN",
+        "DRIVE_FAULT"
+      ],
       "alarms": [
         {
           "id": "ALM_CONV101_DRIVE_FAULT",
@@ -27,12 +49,54 @@
           "source_signal": "DRIVE_FAULT"
         }
       ],
-      "hmi": {"faceplate": "conveyor-v1", "historian": true},
+      "hmi": {
+        "faceplate": "conveyor-v1",
+        "historian": true
+      },
+      "io": [
+        {
+          "member": "SIGNAL.GUARD_OPEN",
+          "direction": "INPUT",
+          "address": "Local:1:I.Data.0"
+        },
+        {
+          "member": "SIGNAL.DRIVE_FAULT",
+          "direction": "INPUT",
+          "address": "Local:1:I.Data.1"
+        },
+        {
+          "member": "OUTPUT.RUN",
+          "direction": "OUTPUT",
+          "address": "Local:2:O.Data.0"
+        }
+      ],
       "requirements": [
         {
           "id": "REQ_CONV101_GUARD",
           "text": "CONV_101 must not run while GUARD_OPEN is active.",
-          "criticality": "HIGH"
+          "criticality": "HIGH",
+          "assertion": {
+            "conditions": {
+              "COMMAND.START": true,
+              "SIGNAL.GUARD_OPEN": true
+            },
+            "expect": {
+              "OUTPUT.RUN": false
+            }
+          }
+        },
+        {
+          "id": "REQ_CONV101_DRIVE_ALARM",
+          "text": "The drive fault alarm must become active when DRIVE_FAULT is active.",
+          "criticality": "HIGH",
+          "assertion": {
+            "conditions": {
+              "SIGNAL.DRIVE_FAULT": true
+            },
+            "expect": {
+              "ALARM.ALM_CONV101_DRIVE_FAULT": true
+            }
+          }
         }
       ]
     }
