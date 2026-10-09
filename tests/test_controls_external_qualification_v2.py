@@ -41,7 +41,7 @@ def _spec():
                     "controller": "PLC1",
                     "area": "PACKAGING",
                     "safety_zone": "SZ01",
-                    "signals": ["SAFE", "GUARD_OPEN", "DRIVE_FAULT"],
+                    "signals": ["SAFE", "GUARD_OPEN", "DRIVE_FAULT", "RUN_FB"],
                     "commands": {"START": True, "STOP": True, "RESET": True},
                     "status": ["READY", "RUNNING", "FAULTED"],
                     "permissives": ["SAFE"],
