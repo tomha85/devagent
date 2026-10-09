@@ -46,6 +46,7 @@ def _canonical_equipment(item: EquipmentSpec) -> EquipmentSpec:
         status=tuple(sorted(item.status)),
         permissives=tuple(sorted(item.permissives)),
         interlocks=tuple(sorted(item.interlocks)),
+        faults=tuple(sorted(item.faults)),
         alarms=tuple(sorted(item.alarms, key=lambda value: value.id)),
         hmi=item.hmi,
         requirements=tuple(
@@ -104,6 +105,7 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
                 "status": list(item.status),
                 "permissives": list(item.permissives),
                 "interlocks": list(item.interlocks),
+                "faults": list(item.faults),
                 "alarms": [
                     {
                         "id": alarm.id,
