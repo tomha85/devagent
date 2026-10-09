@@ -69,6 +69,7 @@ def test_controls_manifest_declares_no_control_authority() -> None:
                     "status": ["READY"],
                     "permissives": ["SAFE"],
                     "interlocks": [],
+                    "faults": [],
                     "alarms": [],
                     "hmi": {"faceplate": "motor-v1", "historian": False},
                     "requirements": [],
