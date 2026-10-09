@@ -8,6 +8,7 @@ class ControllerSpec:
     id: str
     vendor: str
     platform: str
+    network: str | None = None
 
 
 @dataclass(frozen=True)
@@ -25,10 +26,25 @@ class HMIContract:
 
 
 @dataclass(frozen=True)
+class RequirementAssertion:
+    conditions: tuple[tuple[str, bool], ...]
+    expected_ref: str
+    expected_value: bool
+
+
+@dataclass(frozen=True)
 class RequirementSpec:
     id: str
     text: str
     criticality: str
+    assertion: RequirementAssertion | None = None
+
+
+@dataclass(frozen=True)
+class IOMappingSpec:
+    member: str
+    direction: str
+    address: str
 
 
 @dataclass(frozen=True)
@@ -45,6 +61,9 @@ class EquipmentSpec:
     alarms: tuple[AlarmSpec, ...]
     hmi: HMIContract
     requirements: tuple[RequirementSpec, ...]
+    area: str | None = None
+    safety_zone: str | None = None
+    io: tuple[IOMappingSpec, ...] = ()
 
 
 @dataclass(frozen=True)
