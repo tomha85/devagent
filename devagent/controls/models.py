@@ -58,6 +58,7 @@ class EquipmentSpec:
     status: tuple[str, ...]
     permissives: tuple[str, ...]
     interlocks: tuple[str, ...]
+    faults: tuple[str, ...]
     alarms: tuple[AlarmSpec, ...]
     hmi: HMIContract
     requirements: tuple[RequirementSpec, ...]
