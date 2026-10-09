@@ -10,7 +10,7 @@ from devagent.controls.schema import parse_control_system_payload
 
 def _payload():
     return {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "CELL01",
         "controllers": [
             {"id": "PLC1", "vendor": "ROCKWELL", "platform": "COMPACTLOGIX"}
@@ -51,7 +51,7 @@ def test_ir_contains_explicit_spec_identity_and_authoring_intent() -> None:
     ir = build_controls_ir(spec)
     payload = controls_ir_payload(ir)
 
-    assert payload["schema"] == "devagent-controls-ir-v1"
+    assert payload["schema"] == "devagent-controls-ir-v2"
     assert payload["spec_sha256"] == ir.spec_sha256
     assert payload["equipment"][0]["id"] == "MTR_101"
     assert len(controls_ir_sha256(ir)) == 64
