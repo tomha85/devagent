@@ -23,6 +23,8 @@ def _equipment(equipment_id: str, controller: str):
             {
                 "id": f"ALM_{equipment_id}_TRAVEL",
                 "priority": "MEDIUM",
+                "description": "Equipment alarm.",
+                "on_delay_ms": 0,
                 "operator_response": "Inspect valve travel feedback.",
                 "source_signal": "BLOCKED",
             }
