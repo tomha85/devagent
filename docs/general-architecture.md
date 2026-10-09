@@ -33,7 +33,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | **Software Engineering** | Local/GitHub repository | Code understanding, bounded modification, verification, review, safe branch publication | PLC engineering or onsite runtime control |
 | **DevAgent PLC** | Exported PLC engineering project | Static engineering analysis, requirements, risks, regression, FAT, evidence, release readiness | OPC UA session management or onsite commissioning control |
-| **DevAgent Controls** | Versioned controls specification | Company standards, deterministic Rockwell/Ignition staging generation, round-trip verification, FAT planning, evidence packaging, engineering review handoff | PLC writes/forces/downloads/mode changes, Ignition Gateway deployment, external FAT execution, production release approval |
+| **DevAgent Controls** | Versioned controls specification | Company standards, deterministic Rockwell/Ignition staging generation, round-trip verification, FAT planning, signed external-evidence verification, build-wide approval context, engineering release handoff | PLC writes/forces/downloads/mode changes, Ignition Gateway deployment, external FAT execution itself, production deployment |
 | **DevAgent Live** | Read-only engineering context + OPC UA runtime evidence | Runtime trust, history, commissioning diagnosis, onsite Q&A | FAT authority, PLC write/force/reset/download/mode control |
 
 ## Read-only integration contract
@@ -127,7 +127,7 @@ DevAgent PLC is a **pre-site/offline engineering workflow**. It does not claim s
 
 ## Product Branch #3 — DevAgent Controls
 
-DevAgent Controls is the deterministic authoring/staging branch for company-wide controls standards. It starts from a versioned `ControlSystemSpec`, produces an immutable Controls IR, enforces qualified equipment contracts, generates bounded Rockwell and Ignition staging artifacts, re-imports generated Rockwell artifacts through DevAgent PLC for round-trip proof, generates deterministic FAT plans/model checks, and packages hash-bound evidence for engineering review.
+DevAgent Controls is the deterministic authoring/staging/qualification branch for company-wide controls standards. It starts from a versioned `ControlSystemSpec`, produces an immutable Controls IR, enforces qualified equipment contracts, generates bounded Rockwell and Ignition staging artifacts, re-imports generated Rockwell artifacts through DevAgent PLC for round-trip proof, generates deterministic FAT plans/model checks, and packages hash-bound evidence for engineering review. It can also verify signed evidence produced by real Studio 5000, Ignition Gateway, qualified runtime backends, integrated FAT execution, and human approvals without itself gaining deployment authority.
 
 ```text
 Controls Specification
@@ -142,7 +142,7 @@ Strict Validation -> Immutable Controls IR -> Company Standards
 SHA-256 bound staging package -> Engineering review request
 ```
 
-Controls has no runtime control authority. It does not connect to PLCs, write/force tags, change controller mode, download projects, deploy Ignition Gateway content, or claim external FAT/runtime execution. A successful Controls build is `READY_FOR_ENGINEERING_REVIEW`, not production release approval.
+Controls has no runtime control authority. It does not connect to PLCs, write/force tags, change controller mode, download projects, deploy Ignition Gateway content, or execute external FAT/runtime tests. A successful staging build is `READY_FOR_ENGINEERING_REVIEW`. A later external qualification may verify signed vendor/runtime/FAT evidence and signed engineering approval and produce an `APPROVED_FOR_RELEASE_HANDOFF` decision, but production deployment remains a separate authority.
 
 ## Product Branch #4 — DevAgent Live
 
