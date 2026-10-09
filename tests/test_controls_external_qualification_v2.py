@@ -60,9 +60,24 @@ def _spec():
                     "hmi": {"faceplate": "conveyor-v1", "historian": True},
                     "io": [
                         {
-                            "member": "SIGNAL.RUN_FB",
+                            "member": "SIGNAL.SAFE",
                             "direction": "INPUT",
                             "address": "Local:1:I.Data.0",
+                        },
+                        {
+                            "member": "SIGNAL.GUARD_OPEN",
+                            "direction": "INPUT",
+                            "address": "Local:1:I.Data.1",
+                        },
+                        {
+                            "member": "SIGNAL.DRIVE_FAULT",
+                            "direction": "INPUT",
+                            "address": "Local:1:I.Data.2",
+                        },
+                        {
+                            "member": "SIGNAL.RUN_FB",
+                            "direction": "INPUT",
+                            "address": "Local:1:I.Data.3",
                         },
                         {
                             "member": "OUTPUT.RUN",
