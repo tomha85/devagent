@@ -8,7 +8,7 @@ from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import equipment_symbol_map
 
 IGNITION_STAGING_SCHEMA = "devagent-ignition-staging-v2"
-IGNITION_GENERATOR_VERSION = "1.3.0"
+IGNITION_GENERATOR_VERSION = "1.4.0"
 
 
 def _equipment_instance(
@@ -106,7 +106,9 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
                     "id": alarm.id,
                     "equipment_id": item.id,
                     "area": item.area,
+                    "description": alarm.description,
                     "priority": alarm.priority,
+                    "on_delay_ms": alarm.on_delay_ms,
                     "operator_response": alarm.operator_response,
                     "source_signal": alarm.source_signal,
                     "plc_tag": source_tag,
