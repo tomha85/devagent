@@ -9,7 +9,7 @@ from devagent.controls.schema import parse_control_system_payload
 def _ir():
     spec = parse_control_system_payload(
         {
-            "schema": "devagent-controls-spec-v1",
+            "schema": "devagent-controls-spec-v2",
             "project_id": "PACK01",
             "controllers": [
                 {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
