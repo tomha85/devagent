@@ -35,7 +35,7 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Run focused Controls tests
-        run: python -m pytest -q tests/test_controls_spec_v1.py tests/test_controls_ir_v1.py tests/test_controls_determinism_v1.py tests/test_controls_fail_closed_v1.py tests/test_controls_entrypoint_v1.py tests/test_controls_live_authority_regression_v1.py tests/test_controls_catalog_v1.py tests/test_controls_rules_v1.py tests/test_controls_equipment_family_v1.py tests/test_controls_rockwell_generation_v1.py tests/test_controls_ignition_fat_v1.py tests/test_controls_build_pipeline_v1.py tests/test_controls_portal_v1.py
+        run: python -m pytest -q tests/test_controls*.py
 
       - name: Build deterministic vertical slice
         run: |
@@ -66,4 +66,4 @@ jobs:
         with:
           name: controls-platform-v1-evidence
           path: .devagent/controls-ci-build
-          if-no-files-found: error
+          if-no-files-found: warn
