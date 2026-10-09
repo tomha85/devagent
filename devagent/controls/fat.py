@@ -159,6 +159,21 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     expected=False,
                 )
             )
+        if standard.fault_status_member is not None:
+            for name in item.faults:
+                faulted = _safe_baseline_inputs(item)
+                faulted[f"SIGNAL.{name}"] = True
+                cases.append(
+                    _case(
+                        item,
+                        suffix=f"FAULT-{name}-STATUS",
+                        title=f"{item.id} fault {name} drives fault status",
+                        action="FAULT_ASSERT",
+                        inputs=faulted,
+                        expected_output=f"STATUS.{standard.fault_status_member}",
+                        expected=True,
+                    )
+                )
         if "RESET" in standard.generated_outputs:
             reset_inputs = _safe_baseline_inputs(item)
             reset_inputs["COMMAND.RESET"] = True
@@ -264,6 +279,7 @@ def evaluate_standard_state(
     }
     permissives_ok = all(signals.get(name, False) for name in item.permissives)
     interlocks_clear = all(not signals.get(name, False) for name in item.interlocks)
+    fault_active = any(signals.get(name, False) for name in item.faults)
 
     if standard.equipment_type in {"MOTOR", "VFD", "CONVEYOR"}:
         primary = commands.get(standard.primary_action, False)
@@ -279,7 +295,7 @@ def evaluate_standard_state(
         result["STATUS.READY"] = permissives_ok and interlocks_clear
         result["STATUS.RUNNING"] = run
         if standard.fault_status_member is not None:
-            result[f"STATUS.{standard.fault_status_member}"] = not interlocks_clear
+            result[f"STATUS.{standard.fault_status_member}"] = fault_active
 
     elif standard.equipment_type == "VALVE":
         open_output = (
