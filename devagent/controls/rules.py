@@ -53,6 +53,20 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
         )
     )
 
+    signal_set = set(item.signals)
+    missing_feedback = [
+        name for name in standard.required_feedback_signals if name not in signal_set
+    ]
+    results.append(
+        _result(
+            "CTRL-E120",
+            not missing_feedback,
+            item.id,
+            f"Required feedback contract satisfied for {standard.id}.",
+            "Missing required feedback signal(s): " + ", ".join(missing_feedback),
+        )
+    )
+
     reset_required = "RESET" in standard.required_commands
     reset_ok = not reset_required or commands.get("RESET", False)
     results.append(
@@ -144,6 +158,19 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
                 ),
             )
         )
+
+    results.append(
+        _result(
+            "CTRL-E405",
+            standard.command_model in {
+                "SEAL_IN_PRIMARY_STOP_DOMINANT",
+                "MUTUALLY_EXCLUSIVE_LEVEL",
+            },
+            item.id,
+            f"Command semantics are explicit: {standard.command_model}.",
+            f"Unsupported command semantics {standard.command_model!r}.",
+        )
+    )
 
     faceplate_ok = item.hmi.faceplate == standard.default_faceplate
     results.append(
