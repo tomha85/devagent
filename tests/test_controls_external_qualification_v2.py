@@ -51,6 +51,8 @@ def _spec():
                         {
                             "id": "ALM_DRIVE",
                             "priority": "HIGH",
+                            "description": "Equipment alarm.",
+                            "on_delay_ms": 0,
                             "operator_response": "Inspect drive fault.",
                             "source_signal": "DRIVE_FAULT",
                         }
