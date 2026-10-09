@@ -82,10 +82,10 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
             "CTRL-E320",
             len(item.interlocks) >= standard.min_interlocks,
             item.id,
-            f"Interlock/fault-source contract satisfies minimum {standard.min_interlocks}.",
+            f"Interlock contract satisfies minimum {standard.min_interlocks}.",
             (
-                f"{standard.id} requires at least {standard.min_interlocks} interlock/fault "
-                f"source(s); found {len(item.interlocks)}."
+                f"{standard.id} requires at least {standard.min_interlocks} interlock(s); "
+                f"found {len(item.interlocks)}."
             ),
         )
     )
