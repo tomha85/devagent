@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.3.0"
+ROCKWELL_GENERATOR_VERSION = "1.4.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
@@ -125,22 +125,13 @@ def _series(
     output: str,
     symbols: dict[str, object],
     purpose: str,
-    seal_in: bool = False,
 ) -> GeneratedRung:
     commands = dict(symbols["commands"])
     signals = dict(symbols["signals"])
     outputs = dict(symbols["outputs"])
     output_tag = str(outputs[output])
 
-    if seal_in:
-        # One-writer seal-in: a momentary primary command can establish the
-        # request, while STOP/permissive/interlock loss drops the request and
-        # requires a new primary command before restart.
-        contacts: list[str] = [
-            f"[XIC({commands[command]}),XIC({output_tag})]"
-        ]
-    else:
-        contacts = [f"XIC({commands[command]})"]
+    contacts: list[str] = [f"XIC({commands[command]})"]
     if inverse_command is not None:
         contacts.append(f"XIO({commands[inverse_command]})")
     contacts.extend(f"XIC({signals[name]})" for name in equipment.permissives)
@@ -151,6 +142,56 @@ def _series(
         text="".join([*contacts, f"OTE({output_tag});"]),
         output_tag=output_tag,
     )
+
+
+def _restart_safe_primary_rungs(
+    equipment: EquipmentSpec,
+    *,
+    primary: str,
+    stop: str | None,
+    symbols: dict[str, object],
+) -> tuple[GeneratedRung, ...]:
+    """Generate edge memory + one-writer seal-in without ONS/OTL/OTU.
+
+    Only XIC/XIO/OTE are used so the existing deterministic PLC analyzer can
+    prove the generated behavior. The primary edge is consumed even when a
+    permissive/interlock prevents RUN, which prevents automatic restart when
+    the condition later clears while the command is still held high.
+    """
+
+    commands = dict(symbols["commands"])
+    signals = dict(symbols["signals"])
+    outputs = dict(symbols["outputs"])
+    internal = dict(symbols["internal"])
+    prev_tag = str(internal[f"{primary}_PREV"])
+    pulse_tag = str(internal[f"{primary}_PULSE"])
+    output_tag = str(outputs["RUN"])
+
+    pulse = GeneratedRung(
+        equipment_id=equipment.id,
+        purpose="PRIMARY_EDGE_PULSE",
+        text=f"XIC({commands[primary]})XIO({prev_tag})OTE({pulse_tag});",
+        output_tag=pulse_tag,
+    )
+    memory = GeneratedRung(
+        equipment_id=equipment.id,
+        purpose="PRIMARY_EDGE_MEMORY",
+        text=f"XIC({commands[primary]})OTE({prev_tag});",
+        output_tag=prev_tag,
+    )
+
+    contacts: list[str] = [f"[XIC({pulse_tag}),XIC({output_tag})]"]
+    if stop is not None:
+        contacts.append(f"XIO({commands[stop]})")
+    contacts.extend(f"XIC({signals[name]})" for name in equipment.permissives)
+    contacts.extend(f"XIO({signals[name]})" for name in equipment.interlocks)
+    run = GeneratedRung(
+        equipment_id=equipment.id,
+        purpose="PRIMARY_RUN",
+        text="".join([*contacts, f"OTE({output_tag});"]),
+        output_tag=output_tag,
+    )
+    return (pulse, memory, run)
 
 
 def _status_rungs(
@@ -238,15 +279,17 @@ def generated_rungs(equipment: EquipmentSpec) -> tuple[GeneratedRung, ...]:
             raise RockwellGenerationError(
                 f"{equipment.id} requires enabled command {stop} for {standard.id}"
             )
-        rungs.append(
-            _series(
+        if standard.command_model != "RISING_EDGE_SEAL_IN_STOP_DOMINANT":
+            raise RockwellGenerationError(
+                f"{equipment.id} has unsupported run command model "
+                f"{standard.command_model!r}"
+            )
+        rungs.extend(
+            _restart_safe_primary_rungs(
                 equipment,
-                command=primary,
-                inverse_command=stop,
-                output="RUN",
+                primary=primary,
+                stop=stop,
                 symbols=symbols,
-                purpose="PRIMARY_RUN",
-                seal_in=standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT",
             )
         )
         if "RESET" in dict(symbols["outputs"]):
@@ -302,7 +345,7 @@ def _tag_names(equipment: tuple[EquipmentSpec, ...]) -> tuple[str, ...]:
     names: list[str] = []
     for item in equipment:
         symbols = equipment_symbol_map(item)
-        for category in ("signals", "commands", "status", "outputs"):
+        for category in ("signals", "commands", "status", "outputs", "internal"):
             names.extend(str(value) for value in dict(symbols[category]).values())
     if len(names) != len(set(names)):
         raise RockwellGenerationError(
