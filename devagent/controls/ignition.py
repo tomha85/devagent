@@ -8,7 +8,7 @@ from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import equipment_symbol_map
 
 IGNITION_STAGING_SCHEMA = "devagent-ignition-staging-v2"
-IGNITION_GENERATOR_VERSION = "1.1.0"
+IGNITION_GENERATOR_VERSION = "1.2.0"
 
 
 def _equipment_instance(
@@ -27,6 +27,9 @@ def _equipment_instance(
         "safety_zone": item.safety_zone,
         "faceplate": item.hmi.faceplate,
         "historian_enabled": item.hmi.historian,
+        "permissives": list(item.permissives),
+        "interlocks": list(item.interlocks),
+        "faults": list(item.faults),
         "plc_tags": {
             "signals": dict(symbols["signals"]),
             "commands": dict(symbols["commands"]),
@@ -64,6 +67,7 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
                 "default_faceplate": standard.default_faceplate,
                 "min_permissives": standard.min_permissives,
                 "min_interlocks": standard.min_interlocks,
+                "min_faults": standard.min_faults,
                 "min_alarms": standard.min_alarms,
                 "fault_status_member": standard.fault_status_member,
                 "alarm_source_policy": standard.alarm_source_policy,
