@@ -17,7 +17,7 @@ def _payload():
                 "type": "CONVEYOR",
                 "standard": "conveyor-v1",
                 "controller": "PLC1",
-                "signals": ["SAFE", "DRIVE_FAULT"],
+                "signals": ["SAFE", "DRIVE_FAULT", "RUN_FB"],
                 "commands": {"START": True, "STOP": True, "RESET": True},
                 "status": ["READY", "RUNNING", "FAULTED"],
                 "permissives": ["SAFE"],
@@ -145,3 +145,21 @@ def test_declared_fault_requires_alarm_coverage() -> None:
     results = evaluate_controls_rules(parse_control_system_payload(payload))
     failures = [item for item in results if item.status == "FAIL"]
     assert any(item.id == "CTRL-E331" for item in failures)
+
+
+def test_missing_required_feedback_fails_company_standard() -> None:
+    payload = _payload()
+    payload["equipment"][0]["signals"].remove("RUN_FB")
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E120" and "RUN_FB" in item.summary for item in failures)
+
+
+def test_command_semantics_are_explicit_in_company_standard() -> None:
+    results = evaluate_controls_rules(parse_control_system_payload(_payload()))
+    assert any(
+        item.id == "CTRL-E405"
+        and item.status == "PASS"
+        and "SEAL_IN_PRIMARY_STOP_DOMINANT" in item.summary
+        for item in results
+    )
