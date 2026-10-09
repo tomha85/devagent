@@ -10,6 +10,9 @@ class EquipmentStandard:
     equipment_type: str
     required_commands: tuple[str, ...]
     required_status: tuple[str, ...]
+    required_feedback_signals: tuple[str, ...]
+    status_signal_map: tuple[tuple[str, str], ...]
+    command_model: str
     primary_action: str
     stop_action: str | None
     generated_outputs: tuple[str, ...]
@@ -29,6 +32,9 @@ _STANDARDS = {
         equipment_type="MOTOR",
         required_commands=("START", "STOP", "RESET"),
         required_status=("READY", "RUNNING", "FAULTED"),
+        required_feedback_signals=("RUN_FB",),
+        status_signal_map=(("RUNNING", "RUN_FB"),),
+        command_model="SEAL_IN_PRIMARY_STOP_DOMINANT",
         primary_action="START",
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
@@ -46,6 +52,9 @@ _STANDARDS = {
         equipment_type="VFD",
         required_commands=("RUN", "STOP", "RESET"),
         required_status=("READY", "RUNNING", "FAULTED"),
+        required_feedback_signals=("RUN_FB",),
+        status_signal_map=(("RUNNING", "RUN_FB"),),
+        command_model="SEAL_IN_PRIMARY_STOP_DOMINANT",
         primary_action="RUN",
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
@@ -63,6 +72,9 @@ _STANDARDS = {
         equipment_type="CONVEYOR",
         required_commands=("START", "STOP", "RESET"),
         required_status=("READY", "RUNNING", "FAULTED"),
+        required_feedback_signals=("RUN_FB",),
+        status_signal_map=(("RUNNING", "RUN_FB"),),
+        command_model="SEAL_IN_PRIMARY_STOP_DOMINANT",
         primary_action="START",
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
@@ -80,6 +92,9 @@ _STANDARDS = {
         equipment_type="VALVE",
         required_commands=("OPEN", "CLOSE"),
         required_status=("OPEN", "CLOSED"),
+        required_feedback_signals=("OPEN_FB", "CLOSED_FB"),
+        status_signal_map=(("OPEN", "OPEN_FB"), ("CLOSED", "CLOSED_FB")),
+        command_model="MUTUALLY_EXCLUSIVE_LEVEL",
         primary_action="OPEN",
         stop_action="CLOSE",
         generated_outputs=("OPEN", "CLOSE"),
