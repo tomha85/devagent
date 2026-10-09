@@ -39,6 +39,13 @@ def _ir():
                             "id": "REQ_GUARD",
                             "text": "CONV_101 must not run with guard open.",
                             "criticality": "HIGH",
+                            "assertion": {
+                                "conditions": {
+                                    "COMMAND.START": True,
+                                    "SIGNAL.GUARD_OPEN": True,
+                                },
+                                "expect": {"OUTPUT.RUN": False},
+                            },
                         }
                     ],
                 }
@@ -69,6 +76,11 @@ def test_generated_fat_remains_not_run_but_model_cases_are_self_consistent() -> 
 
     assert cases
     assert all(case.execution_status == "NOT_RUN" for case in cases)
-    assert all("REQ_GUARD" in case.requirement_ids for case in cases)
+    requirement_cases = [
+        case for case in cases if "REQ_GUARD" in case.requirement_ids
+    ]
+    assert len(requirement_cases) == 1
+    assert requirement_cases[0].method == "STRUCTURED_REQUIREMENT"
+    assert any(case.expected_output == "ALARM.ALM_CONV101_DRIVE" for case in cases)
     assert simulation["status"] == "PASS"
     assert simulation["vendor_runtime_execution"] == "NOT_RUN"
