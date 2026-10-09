@@ -8,12 +8,22 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from devagent.controls.fat import fat_payload, generate_controls_fat, run_model_simulation
-from devagent.controls.ignition import generate_ignition_payloads, ignition_binding_check
+from devagent.controls.fat import (
+    FAT_GENERATOR_VERSION,
+    fat_payload,
+    generate_controls_fat,
+    run_model_simulation,
+)
+from devagent.controls.ignition import (
+    IGNITION_GENERATOR_VERSION,
+    generate_ignition_payloads,
+    ignition_binding_check,
+)
 from devagent.controls.ir import ControlsIR, build_controls_ir, controls_ir_payload, controls_ir_sha256
 from devagent.controls.models import ControlSystemSpec
 from devagent.controls.normalize import normalized_spec_payload
 from devagent.controls.parser import load_control_system_spec
+from devagent.controls.requirements import hmi_requirement_rows, requirements_payload
 from devagent.controls.rockwell import (
     ROCKWELL_GENERATOR_VERSION,
     render_rockwell_project,
@@ -24,7 +34,7 @@ from devagent.controls.schema import parse_control_system_payload
 from devagent.controls.symbols import controller_symbol
 from devagent.controls.verification import verify_rockwell_roundtrip
 
-BUILD_MANIFEST_SCHEMA = "devagent-controls-generation-manifest-v1"
+BUILD_MANIFEST_SCHEMA = "devagent-controls-generation-manifest-v2"
 
 
 class ControlsBuildError(ValueError):
@@ -79,8 +89,20 @@ def _ensure_generation_scope(ir: ControlsIR) -> None:
     ]
     if unsupported:
         raise ControlsBuildError(
-            "Controls Platform V1 generation is qualified for Rockwell controllers only; "
+            "Controls Platform generation is qualified for Rockwell controllers only; "
             "unsupported controller(s): " + ", ".join(unsupported)
+        )
+
+    unqualified_platforms = [
+        f"{item.id}:{item.platform}"
+        for item in ir.controllers
+        if item.platform.strip().upper().replace(" ", "") not in {"CONTROLLOGIX", "1756"}
+    ]
+    if unqualified_platforms:
+        raise ControlsBuildError(
+            "Controls Platform generation requires a pinned Studio-5000-exported "
+            "golden template; V2 currently qualifies CONTROLLOGIX only. "
+            "Unqualified controller platform(s): " + ", ".join(unqualified_platforms)
         )
 
 
@@ -104,9 +126,30 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     _write_json(
         root / "company-standards.json",
         {
-            "schema": "devagent-controls-rules-v1",
+            "schema": "devagent-controls-rules-v2",
             "status": "PASS",
             "results": [asdict(item) for item in rules],
+        },
+    )
+    _write_json(
+        root / "io-map.json",
+        {
+            "schema": "devagent-controls-io-map-v1",
+            "project_id": spec.project_id,
+            "mappings": [
+                {
+                    "equipment_id": item.id,
+                    "controller_id": item.controller,
+                    "area": item.area,
+                    "safety_zone": item.safety_zone,
+                    "member": mapping.member,
+                    "direction": mapping.direction,
+                    "address": mapping.address,
+                }
+                for item in ir.equipment
+                for mapping in item.io
+            ],
+            "direct_physical_output_generation": False,
         },
     )
 
@@ -150,21 +193,24 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
         },
     )
 
-    requirement_payload = {
-        "schema": "devagent-controls-requirements-v1",
-        "requirements": [
-            {
-                "id": requirement.id,
-                "text": requirement.text,
-                "criticality": requirement.criticality,
-                "verification_mode": "DYNAMIC",
-                "equipment_id": item.id,
-            }
-            for item in ir.equipment
-            for requirement in item.requirements
-        ],
-    }
-    _write_json(root / "requirements" / "controls-requirements.json", requirement_payload)
+    requirement_payload = requirements_payload(ir)
+    _write_json(
+        root / "requirements" / "controls-requirements.json",
+        requirement_payload,
+    )
+    for controller in ir.controllers:
+        _write_json(
+            root / "requirements" / "by-controller"
+            / f"{controller_symbol(controller.id)}.json",
+            requirements_payload(ir, controller_id=controller.id),
+        )
+    _write_json(
+        root / "requirements" / "hmi-requirements.json",
+        {
+            "schema": "devagent-controls-hmi-requirements-v1",
+            "requirements": hmi_requirement_rows(ir),
+        },
+    )
 
     ignition = generate_ignition_payloads(ir)
     for name, payload in ignition.items():
@@ -182,17 +228,21 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     _write_json(
         root / "engineering-handoff.json",
         {
-            "schema": "devagent-controls-engineering-handoff-v1",
+            "schema": "devagent-controls-engineering-handoff-v2",
             "project_id": spec.project_id,
             "controls_ir_sha256": controls_ir_sha256(ir),
             "plc_review": [
                 {
                     "controller_id": item["controller_id"],
                     "project_path": item["path"],
-                    "requirements_path": "requirements/controls-requirements.json",
+                    "requirements_path": (
+                        "requirements/by-controller/"
+                        f"{controller_symbol(item['controller_id'])}.json"
+                    ),
                     "next_command": (
                         f"devagent plc {item['path']} "
-                        "--requirements requirements/controls-requirements.json "
+                        "--requirements requirements/by-controller/"
+                        f"{controller_symbol(item['controller_id'])}.json "
                         "--output-dir <engineer-selected-output>"
                     ),
                 }
@@ -213,7 +263,7 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     authoring_ok = roundtrip_ok and ignition_ok and model_ok and static_ok
 
     readiness = {
-        "schema": "devagent-controls-release-readiness-v1",
+        "schema": "devagent-controls-release-readiness-v2",
         "status": (
             "READY_FOR_ENGINEERING_REVIEW"
             if authoring_ok
@@ -259,8 +309,8 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
         "controls_ir_sha256": controls_ir_sha256(ir),
         "generator": {
             "rockwell": ROCKWELL_GENERATOR_VERSION,
-            "ignition": "1.0.0",
-            "fat": "1.0.0",
+            "ignition": IGNITION_GENERATOR_VERSION,
+            "fat": FAT_GENERATOR_VERSION,
         },
         "catalog": sorted({item.standard for item in spec.equipment}),
         "artifact_class": "STAGING_ENGINEERING_BUILD",
@@ -378,8 +428,8 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             errors.append("generation manifest artifact_class is not staging-only")
         if manifest.get("generator") != {
             "rockwell": ROCKWELL_GENERATOR_VERSION,
-            "ignition": "1.0.0",
-            "fat": "1.0.0",
+            "ignition": IGNITION_GENERATOR_VERSION,
+            "fat": FAT_GENERATOR_VERSION,
         }:
             errors.append("generation manifest generator versions do not match this build engine")
         if manifest.get("rockwell_reference") != rockwell_reference_provenance():
@@ -405,29 +455,62 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
         if not rules_pass(rules):
             errors.append("company controls standards no longer pass")
         expected_rules = {
-            "schema": "devagent-controls-rules-v1",
+            "schema": "devagent-controls-rules-v2",
             "status": "PASS",
             "results": [asdict(item) for item in rules],
         }
         if _load_json(root / "company-standards.json") != expected_rules:
             errors.append("company-standards.json does not match deterministic rules")
 
-        expected_requirements = {
-            "schema": "devagent-controls-requirements-v1",
-            "requirements": [
-                {
-                    "id": requirement.id,
-                    "text": requirement.text,
-                    "criticality": requirement.criticality,
-                    "verification_mode": "DYNAMIC",
-                    "equipment_id": item.id,
-                }
-                for item in ir.equipment
-                for requirement in item.requirements
-            ],
-        }
+        expected_requirements = requirements_payload(ir)
         if _load_json(root / "requirements" / "controls-requirements.json") != expected_requirements:
             errors.append("generated requirements handoff does not match Controls IR")
+        for controller in ir.controllers:
+            expected_controller_requirements = requirements_payload(
+                ir, controller_id=controller.id
+            )
+            controller_requirements_path = (
+                root / "requirements" / "by-controller"
+                / f"{controller_symbol(controller.id)}.json"
+            )
+            if (
+                not controller_requirements_path.is_file()
+                or _load_json(controller_requirements_path)
+                != expected_controller_requirements
+            ):
+                errors.append(
+                    f"controller requirements handoff mismatch for {controller.id}"
+                )
+        expected_hmi_requirements = {
+            "schema": "devagent-controls-hmi-requirements-v1",
+            "requirements": hmi_requirement_rows(ir),
+        }
+        if (
+            _load_json(root / "requirements" / "hmi-requirements.json")
+            != expected_hmi_requirements
+        ):
+            errors.append("HMI requirements handoff does not match Controls IR")
+
+        expected_io_map = {
+            "schema": "devagent-controls-io-map-v1",
+            "project_id": spec.project_id,
+            "mappings": [
+                {
+                    "equipment_id": item.id,
+                    "controller_id": item.controller,
+                    "area": item.area,
+                    "safety_zone": item.safety_zone,
+                    "member": mapping.member,
+                    "direction": mapping.direction,
+                    "address": mapping.address,
+                }
+                for item in ir.equipment
+                for mapping in item.io
+            ],
+            "direct_physical_output_generation": False,
+        }
+        if _load_json(root / "io-map.json") != expected_io_map:
+            errors.append("io-map.json does not match deterministic Controls IR")
 
         _ensure_generation_scope(ir)
         for controller in ir.controllers:
@@ -486,7 +569,7 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             errors.append("human engineering approval must remain required")
 
         expected_handoff = {
-            "schema": "devagent-controls-engineering-handoff-v1",
+            "schema": "devagent-controls-engineering-handoff-v2",
             "project_id": spec.project_id,
             "controls_ir_sha256": controls_ir_sha256(ir),
             "plc_review": [
@@ -495,10 +578,14 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
                     "project_path": (
                         f"rockwell/{controller_symbol(controller.id)}.L5X"
                     ),
-                    "requirements_path": "requirements/controls-requirements.json",
+                    "requirements_path": (
+                        "requirements/by-controller/"
+                        f"{controller_symbol(controller.id)}.json"
+                    ),
                     "next_command": (
                         f"devagent plc rockwell/{controller_symbol(controller.id)}.L5X "
-                        "--requirements requirements/controls-requirements.json "
+                        "--requirements requirements/by-controller/"
+                        f"{controller_symbol(controller.id)}.json "
                         "--output-dir <engineer-selected-output>"
                     ),
                 }
