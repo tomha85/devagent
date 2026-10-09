@@ -34,6 +34,8 @@ def _payload():
                     {
                         "id": "ALM_DRIVE_FAULT",
                         "priority": "HIGH",
+                        "description": "Equipment alarm.",
+                        "on_delay_ms": 0,
                         "operator_response": "Inspect drive fault before reset.",
                         "source_signal": "DRIVE_FAULT",
                     }
