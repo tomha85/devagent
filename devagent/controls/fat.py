@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.3.0"
+FAT_GENERATOR_VERSION = "2.4.0"
 
 
 @dataclass(frozen=True)
@@ -151,6 +151,24 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                         "OUTPUT.RUN": False,
                         f"INTERNAL.{action}_PREV": True,
                     },
+                    expected_output="OUTPUT.RUN",
+                    expected=False,
+                )
+            )
+
+            first_scan_held = _safe_baseline_inputs(item)
+            first_scan_held[f"COMMAND.{action}"] = True
+            cases.append(
+                _case(
+                    item,
+                    suffix="FIRST-SCAN-HELD-PRIMARY-BLOCKED",
+                    title=(
+                        f"{item.id} does not start from a held primary command "
+                        "on the first normal program scan"
+                    ),
+                    action="FIRST_SCAN_GUARD",
+                    inputs=first_scan_held,
+                    prior_state={"SYSTEM.FIRST_SCAN": True},
                     expected_output="OUTPUT.RUN",
                     expected=False,
                 )
@@ -359,7 +377,8 @@ def evaluate_standard_state(
             primary_prev = bool(
                 prior.get(f"INTERNAL.{standard.primary_action}_PREV", False)
             )
-            primary_edge = primary and not primary_prev
+            first_scan = bool(prior.get("SYSTEM.FIRST_SCAN", False))
+            primary_edge = primary and not primary_prev and not first_scan
             run_request = primary_edge or prior_run
         else:
             run_request = primary
