@@ -54,6 +54,7 @@ class PortalService:
                     "default_faceplate": item.default_faceplate,
                     "min_permissives": item.min_permissives,
                     "min_interlocks": item.min_interlocks,
+                    "min_faults": item.min_faults,
                     "min_alarms": item.min_alarms,
                     "fault_status_member": item.fault_status_member,
                     "alarm_source_policy": item.alarm_source_policy,
@@ -254,7 +255,8 @@ portal never performs PLC writes/downloads or Ignition Gateway deployment.</p>
 <div><label>Safety zone</label><input id="safetyZone" value="SZ03"></div>
 <div class="full"><label>Signals (comma separated)</label><input id="signals" value="SAFETY_OK,DOWNSTREAM_READY,GUARD_OPEN,DRIVE_FAULT"></div>
 <div class="full"><label>Permissives</label><input id="permissives" value="SAFETY_OK,DOWNSTREAM_READY"></div>
-<div class="full"><label>Interlocks / fault sources</label><input id="interlocks" value="GUARD_OPEN,DRIVE_FAULT"></div>
+<div class="full"><label>Interlocks</label><input id="interlocks" value="GUARD_OPEN,DRIVE_FAULT"></div>
+<div class="full"><label>Fault sources</label><input id="faults" value="DRIVE_FAULT"></div>
 <div><label>Alarm ID</label><input id="alarmId" value="ALM_CONV101_DRIVE_FAULT"></div>
 <div><label>Alarm source signal</label><input id="alarmSource" value="DRIVE_FAULT"></div>
 <div><label>Alarm priority</label><select id="alarmPriority"><option>HIGH</option><option>CRITICAL</option><option>MEDIUM</option><option>LOW</option><option>INFO</option></select></div>
@@ -337,6 +339,7 @@ function generateSpec(){
      status:s.required_status,
      permissives:csv('permissives'),
      interlocks:csv('interlocks'),
+     faults:csv('faults'),
      alarms:[{
        id:document.getElementById('alarmId').value.trim(),
        priority:document.getElementById('alarmPriority').value,
