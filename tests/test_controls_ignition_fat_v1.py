@@ -156,3 +156,62 @@ def test_explicit_fault_inhibits_run_and_asserts_faulted() -> None:
 
     assert state["OUTPUT.RUN"] is False
     assert state["STATUS.FAULTED"] is True
+
+
+def test_model_seal_in_holds_until_stop_or_interlock() -> None:
+    ir = _ir()
+    item = ir.equipment[0]
+    safe = {
+        "COMMAND.START": False,
+        "COMMAND.STOP": False,
+        "COMMAND.RESET": False,
+        "SIGNAL.SAFE": True,
+        "SIGNAL.GUARD_OPEN": False,
+        "SIGNAL.DRIVE_FAULT": False,
+        "SIGNAL.RUN_FB": False,
+    }
+    held = evaluate_standard_state(
+        item,
+        safe,
+        prior_state={"OUTPUT.RUN": True},
+    )
+    assert held["OUTPUT.RUN"] is True
+
+    stopped_inputs = dict(safe)
+    stopped_inputs["COMMAND.STOP"] = True
+    stopped = evaluate_standard_state(
+        item,
+        stopped_inputs,
+        prior_state={"OUTPUT.RUN": True},
+    )
+    assert stopped["OUTPUT.RUN"] is False
+
+    interlocked_inputs = dict(safe)
+    interlocked_inputs["SIGNAL.GUARD_OPEN"] = True
+    interlocked = evaluate_standard_state(
+        item,
+        interlocked_inputs,
+        prior_state={"OUTPUT.RUN": True},
+    )
+    assert interlocked["OUTPUT.RUN"] is False
+
+
+def test_running_status_comes_from_feedback_not_command_output() -> None:
+    ir = _ir()
+    item = ir.equipment[0]
+    inputs = {
+        "COMMAND.START": True,
+        "COMMAND.STOP": False,
+        "COMMAND.RESET": False,
+        "SIGNAL.SAFE": True,
+        "SIGNAL.GUARD_OPEN": False,
+        "SIGNAL.DRIVE_FAULT": False,
+        "SIGNAL.RUN_FB": False,
+    }
+    state = evaluate_standard_state(item, inputs)
+    assert state["OUTPUT.RUN"] is True
+    assert state["STATUS.RUNNING"] is False
+
+    inputs["SIGNAL.RUN_FB"] = True
+    state = evaluate_standard_state(item, inputs)
+    assert state["STATUS.RUNNING"] is True
