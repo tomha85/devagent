@@ -82,3 +82,48 @@ def test_faulted_standard_without_interlock_source_fails_closed() -> None:
     results = evaluate_controls_rules(parse_control_system_payload(payload))
     failures = [item for item in results if item.status == "FAIL"]
     assert any(item.id == "CTRL-E320" for item in failures)
+
+
+def test_missing_permissive_fails_explicit_company_rule() -> None:
+    payload = _payload()
+    payload["equipment"][0]["permissives"] = []
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E310" for item in failures)
+
+
+def test_high_requirement_without_structured_assertion_fails() -> None:
+    payload = _payload()
+    payload["equipment"][0]["requirements"] = [
+        {
+            "id": "REQ_GUARD",
+            "text": "Conveyor must not run with the fault active.",
+            "criticality": "HIGH",
+        }
+    ]
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E600" for item in failures)
+
+
+def test_high_requirement_with_structured_assertion_passes_requirement_rule() -> None:
+    payload = _payload()
+    payload["equipment"][0]["requirements"] = [
+        {
+            "id": "REQ_FAULT",
+            "text": "Conveyor must not run with drive fault active.",
+            "criticality": "HIGH",
+            "assertion": {
+                "conditions": {
+                    "COMMAND.START": True,
+                    "SIGNAL.DRIVE_FAULT": True,
+                },
+                "expect": {"OUTPUT.RUN": False},
+            },
+        }
+    ]
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    assert not [
+        item for item in results
+        if item.id == "CTRL-E600" and item.status == "FAIL"
+    ]
