@@ -20,6 +20,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
             "status": ["READY", "RUNNING", "FAULTED"],
             "permissives": ["SAFETY_OK"],
             "interlocks": ["OVERLOAD"],
+            "faults": ["OVERLOAD"],
             "alarms": [
                 {
                     "id": f"ALM_{equipment_id}_OVERLOAD",
@@ -42,6 +43,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
             "status": ["READY", "RUNNING", "FAULTED"],
             "permissives": ["DRIVE_READY"],
             "interlocks": ["DRIVE_FAULT"],
+            "faults": ["DRIVE_FAULT"],
             "alarms": [
                 {
                     "id": f"ALM_{equipment_id}_FAULT",
@@ -64,6 +66,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
             "status": ["READY", "RUNNING", "FAULTED"],
             "permissives": ["SAFETY_OK", "DOWNSTREAM_READY"],
             "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+            "faults": ["DRIVE_FAULT"],
             "alarms": [
                 {
                     "id": f"ALM_{equipment_id}_FAULT",
@@ -86,6 +89,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
             "status": ["OPEN", "CLOSED"],
             "permissives": ["PROCESS_OK"],
             "interlocks": ["BLOCKED"],
+            "faults": ["BLOCKED"],
             "alarms": [
                 {
                     "id": f"ALM_{equipment_id}_BLOCKED",
