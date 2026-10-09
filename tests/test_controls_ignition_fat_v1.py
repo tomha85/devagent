@@ -41,6 +41,8 @@ def _ir():
                         {
                             "id": "ALM_CONV101_DRIVE",
                             "priority": "HIGH",
+                            "description": "Equipment alarm.",
+                            "on_delay_ms": 0,
                             "operator_response": "Inspect drive.",
                             "source_signal": "DRIVE_FAULT",
                         }
