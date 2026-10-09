@@ -28,7 +28,7 @@ def required_release_io_refs(item: EquipmentSpec) -> tuple[str, ...]:
 
     standard = get_standard(item.standard)
     refs = [
-        *(f"SIGNAL.{name}" for name in standard.required_feedback_signals),
+        *(f"SIGNAL.{name}" for name in item.signals),
         *(f"OUTPUT.{name}" for name in standard.generated_outputs),
     ]
     return tuple(sorted(refs))
