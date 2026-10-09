@@ -71,6 +71,8 @@ def test_ignition_staging_uses_same_equipment_identity_and_bound_alarm() -> None
 
     assert instance["id"] == "CONV_101"
     assert instance["path"] == "Equipment/CONV_101"
+    assert instance["interlocks"] == ["DRIVE_FAULT", "GUARD_OPEN"]
+    assert instance["faults"] == ["DRIVE_FAULT"]
     assert alarm["equipment_id"] == "CONV_101"
     assert alarm["binding_status"] == "BOUND"
     assert alarm["plc_tag"] == instance["plc_tags"]["signals"]["DRIVE_FAULT"]
@@ -90,6 +92,11 @@ def test_generated_fat_remains_not_run_but_model_cases_are_self_consistent() -> 
     assert len(requirement_cases) == 1
     assert requirement_cases[0].method == "STRUCTURED_REQUIREMENT"
     assert any(case.expected_output == "ALARM.ALM_CONV101_DRIVE" for case in cases)
+    assert any(
+        case.expected_output == "STATUS.FAULTED"
+        and dict(case.inputs).get("SIGNAL.DRIVE_FAULT") is True
+        for case in cases
+    )
     assert simulation["status"] == "PASS"
     assert simulation["vendor_runtime_execution"] == "NOT_RUN"
 
