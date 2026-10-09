@@ -12,7 +12,7 @@ from devagent.controls.normalize import (
     spec_sha256,
 )
 
-CONTROLS_IR_SCHEMA = "devagent-controls-ir-v1"
+CONTROLS_IR_SCHEMA = "devagent-controls-ir-v2"
 
 
 @dataclass(frozen=True)
