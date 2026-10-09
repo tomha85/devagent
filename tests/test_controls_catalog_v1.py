@@ -11,7 +11,7 @@ def test_company_equipment_catalog_is_explicit_and_versioned() -> None:
     assert conveyor.required_status == ("READY", "RUNNING", "FAULTED")
     assert conveyor.required_feedback_signals == ("RUN_FB",)
     assert conveyor.status_signal_map == (("RUNNING", "RUN_FB"),)
-    assert conveyor.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+    assert conveyor.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT"
     assert conveyor.generated_outputs == ("RUN", "RESET")
     assert conveyor.min_permissives == 1
     assert conveyor.min_interlocks == 1
