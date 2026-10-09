@@ -807,6 +807,22 @@ def qualify_controls_build(
             raise ControlsQualificationError(
                 "build-wide engineering approval cannot precede integrated FAT execution"
             )
+
+        approval_key_id = engineering_approval["signature"]["key_id"]
+        evidence_key_ids = {
+            *(
+                str(item["signature"]["key_id"])
+                for item in studio_results
+            ),
+            str(ignition_result["import_signature"]["key_id"]),
+            str(ignition_result["export_signature"]["key_id"]),
+            str(integrated_fat_result["signature"]["key_id"]),
+        }
+        if approval_key_id in evidence_key_ids:
+            raise ControlsQualificationError(
+                "build-wide engineering approval must use a signer key that is "
+                "independent of vendor/import/FAT evidence signers"
+            )
     approved = (
         runtime_ready
         and controller_approvals_complete
