@@ -21,7 +21,7 @@ from devagent.controls.models import (
     RequirementSpec,
 )
 
-CONTROL_SPEC_SCHEMA = "devagent-controls-spec-v1"
+CONTROL_SPEC_SCHEMA = "devagent-controls-spec-v2"
 
 _SUPPORTED_VENDORS = {"ROCKWELL", "SIEMENS", "SCHNEIDER"}
 _PRIORITIES = {"INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
