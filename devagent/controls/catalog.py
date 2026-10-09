@@ -16,6 +16,7 @@ class EquipmentStandard:
     default_faceplate: str
     min_permissives: int
     min_interlocks: int
+    min_faults: int
     min_alarms: int
     fault_status_member: str | None
     alarm_source_policy: str
@@ -34,6 +35,7 @@ _STANDARDS = {
         default_faceplate="motor-v1",
         min_permissives=1,
         min_interlocks=1,
+        min_faults=1,
         min_alarms=1,
         fault_status_member="FAULTED",
         alarm_source_policy="DECLARED_SIGNAL",
@@ -50,6 +52,7 @@ _STANDARDS = {
         default_faceplate="vfd-v1",
         min_permissives=1,
         min_interlocks=1,
+        min_faults=1,
         min_alarms=1,
         fault_status_member="FAULTED",
         alarm_source_policy="DECLARED_SIGNAL",
@@ -66,6 +69,7 @@ _STANDARDS = {
         default_faceplate="conveyor-v1",
         min_permissives=1,
         min_interlocks=1,
+        min_faults=1,
         min_alarms=1,
         fault_status_member="FAULTED",
         alarm_source_policy="DECLARED_SIGNAL",
@@ -82,6 +86,7 @@ _STANDARDS = {
         default_faceplate="valve-v1",
         min_permissives=1,
         min_interlocks=1,
+        min_faults=1,
         min_alarms=1,
         fault_status_member=None,
         alarm_source_policy="DECLARED_SIGNAL",
