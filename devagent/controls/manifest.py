@@ -5,7 +5,7 @@ from typing import Any
 from devagent.controls.ir import ControlsIR, controls_ir_sha256
 from devagent.controls.models import ControlSystemSpec
 
-AUTHORING_MANIFEST_SCHEMA = "devagent-controls-authoring-manifest-v1"
+AUTHORING_MANIFEST_SCHEMA = "devagent-controls-authoring-manifest-v2"
 
 
 def build_authoring_manifest(spec: ControlSystemSpec, ir: ControlsIR) -> dict[str, Any]:
