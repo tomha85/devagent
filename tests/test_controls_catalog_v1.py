@@ -12,6 +12,7 @@ def test_company_equipment_catalog_is_explicit_and_versioned() -> None:
     assert conveyor.generated_outputs == ("RUN", "RESET")
     assert conveyor.min_permissives == 1
     assert conveyor.min_interlocks == 1
+    assert conveyor.min_faults == 1
     assert conveyor.min_alarms == 1
     assert conveyor.fault_status_member == "FAULTED"
     assert conveyor.alarm_source_policy == "DECLARED_SIGNAL"
