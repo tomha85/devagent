@@ -130,7 +130,7 @@ def test_multi_controller_project_builds_independent_verified_artifacts(tmp_path
         "project_id": "MULTI_CONTROLLER",
         "controllers": [
             {"id": "PLC_A", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
-            {"id": "PLC_B", "vendor": "ROCKWELL", "platform": "COMPACTLOGIX"},
+            {"id": "PLC_B", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
         ],
         "equipment": [
             _equipment("CONVEYOR", "CONV_A", "PLC_A"),
@@ -158,3 +158,18 @@ def test_unqualified_vendor_generation_fails_closed(tmp_path) -> None:
 
     with pytest.raises(ControlsBuildError, match="qualified for Rockwell controllers only"):
         build_controls_spec(spec, tmp_path / "unsupported")
+
+
+def test_compactlogix_generation_fails_until_golden_template_is_qualified(tmp_path) -> None:
+    payload = {
+        "schema": "devagent-controls-spec-v2",
+        "project_id": "COMPACTLOGIX_FUTURE",
+        "controllers": [
+            {"id": "PLC1", "vendor": "ROCKWELL", "platform": "COMPACTLOGIX"}
+        ],
+        "equipment": [_equipment("MOTOR", "MTR_101", "PLC1")],
+    }
+    spec = parse_control_system_payload(payload)
+
+    with pytest.raises(ControlsBuildError, match="currently qualifies CONTROLLOGIX only"):
+        build_controls_spec(spec, tmp_path / "compactlogix-unqualified")
