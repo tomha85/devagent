@@ -10,7 +10,7 @@ def _write_spec(tmp_path):
     path.write_text(
         json.dumps(
             {
-                "schema": "devagent-controls-spec-v1",
+                "schema": "devagent-controls-spec-v2",
                 "project_id": "PACK01",
                 "controllers": [
                     {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
@@ -50,8 +50,8 @@ def test_entrypoint_routes_controls_inspect(tmp_path, capsys) -> None:
     path = _write_spec(tmp_path)
     assert main(["controls", "inspect", str(path)]) == 0
     output = capsys.readouterr().out
-    assert '"devagent-controls-authoring-manifest-v1"' in output
-    assert '"devagent-controls-ir-v1"' in output
+    assert '"devagent-controls-authoring-manifest-v2"' in output
+    assert '"devagent-controls-ir-v2"' in output
 
 
 def test_entrypoint_routes_controls_build_verify_and_review(tmp_path, capsys) -> None:
@@ -89,6 +89,6 @@ def test_entrypoint_routes_controls_build_verify_and_review(tmp_path, capsys) ->
 def test_entrypoint_routes_controls_catalog(capsys) -> None:
     assert main(["controls", "catalog"]) == 0
     output = capsys.readouterr().out
-    assert '"devagent-controls-catalog-v1"' in output
+    assert '"devagent-controls-catalog-v2"' in output
     assert '"conveyor-v1"' in output
     assert '"motor-v1"' in output
