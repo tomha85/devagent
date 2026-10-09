@@ -17,6 +17,10 @@ from devagent.controls.manifest import build_authoring_manifest
 from devagent.controls.normalize import normalized_spec_payload
 from devagent.controls.parser import load_control_system_spec
 from devagent.controls.portal import serve_portal
+from devagent.controls.qualification import (
+    ControlsQualificationError,
+    write_controls_qualification,
+)
 from devagent.controls.review import create_review_request
 from devagent.controls.rules import evaluate_controls_rules, rules_pass
 from devagent.controls.schema import ControlSpecError
@@ -34,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("catalog", help="Print the qualified V1 equipment standards catalog")
+    sub.add_parser("catalog", help="Print the qualified equipment standards catalog")
 
     validate = sub.add_parser("validate", help="Validate a controls specification and company standards")
     validate.add_argument("spec", type=Path)
@@ -52,6 +56,17 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="Verify a previously generated controls build")
     verify.add_argument("build_dir", type=Path)
+
+    qualify = sub.add_parser(
+        "qualify",
+        help=(
+            "Verify signed Studio 5000, Ignition Gateway, qualified-backend runtime, "
+            "and human approval evidence for a deterministic controls build"
+        ),
+    )
+    qualify.add_argument("build_dir", type=Path)
+    qualify.add_argument("--evidence-dir", required=True, type=Path)
+    qualify.add_argument("--output", required=True, type=Path)
 
     review = sub.add_parser(
         "request-review",
@@ -88,7 +103,7 @@ def _rule_payload(spec) -> list[dict[str, str]]:
 
 def _catalog() -> int:
     payload = {
-        "schema": "devagent-controls-catalog-v1",
+        "schema": "devagent-controls-catalog-v2",
         "standards": [
             {
                 "id": item.id,
@@ -97,6 +112,12 @@ def _catalog() -> int:
                 "required_status": list(item.required_status),
                 "generated_outputs": list(item.generated_outputs),
                 "default_faceplate": item.default_faceplate,
+                "min_permissives": item.min_permissives,
+                "min_interlocks": item.min_interlocks,
+                "min_alarms": item.min_alarms,
+                "fault_status_member": item.fault_status_member,
+                "alarm_source_policy": item.alarm_source_policy,
+                "historian_policy": item.historian_policy,
             }
             for item in sorted(STANDARDS.values(), key=lambda value: value.id)
         ],
@@ -161,6 +182,16 @@ def _verify(path: Path) -> int:
     return 0 if result["status"] == "PASS" else 2
 
 
+def _qualify(build_dir: Path, *, evidence_dir: Path, output: Path) -> int:
+    result = write_controls_qualification(build_dir, evidence_dir, output)
+    print(f"CONTROLS_EXTERNAL_QUALIFICATION={result['status']}")
+    print(f"PROJECT={result['project_id']}")
+    print(f"OUTPUT={output.expanduser().resolve(strict=False)}")
+    print(f"PRODUCTION_RELEASE_READY={str(result['production_release_ready']).lower()}")
+    print("PRODUCTION_DEPLOYMENT=NOT_PERFORMED")
+    return 0 if result["status"] != "BLOCKED" else 2
+
+
 def _request_review(path: Path, *, requested_by: str, output: Path) -> int:
     request = create_review_request(
         path,
@@ -188,6 +219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _build(args.spec, args.output_dir)
         if args.command == "verify":
             return _verify(args.build_dir)
+        if args.command == "qualify":
+            return _qualify(
+                args.build_dir,
+                evidence_dir=args.evidence_dir,
+                output=args.output,
+            )
         if args.command == "request-review":
             return _request_review(
                 args.build_dir,
@@ -203,7 +240,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         raise AssertionError(args.command)
-    except (ControlSpecError, ControlsBuildError, OSError, ValueError) as exc:
+    except (
+        ControlSpecError,
+        ControlsBuildError,
+        ControlsQualificationError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"DevAgent controls failed: {exc}", file=sys.stderr)
         return 2
 
