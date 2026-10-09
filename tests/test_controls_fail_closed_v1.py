@@ -10,7 +10,7 @@ from devagent.controls.schema import ControlSpecError, parse_control_system_payl
 
 def _payload():
     return {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "PACK01",
         "controllers": [
             {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
@@ -97,7 +97,7 @@ def test_duplicate_command_identity_fails_case_insensitively() -> None:
 def test_duplicate_json_keys_fail_before_schema_validation(tmp_path) -> None:
     path = tmp_path / "duplicate.json"
     path.write_text(
-        '{"schema":"devagent-controls-spec-v1","schema":"other","project_id":"P",'
+        '{"schema":"devagent-controls-spec-v2","schema":"other","project_id":"P",'
         '"controllers":[],"equipment":[]}',
         encoding="utf-8",
     )
