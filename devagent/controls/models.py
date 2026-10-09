@@ -14,7 +14,9 @@ class ControllerSpec:
 @dataclass(frozen=True)
 class AlarmSpec:
     id: str
+    description: str
     priority: str
+    on_delay_ms: int
     operator_response: str
     source_signal: str | None = None
 
