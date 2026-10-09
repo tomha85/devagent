@@ -22,6 +22,7 @@ def _payload():
                 "status": ["READY", "RUNNING", "FAULTED"],
                 "permissives": ["SAFE"],
                 "interlocks": ["DRIVE_FAULT"],
+                "faults": ["DRIVE_FAULT"],
                 "alarms": [
                     {
                         "id": "ALM_DRIVE",
@@ -127,3 +128,19 @@ def test_high_requirement_with_structured_assertion_passes_requirement_rule() ->
         item for item in results
         if item.id == "CTRL-E600" and item.status == "FAIL"
     ]
+
+
+def test_missing_explicit_fault_fails_company_standard() -> None:
+    payload = _payload()
+    payload["equipment"][0]["faults"] = []
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E325" for item in failures)
+
+
+def test_declared_fault_requires_alarm_coverage() -> None:
+    payload = _payload()
+    payload["equipment"][0]["alarms"][0]["source_signal"] = "SAFE"
+    results = evaluate_controls_rules(parse_control_system_payload(payload))
+    failures = [item for item in results if item.status == "FAIL"]
+    assert any(item.id == "CTRL-E331" for item in failures)
