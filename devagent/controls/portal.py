@@ -42,7 +42,7 @@ class PortalService:
 
     def catalog_payload(self) -> dict[str, Any]:
         return {
-            "schema": "devagent-controls-catalog-v1",
+            "schema": "devagent-controls-catalog-v2",
             "standards": [
                 {
                     "id": item.id,
@@ -51,6 +51,12 @@ class PortalService:
                     "required_status": list(item.required_status),
                     "generated_outputs": list(item.generated_outputs),
                     "default_faceplate": item.default_faceplate,
+                    "min_permissives": item.min_permissives,
+                    "min_interlocks": item.min_interlocks,
+                    "min_alarms": item.min_alarms,
+                    "fault_status_member": item.fault_status_member,
+                    "alarm_source_policy": item.alarm_source_policy,
+                    "historian_policy": item.historian_policy,
                 }
                 for item in sorted(STANDARDS.values(), key=lambda value: value.id)
             ],
@@ -157,58 +163,142 @@ _INDEX_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DevAgent Controls</title>
 <style>
-body{font-family:system-ui,sans-serif;margin:2rem;max-width:1100px}
-textarea{width:100%;min-height:420px;font-family:ui-monospace,monospace}
-input{padding:.55rem;width:24rem;max-width:90%}
+body{font-family:system-ui,sans-serif;margin:2rem;max-width:1180px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem 1rem}
+.full{grid-column:1/-1}
+label{font-weight:600;display:block;margin-bottom:.25rem}
+input,select,textarea{box-sizing:border-box;width:100%;padding:.55rem}
+textarea{min-height:90px;font-family:ui-monospace,monospace}
+#spec{min-height:330px}
 button{margin:.5rem .5rem .5rem 0;padding:.6rem 1rem}
-pre{background:#f4f4f4;padding:1rem;white-space:pre-wrap}
+pre{background:#f4f4f4;padding:1rem;white-space:pre-wrap;overflow:auto}
+small{color:#555}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
 </style>
 </head>
 <body>
 <h1>DevAgent Controls Platform</h1>
-<p>Validate, generate, and request engineering review without opening a PLC/HMI
-designer for standardized staging work. This portal never performs production
-PLC writes/downloads or Ignition Gateway deployment.</p>
-<textarea id="spec">{
-  "schema": "devagent-controls-spec-v1",
-  "project_id": "PACKAGING_LINE_04",
-  "controllers": [
-    {"id":"PLC_PACK_01","vendor":"ROCKWELL","platform":"CONTROLLOGIX"}
-  ],
-  "equipment": [
-    {
-      "id":"CONV_101",
-      "type":"CONVEYOR",
-      "standard":"conveyor-v1",
-      "controller":"PLC_PACK_01",
-      "signals":["SAFETY_OK","DOWNSTREAM_READY","GUARD_OPEN","DRIVE_FAULT"],
-      "commands":{"START":true,"STOP":true,"RESET":true},
-      "status":["READY","RUNNING","FAULTED"],
-      "permissives":["SAFETY_OK","DOWNSTREAM_READY"],
-      "interlocks":["GUARD_OPEN","DRIVE_FAULT"],
-      "alarms":[
-        {
-          "id":"ALM_CONV101_DRIVE_FAULT",
-          "priority":"HIGH",
-          "operator_response":"Inspect drive fault before reset.",
-          "source_signal":"DRIVE_FAULT"
-        }
-      ],
-      "hmi":{"faceplate":"conveyor-v1","historian":true},
-      "requirements":[]
-    }
-  ]
-}</textarea><br>
-<input id="requestedBy" placeholder="Engineer name for review request"><br>
+<p>Configure standardized equipment, validate company rules, generate deterministic
+Rockwell/Ignition/FAT staging artifacts, and request engineering review. This
+portal never performs PLC writes/downloads or Ignition Gateway deployment.</p>
+
+<div class="grid">
+<div><label>Project ID</label><input id="projectId" value="PACKAGING_LINE_04"></div>
+<div><label>Controller ID</label><input id="controllerId" value="PLC_PACK_01"></div>
+<div><label>Rockwell platform</label><select id="platform"><option>CONTROLLOGIX</option></select></div>
+<div><label>Controller network</label><input id="network" placeholder="Packaging VLAN 20"></div>
+<div><label>Equipment type</label><select id="equipmentType"></select></div>
+<div><label>Equipment ID</label><input id="equipmentId" value="CONV_101"></div>
+<div><label>Area</label><input id="area" value="Packaging"></div>
+<div><label>Safety zone</label><input id="safetyZone" value="SZ03"></div>
+<div class="full"><label>Signals (comma separated)</label><input id="signals" value="SAFETY_OK,DOWNSTREAM_READY,GUARD_OPEN,DRIVE_FAULT"></div>
+<div class="full"><label>Permissives</label><input id="permissives" value="SAFETY_OK,DOWNSTREAM_READY"></div>
+<div class="full"><label>Interlocks / fault sources</label><input id="interlocks" value="GUARD_OPEN,DRIVE_FAULT"></div>
+<div><label>Alarm ID</label><input id="alarmId" value="ALM_CONV101_DRIVE_FAULT"></div>
+<div><label>Alarm source signal</label><input id="alarmSource" value="DRIVE_FAULT"></div>
+<div><label>Alarm priority</label><select id="alarmPriority"><option>HIGH</option><option>CRITICAL</option><option>MEDIUM</option><option>LOW</option><option>INFO</option></select></div>
+<div><label>Historian</label><select id="historian"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+<div class="full"><label>Operator response</label><input id="operatorResponse" value="Inspect drive fault and correct the cause before reset."></div>
+<div class="full"><label>I/O mappings</label><textarea id="ioMappings" placeholder="One per line: INPUT SIGNAL.GUARD_OPEN Local:1:I.Data.0&#10;OUTPUT OUTPUT.RUN Local:2:O.Data.0"></textarea><small>Mappings are staged metadata only. Generated standard logic never writes a physical I/O address directly.</small></div>
+<div><label>Requirement ID</label><input id="requirementId" value="REQ_CONV101_GUARD"></div>
+<div><label>Criticality</label><select id="criticality"><option>HIGH</option><option>CRITICAL</option><option>MEDIUM</option><option>LOW</option></select></div>
+<div class="full"><label>Requirement text</label><input id="requirementText" value="CONV_101 must not run while GUARD_OPEN is active."></div>
+<div class="full"><label>Assertion conditions</label><input id="assertConditions" value="COMMAND.START=true,SIGNAL.GUARD_OPEN=true"><small>Structured Boolean references. Safe baseline values for other declared permissives/interlocks are made explicit in the generated FAT case.</small></div>
+<div><label>Expected reference</label><input id="expectedRef" value="OUTPUT.RUN"></div>
+<div><label>Expected value</label><select id="expectedValue"><option value="false">false</option><option value="true">true</option></select></div>
+</div>
+
+<button onclick="generateSpec()">Generate deterministic spec</button>
 <button onclick="callApi('validate')">Validate</button>
 <button onclick="callApi('build')">Build staging artifacts</button>
+<br>
+<input id="requestedBy" placeholder="Engineer name for review request">
 <button onclick="callApi('review')">Request engineering review</button>
+
+<h2>Generated / advanced specification</h2>
+<textarea id="spec"></textarea>
+<h2>Result</h2>
 <pre id="result"></pre>
+
 <script>
+let catalog={standards:[]};
+function csv(id){return document.getElementById(id).value.split(',').map(x=>x.trim()).filter(Boolean);}
+function boolValue(id){return document.getElementById(id).value==='true';}
+function assertionConditions(){
+ const result={};
+ for(const pair of csv('assertConditions')){
+   const pos=pair.lastIndexOf('=');
+   if(pos<1) throw new Error('Assertion condition must be REF=true or REF=false: '+pair);
+   const key=pair.slice(0,pos).trim(), value=pair.slice(pos+1).trim().toLowerCase();
+   if(value!=='true'&&value!=='false') throw new Error('Assertion Boolean must be true/false: '+pair);
+   result[key]=value==='true';
+ }
+ return result;
+}
+function ioRows(){
+ const lines=document.getElementById('ioMappings').value.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+ return lines.map(line=>{
+   const parts=line.split(/\s+/);
+   if(parts.length<3) throw new Error('I/O line must be: INPUT|OUTPUT MEMBER ADDRESS');
+   return {direction:parts[0].toUpperCase(),member:parts[1],address:parts.slice(2).join(' ')};
+ });
+}
+function selectedStandard(){
+ const type=document.getElementById('equipmentType').value;
+ const found=catalog.standards.find(x=>x.equipment_type===type);
+ if(!found) throw new Error('No qualified standard for '+type);
+ return found;
+}
+function generateSpec(){
+ const s=selectedStandard();
+ const spec={
+   schema:'devagent-controls-spec-v2',
+   project_id:document.getElementById('projectId').value.trim(),
+   controllers:[{
+     id:document.getElementById('controllerId').value.trim(),
+     vendor:'ROCKWELL',
+     platform:document.getElementById('platform').value,
+     network:document.getElementById('network').value.trim()||null
+   }],
+   equipment:[{
+     id:document.getElementById('equipmentId').value.trim(),
+     type:s.equipment_type,
+     standard:s.id,
+     controller:document.getElementById('controllerId').value.trim(),
+     area:document.getElementById('area').value.trim()||null,
+     safety_zone:document.getElementById('safetyZone').value.trim()||null,
+     signals:csv('signals'),
+     commands:Object.fromEntries(s.required_commands.map(x=>[x,true])),
+     status:s.required_status,
+     permissives:csv('permissives'),
+     interlocks:csv('interlocks'),
+     alarms:[{
+       id:document.getElementById('alarmId').value.trim(),
+       priority:document.getElementById('alarmPriority').value,
+       operator_response:document.getElementById('operatorResponse').value.trim(),
+       source_signal:document.getElementById('alarmSource').value.trim()
+     }],
+     hmi:{faceplate:s.default_faceplate,historian:boolValue('historian')},
+     io:ioRows(),
+     requirements:[{
+       id:document.getElementById('requirementId').value.trim(),
+       text:document.getElementById('requirementText').value.trim(),
+       criticality:document.getElementById('criticality').value,
+       assertion:{
+         conditions:assertionConditions(),
+         expect:{[document.getElementById('expectedRef').value.trim()]:boolValue('expectedValue')}
+       }
+     }]
+   }]
+ };
+ document.getElementById('spec').value=JSON.stringify(spec,null,2);
+ return spec;
+}
 async function callApi(action){
  const out=document.getElementById('result');
  try{
-   const spec=JSON.parse(document.getElementById('spec').value);
+   const text=document.getElementById('spec').value.trim();
+   const spec=text?JSON.parse(text):generateSpec();
    const payload=action==='review'
      ? {spec:spec,requested_by:document.getElementById('requestedBy').value}
      : spec;
@@ -219,11 +309,21 @@ async function callApi(action){
    out.textContent=JSON.stringify(data,null,2);
  }catch(error){out.textContent=String(error);}
 }
+async function init(){
+ const response=await fetch('/api/catalog');
+ catalog=await response.json();
+ const select=document.getElementById('equipmentType');
+ for(const type of [...new Set(catalog.standards.map(x=>x.equipment_type))].sort()){
+   const option=document.createElement('option'); option.value=type; option.textContent=type; select.appendChild(option);
+ }
+ select.value='CONVEYOR';
+ generateSpec();
+}
+init().catch(error=>document.getElementById('result').textContent=String(error));
 </script>
 </body>
 </html>
 """
-
 
 def serve_portal(
     workspace: Path,
