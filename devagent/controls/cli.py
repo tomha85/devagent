@@ -118,6 +118,12 @@ def _catalog() -> int:
                 "equipment_type": item.equipment_type,
                 "required_commands": list(item.required_commands),
                 "required_status": list(item.required_status),
+                "required_feedback_signals": list(item.required_feedback_signals),
+                "status_signal_map": {
+                    status_member: signal_name
+                    for status_member, signal_name in item.status_signal_map
+                },
+                "command_model": item.command_model,
                 "generated_outputs": list(item.generated_outputs),
                 "default_faceplate": item.default_faceplate,
                 "min_permissives": item.min_permissives,
