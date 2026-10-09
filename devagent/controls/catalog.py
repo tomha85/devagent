@@ -14,6 +14,12 @@ class EquipmentStandard:
     stop_action: str | None
     generated_outputs: tuple[str, ...]
     default_faceplate: str
+    min_permissives: int
+    min_interlocks: int
+    min_alarms: int
+    fault_status_member: str | None
+    alarm_source_policy: str
+    historian_policy: str
 
 
 _STANDARDS = {
@@ -26,6 +32,12 @@ _STANDARDS = {
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
         default_faceplate="motor-v1",
+        min_permissives=1,
+        min_interlocks=1,
+        min_alarms=1,
+        fault_status_member="FAULTED",
+        alarm_source_policy="DECLARED_SIGNAL",
+        historian_policy="OPTIONAL",
     ),
     "vfd-v1": EquipmentStandard(
         id="vfd-v1",
@@ -36,6 +48,12 @@ _STANDARDS = {
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
         default_faceplate="vfd-v1",
+        min_permissives=1,
+        min_interlocks=1,
+        min_alarms=1,
+        fault_status_member="FAULTED",
+        alarm_source_policy="DECLARED_SIGNAL",
+        historian_policy="OPTIONAL",
     ),
     "conveyor-v1": EquipmentStandard(
         id="conveyor-v1",
@@ -46,6 +64,12 @@ _STANDARDS = {
         stop_action="STOP",
         generated_outputs=("RUN", "RESET"),
         default_faceplate="conveyor-v1",
+        min_permissives=1,
+        min_interlocks=1,
+        min_alarms=1,
+        fault_status_member="FAULTED",
+        alarm_source_policy="DECLARED_SIGNAL",
+        historian_policy="OPTIONAL",
     ),
     "valve-v1": EquipmentStandard(
         id="valve-v1",
@@ -56,6 +80,12 @@ _STANDARDS = {
         stop_action="CLOSE",
         generated_outputs=("OPEN", "CLOSE"),
         default_faceplate="valve-v1",
+        min_permissives=1,
+        min_interlocks=1,
+        min_alarms=1,
+        fault_status_member=None,
+        alarm_source_policy="DECLARED_SIGNAL",
+        historian_policy="OPTIONAL",
     ),
 }
 
