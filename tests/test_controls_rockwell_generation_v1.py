@@ -141,3 +141,22 @@ def test_faulted_rung_uses_only_explicit_fault_sources() -> None:
     signal_tags = dict(symbols["signals"])
     assert signal_tags["DRIVE_FAULT"] in fault_rungs[0].text
     assert signal_tags["GUARD_OPEN"] not in fault_rungs[0].text
+
+
+def test_run_rung_seals_in_primary_command_and_status_uses_feedback() -> None:
+    ir = build_controls_ir(_spec())
+    artifact = render_rockwell_project(ir, ir.controllers[0])
+    symbols = dict(artifact.symbol_map)["CONV_101"]
+    commands = dict(symbols["commands"])
+    outputs = dict(symbols["outputs"])
+    signals = dict(symbols["signals"])
+    status = dict(symbols["status"])
+
+    run_rung = next(rung for rung in artifact.rungs if rung.purpose == "PRIMARY_RUN")
+    assert f"XIC({commands['START']})" in run_rung.text
+    assert f"XIC({outputs['RUN']})" in run_rung.text
+    assert f"XIO({commands['STOP']})" in run_rung.text
+
+    running_rung = next(rung for rung in artifact.rungs if rung.purpose == "STATUS_RUNNING")
+    assert running_rung.text == f"XIC({signals['RUN_FB']})OTE({status['RUNNING']});"
+    assert outputs["RUN"] not in running_rung.text
