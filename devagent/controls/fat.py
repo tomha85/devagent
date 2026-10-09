@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.2.0"
+FAT_GENERATOR_VERSION = "2.3.0"
 
 
 @dataclass(frozen=True)
@@ -120,7 +120,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                 expected=True,
             )
         )
-        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT":
+        if standard.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT":
             held = _safe_baseline_inputs(item)
             cases.append(
                 _case(
@@ -132,6 +132,27 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     prior_state={"OUTPUT.RUN": True},
                     expected_output="OUTPUT.RUN",
                     expected=True,
+                )
+            )
+
+            held_primary = _safe_baseline_inputs(item)
+            held_primary[f"COMMAND.{action}"] = True
+            cases.append(
+                _case(
+                    item,
+                    suffix="HELD-PRIMARY-NO-AUTO-RESTART",
+                    title=(
+                        f"{item.id} does not auto-restart when the primary command "
+                        "remains held after a dropped run request"
+                    ),
+                    action="RESTART_GUARD",
+                    inputs=held_primary,
+                    prior_state={
+                        "OUTPUT.RUN": False,
+                        f"INTERNAL.{action}_PREV": True,
+                    },
+                    expected_output="OUTPUT.RUN",
+                    expected=False,
                 )
             )
         if standard.stop_action is not None:
@@ -146,7 +167,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     inputs=stopped,
                     prior_state=(
                         {"OUTPUT.RUN": True}
-                        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+                        if standard.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT"
                         else {}
                     ),
                     expected_output="OUTPUT.RUN",
@@ -179,7 +200,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     inputs=blocked,
                     prior_state=(
                         {"OUTPUT.RUN": True}
-                        if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
+                        if standard.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT"
                         else {}
                     ),
                     expected_output="OUTPUT.RUN",
@@ -332,12 +353,16 @@ def evaluate_standard_state(
             if standard.stop_action is None
             else not commands.get(standard.stop_action, False)
         )
-        prior_run = bool((prior_state or {}).get("OUTPUT.RUN", False))
-        run_request = (
-            primary or prior_run
-            if standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT"
-            else primary
-        )
+        prior = prior_state or {}
+        prior_run = bool(prior.get("OUTPUT.RUN", False))
+        if standard.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT":
+            primary_prev = bool(
+                prior.get(f"INTERNAL.{standard.primary_action}_PREV", False)
+            )
+            primary_edge = primary and not primary_prev
+            run_request = primary_edge or prior_run
+        else:
+            run_request = primary
         run = run_request and stop_clear and permissives_ok and interlocks_clear
         result["OUTPUT.RUN"] = run
         if "RESET" in standard.generated_outputs:
