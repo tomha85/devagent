@@ -56,71 +56,51 @@ def rockwell_reference_provenance() -> dict[str, str]:
 
 def _base_document(controller_name: str, platform: str) -> tuple[ET.Element, ET.Element]:
     normalized = platform.strip().upper().replace(" ", "")
-    if normalized in {"CONTROLLOGIX", "1756"}:
-        resource = files("devagent.controls").joinpath(
-            "templates/rockwell/ExampleForCICD_L85E.L5X"
+    if normalized not in {"CONTROLLOGIX", "1756"}:
+        raise RockwellGenerationError(
+            f"Rockwell platform {platform!r} is not qualified for deterministic generation; "
+            "Controls V1 requires a pinned Studio-5000-exported golden template and "
+            "currently qualifies CONTROLLOGIX only"
         )
-        root = ET.fromstring(resource.read_bytes())
-        plc = root.find("Controller")
-        if plc is None:
-            raise RockwellGenerationError("packaged Rockwell reference template has no Controller")
 
-        root.set("TargetName", controller_name)
-        root.set("TargetType", "Controller")
-        root.set("SoftwareRevision", ROCKWELL_SOFTWARE_REVISION)
-        root.attrib.pop("ExportDate", None)
-
-        plc.set("Name", controller_name)
-        plc.set("ProcessorType", "1756-L85E")
-        plc.set("MajorRev", "36")
-        plc.set("MinorRev", "11")
-        for stale_attribute in (
-            "MajorFaultProgram",
-            "ProjectCreationDate",
-            "LastModifiedDate",
-            "CommPath",
-        ):
-            plc.attrib.pop(stale_attribute, None)
-
-        for child_name in ("Tags", "Programs", "Tasks"):
-            existing = plc.find(child_name)
-            if existing is None:
-                raise RockwellGenerationError(
-                    f"packaged Rockwell reference template has no {child_name}"
-                )
-            existing.clear()
-        data_types = plc.find("DataTypes")
-        if data_types is not None:
-            data_types.clear()
-        aois = plc.find("AddOnInstructionDefinitions")
-        if aois is not None:
-            aois.clear()
-        return root, plc
-
-    root = ET.Element(
-        "RSLogix5000Content",
-        {
-            "SchemaRevision": ROCKWELL_SCHEMA_REVISION,
-            "SoftwareRevision": ROCKWELL_SOFTWARE_REVISION,
-            "TargetName": controller_name,
-            "TargetType": "Controller",
-            "ContainsContext": "false",
-        },
+    resource = files("devagent.controls").joinpath(
+        "templates/rockwell/ExampleForCICD_L85E.L5X"
     )
-    plc = ET.SubElement(
-        root,
-        "Controller",
-        {
-            "Use": "Target",
-            "Name": controller_name,
-            "ProcessorType": _processor_type(platform),
-            "MajorRev": "36",
-            "MinorRev": "11",
-        },
-    )
-    ET.SubElement(plc, "DataTypes")
-    ET.SubElement(plc, "Modules")
-    ET.SubElement(plc, "AddOnInstructionDefinitions")
+    root = ET.fromstring(resource.read_bytes())
+    plc = root.find("Controller")
+    if plc is None:
+        raise RockwellGenerationError("packaged Rockwell reference template has no Controller")
+
+    root.set("TargetName", controller_name)
+    root.set("TargetType", "Controller")
+    root.set("SoftwareRevision", ROCKWELL_SOFTWARE_REVISION)
+    root.attrib.pop("ExportDate", None)
+
+    plc.set("Name", controller_name)
+    plc.set("ProcessorType", "1756-L85E")
+    plc.set("MajorRev", "36")
+    plc.set("MinorRev", "11")
+    for stale_attribute in (
+        "MajorFaultProgram",
+        "ProjectCreationDate",
+        "LastModifiedDate",
+        "CommPath",
+    ):
+        plc.attrib.pop(stale_attribute, None)
+
+    for child_name in ("Tags", "Programs", "Tasks"):
+        existing = plc.find(child_name)
+        if existing is None:
+            raise RockwellGenerationError(
+                f"packaged Rockwell reference template has no {child_name}"
+            )
+        existing.clear()
+    data_types = plc.find("DataTypes")
+    if data_types is not None:
+        data_types.clear()
+    aois = plc.find("AddOnInstructionDefinitions")
+    if aois is not None:
+        aois.clear()
     return root, plc
 
 
@@ -128,13 +108,10 @@ def _processor_type(platform: str) -> str:
     normalized = platform.strip().upper().replace(" ", "")
     if normalized in {"CONTROLLOGIX", "1756"}:
         return "1756-L85E"
-    if normalized in {"COMPACTLOGIX", "5069"}:
-        return "5069-L320ER"
     raise RockwellGenerationError(
         f"Rockwell platform {platform!r} is not qualified for deterministic generation; "
-        "supported V1 platforms are CONTROLLOGIX and COMPACTLOGIX"
+        "supported V1 platform is CONTROLLOGIX"
     )
-
 
 def _enabled_commands(equipment: EquipmentSpec) -> dict[str, bool]:
     return {name: enabled for name, enabled in equipment.commands}
