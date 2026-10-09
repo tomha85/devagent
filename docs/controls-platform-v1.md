@@ -93,8 +93,11 @@ The V1 product release qualifies these exact standard IDs:
 - `valve-v1`
 
 Each standard pins the required command/status contract, generated output
-surface, minimum permissive/interlock/alarm coverage, fault-status contract,
-alarm-source policy, historian policy, and qualified faceplate. A version-shaped
+surface, minimum permissive/interlock/fault/alarm coverage, fault-status contract,
+alarm-source policy, historian policy, and qualified faceplate. Interlocks and
+faults are modeled separately: every fault is also an interlock so an active
+fault cannot bypass inhibit logic, but a non-fault interlock such as a guard
+condition does not automatically assert FAULTED. A version-shaped
 but unknown standard such as `conveyor-v999` fails closed; `latest` is never
 accepted as an engineering standard.
 
@@ -102,6 +105,8 @@ Company rules include explicit checks such as:
 
 - `CTRL-E310` required permissive coverage;
 - `CTRL-E417` required reset behavior where applicable;
+- `CTRL-E325` explicit fault-source coverage;
+- `CTRL-E331` every fault has an operator-visible alarm binding;
 - `CTRL-E500` explicit alarm source binding;
 - `CTRL-W500` operator response guidance;
 - `CTRL-E600` structured assertion requirement for HIGH/CRITICAL requirements;
@@ -372,7 +377,7 @@ hash, re-running qualification can return `APPROVED_FOR_RELEASE_HANDOFF`.
 
 The local portal is a thin facade over the same deterministic library used by
 the CLI. It supports a guided equipment form for controller/equipment identity,
-area, safety zone, signals, permissives, interlocks, alarms, I/O mapping,
+area, safety zone, signals, permissives, interlocks, faults, alarms, I/O mapping,
 historian, and structured requirement assertions. It can validate, build,
 compare against a prior verified Controls-IR hash, and create a review request.
 It does not contain an independent controls rules/generation implementation.
