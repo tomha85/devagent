@@ -129,3 +129,15 @@ def test_roundtrip_tolerates_studio_whitespace_rewrite(tmp_path) -> None:
 
     assert result["status"] == "PASS"
     assert result["semantic_projection_status"] == "PASS"
+
+
+def test_faulted_rung_uses_only_explicit_fault_sources() -> None:
+    ir = build_controls_ir(_spec())
+    artifact = render_rockwell_project(ir, ir.controllers[0])
+    fault_rungs = [rung for rung in artifact.rungs if rung.purpose == "STATUS_FAULTED"]
+
+    assert len(fault_rungs) == 1
+    symbols = dict(artifact.symbol_map)["CONV_101"]
+    signal_tags = dict(symbols["signals"])
+    assert signal_tags["DRIVE_FAULT"] in fault_rungs[0].text
+    assert signal_tags["GUARD_OPEN"] not in fault_rungs[0].text
