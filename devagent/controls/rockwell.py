@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.5.0"
+ROCKWELL_GENERATOR_VERSION = "1.6.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
@@ -213,7 +213,7 @@ def _status_rungs(
     status = dict(symbols["status"])
     rungs: list[GeneratedRung] = []
 
-    if standard.equipment_type in {"MOTOR", "VFD", "CONVEYOR"}:
+    if "READY" in status:
         ready_contacts = [
             *(f"XIC({signals[name]})" for name in equipment.permissives),
             *(f"XIO({signals[name]})" for name in equipment.interlocks),
