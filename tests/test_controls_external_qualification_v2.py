@@ -318,6 +318,27 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
         },
     )
 
+    preapproval = qualify_controls_build(build, evidence)
+
+    assert preapproval["status"] == "READY_FOR_ENGINEERING_APPROVAL"
+    assert preapproval["engineering_approval"]["status"] == "REQUIRED"
+    assert preapproval["production_release_ready"] is False
+
+    _signed_json(
+        evidence / "controls-engineering-approval.json",
+        private,
+        {
+            "schema": "devagent-controls-engineering-approval-v1",
+            "project_id": manifest["project_id"],
+            "spec_sha256": manifest["spec_sha256"],
+            "controls_ir_sha256": manifest["controls_ir_sha256"],
+            "approval_context_sha256": preapproval["approval_context_sha256"],
+            "decision": "APPROVE",
+            "approved_by": "Lead Controls Engineer",
+            "approved_at": "2026-10-08T18:40:00Z",
+        },
+    )
+
     qualified = qualify_controls_build(build, evidence)
 
     assert qualified["status"] == "APPROVED_FOR_RELEASE_HANDOFF"
@@ -327,6 +348,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
     assert qualified["integrated_fat"]["status"] == "PASS"
     assert qualified["integrated_fat"]["tests_total"] > 0
     assert qualified["runtime"][0]["readiness"] == "APPROVED_FOR_RELEASE"
+    assert qualified["engineering_approval"]["status"] == "APPROVED"
     assert qualified["production_release_ready"] is True
     assert qualified["production_deployment_performed"] is False
     assert qualified["deployment_authority_present"] is False
