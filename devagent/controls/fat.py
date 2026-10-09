@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.0.0"
+FAT_GENERATOR_VERSION = "2.1.0"
 
 
 @dataclass(frozen=True)
