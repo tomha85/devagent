@@ -31,6 +31,8 @@ def _payload():
                     {
                         "id": "ALM_MTR101_OVERLOAD",
                         "priority": "HIGH",
+                        "description": "Equipment alarm.",
+                        "on_delay_ms": 0,
                         "operator_response": "Inspect motor overload before restart.",
                     }
                 ],
