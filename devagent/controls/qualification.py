@@ -310,7 +310,7 @@ def _controls_fat_qualification(
     ir,
     manifest: dict[str, Any],
     trust_store,
-    runtime_backend_ids: list[str],
+    runtime_bindings: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     evidence_path = evidence_root / "controls-fat-results.json"
     if not evidence_path.is_file():
@@ -391,20 +391,19 @@ def _controls_fat_qualification(
             "Controls FAT contains failing test(s): " + ", ".join(sorted(failures))
         )
 
-    supplied_backend_ids = metadata.get("runtime_backend_ids")
-    if not isinstance(supplied_backend_ids, list):
+    supplied_bindings = metadata.get("runtime_bindings")
+    if supplied_bindings != runtime_bindings:
         raise ControlsQualificationError(
-            "Controls FAT evidence runtime_backend_ids must be a list"
+            "Controls FAT runtime_bindings do not exactly match the qualified "
+            "controller execution contexts"
         )
-    supplied_backend_ids = sorted(
-        {str(value).strip() for value in supplied_backend_ids if str(value).strip()}
+    expected_backend_ids = sorted(
+        {
+            str(value["backend_id"])
+            for value in runtime_bindings.values()
+            if value.get("backend_id")
+        }
     )
-    expected_backend_ids = sorted(set(runtime_backend_ids))
-    if supplied_backend_ids != expected_backend_ids:
-        raise ControlsQualificationError(
-            "Controls FAT runtime_backend_ids do not match the qualified controller "
-            f"backends: {supplied_backend_ids!r} != {expected_backend_ids!r}"
-        )
     run_id = str(metadata.get("run_id") or "").strip()
     if not run_id:
         raise ControlsQualificationError("Controls FAT evidence run_id is required")
@@ -419,6 +418,7 @@ def _controls_fat_qualification(
         "fat_plan_sha256": fat_plan_sha256,
         "generation_manifest_sha256": manifest_sha256,
         "runtime_backend_ids": expected_backend_ids,
+        "runtime_bindings": runtime_bindings,
         "tests_total": len(expected_ids),
         "tests_passed": len(expected_ids),
         "signature": signature,
@@ -530,11 +530,14 @@ def qualify_controls_build(
         ir=ir,
         manifest=manifest,
         trust_store=trust_store,
-        runtime_backend_ids=[
-            str(item["backend_id"])
+        runtime_bindings={
+            str(item["controller_id"]): {
+                "backend_id": item["backend_id"],
+                "execution_results_sha256": item["execution_results_sha256"],
+                "verification_context_sha256": item["verification_context_sha256"],
+            }
             for item in runtime_results
-            if item.get("backend_id")
-        ],
+        },
     )
 
     external_vendor_ready = (
