@@ -21,7 +21,7 @@ def _write_spec(tmp_path):
                         "type": "VFD",
                         "standard": "vfd-v1",
                         "controller": "PLC1",
-                        "signals": ["DRIVE_READY", "DRIVE_FAULT"],
+                        "signals": ["DRIVE_READY", "DRIVE_FAULT", "RUN_FB"],
                         "commands": {"RUN": True, "STOP": True, "RESET": True},
                         "status": ["READY", "RUNNING", "FAULTED"],
                         "permissives": ["DRIVE_READY"],
