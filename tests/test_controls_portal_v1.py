@@ -26,6 +26,8 @@ def _payload():
                     {
                         "id": "ALM_OVERLOAD",
                         "priority": "HIGH",
+                        "description": "Equipment alarm.",
+                        "on_delay_ms": 0,
                         "operator_response": "Inspect overload.",
                         "source_signal": "OVERLOAD",
                     }
