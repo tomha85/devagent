@@ -13,16 +13,18 @@ def _equipment(equipment_id: str, controller: str):
         "type": "VALVE",
         "standard": "valve-v1",
         "controller": controller,
-        "signals": ["OPEN_FB", "CLOSED_FB", "PROCESS_OK"],
+        "signals": ["OPEN_FB", "CLOSED_FB", "PROCESS_OK", "BLOCKED"],
         "commands": {"OPEN": True, "CLOSE": True},
         "status": ["OPEN", "CLOSED"],
         "permissives": ["PROCESS_OK"],
-        "interlocks": [],
+        "interlocks": ["BLOCKED"],
+        "faults": ["BLOCKED"],
         "alarms": [
             {
                 "id": f"ALM_{equipment_id}_TRAVEL",
                 "priority": "MEDIUM",
                 "operator_response": "Inspect valve travel feedback.",
+                "source_signal": "BLOCKED",
             }
         ],
         "hmi": {"faceplate": "valve-v1", "historian": False},
@@ -58,6 +60,8 @@ def test_semantically_unordered_input_has_stable_spec_and_ir_hashes() -> None:
         item["signals"].reverse()
         item["status"].reverse()
         item["permissives"].reverse()
+        item["interlocks"].reverse()
+        item["faults"].reverse()
         item["alarms"].reverse()
         item["requirements"].reverse()
         item["commands"] = dict(reversed(list(item["commands"].items())))
