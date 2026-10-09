@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.5.0"
+FAT_GENERATOR_VERSION = "2.6.0"
 
 
 @dataclass(frozen=True)
@@ -228,21 +228,6 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     expected=False,
                 )
             )
-        if standard.fault_status_member is not None:
-            for name in item.faults:
-                faulted = _safe_baseline_inputs(item)
-                faulted[f"SIGNAL.{name}"] = True
-                cases.append(
-                    _case(
-                        item,
-                        suffix=f"FAULT-{name}-STATUS",
-                        title=f"{item.id} fault {name} drives fault status",
-                        action="FAULT_ASSERT",
-                        inputs=faulted,
-                        expected_output=f"STATUS.{standard.fault_status_member}",
-                        expected=True,
-                    )
-                )
         if "RESET" in standard.generated_outputs:
             reset_inputs = _safe_baseline_inputs(item)
             reset_inputs["COMMAND.RESET"] = True
@@ -300,6 +285,22 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                         expected=False,
                     )
                 )
+
+    if standard.fault_status_member is not None:
+        for name in item.faults:
+            faulted = _safe_baseline_inputs(item)
+            faulted[f"SIGNAL.{name}"] = True
+            cases.append(
+                _case(
+                    item,
+                    suffix=f"FAULT-{name}-STATUS",
+                    title=f"{item.id} fault {name} drives fault status",
+                    action="FAULT_ASSERT",
+                    inputs=faulted,
+                    expected_output=f"STATUS.{standard.fault_status_member}",
+                    expected=True,
+                )
+            )
 
     for status_member, signal_name in standard.status_signal_map:
         feedback_inputs = _safe_baseline_inputs(item)
@@ -390,10 +391,6 @@ def evaluate_standard_state(
         result["OUTPUT.RUN"] = run
         if "RESET" in standard.generated_outputs:
             result["OUTPUT.RESET"] = commands.get("RESET", False)
-        result["STATUS.READY"] = permissives_ok and interlocks_clear
-        if standard.fault_status_member is not None:
-            result[f"STATUS.{standard.fault_status_member}"] = fault_active
-
     elif standard.equipment_type == "VALVE":
         open_output = (
             commands.get("OPEN", False)
@@ -409,6 +406,11 @@ def evaluate_standard_state(
         )
         result["OUTPUT.OPEN"] = open_output
         result["OUTPUT.CLOSE"] = close_output
+
+    if "READY" in item.status:
+        result["STATUS.READY"] = permissives_ok and interlocks_clear
+    if standard.fault_status_member is not None:
+        result[f"STATUS.{standard.fault_status_member}"] = fault_active
 
     for status_member, signal_name in standard.status_signal_map:
         result[f"STATUS.{status_member}"] = signals.get(signal_name, False)
