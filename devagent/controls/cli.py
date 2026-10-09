@@ -122,6 +122,7 @@ def _catalog() -> int:
                 "default_faceplate": item.default_faceplate,
                 "min_permissives": item.min_permissives,
                 "min_interlocks": item.min_interlocks,
+                "min_faults": item.min_faults,
                 "min_alarms": item.min_alarms,
                 "fault_status_member": item.fault_status_member,
                 "alarm_source_policy": item.alarm_source_policy,
