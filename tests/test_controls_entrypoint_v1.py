@@ -26,7 +26,14 @@ def _write_spec(tmp_path):
                         "status": ["READY", "RUNNING", "FAULTED"],
                         "permissives": ["DRIVE_READY"],
                         "interlocks": ["DRIVE_FAULT"],
-                        "alarms": [],
+                        "alarms": [
+                            {
+                                "id": "ALM_VFD101_FAULT",
+                                "priority": "HIGH",
+                                "operator_response": "Inspect drive fault.",
+                                "source_signal": "DRIVE_FAULT",
+                            }
+                        ],
                         "hmi": {"faceplate": "vfd-v1", "historian": True},
                         "requirements": [],
                     }
