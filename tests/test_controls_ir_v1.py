@@ -26,6 +26,7 @@ def _payload():
                 "status": ["RUNNING", "FAULTED"],
                 "permissives": ["SAFETY_OK"],
                 "interlocks": ["OVERLOAD"],
+                "faults": ["OVERLOAD"],
                 "alarms": [
                     {
                         "id": "ALM_MTR101_OVERLOAD",
