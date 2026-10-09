@@ -84,7 +84,8 @@ class PortalService:
         }
 
     def build_payload(self, payload: Any) -> dict[str, Any]:
-        spec, _ir, target = self._build_target(payload)
+        spec, ir, target = self._build_target(payload)
+        expected_ir_sha256 = controls_ir_sha256(ir)
         validation = self.validate_payload(payload)
         if validation["status"] != "PASS":
             raise ControlsBuildError("company standards must pass before portal build")
@@ -94,6 +95,11 @@ class PortalService:
                 raise ControlsBuildError(
                     f"existing portal build is invalid: {target}: "
                     + " | ".join(verified["errors"])
+                )
+            if verified.get("controls_ir_sha256") != expected_ir_sha256:
+                raise ControlsBuildError(
+                    "portal build path hash-prefix collision detected; refusing "
+                    "to reuse a different Controls IR"
                 )
             return {
                 "status": "PASS",
