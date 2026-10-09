@@ -41,6 +41,8 @@ def _write_spec(tmp_path):
                             {
                                 "id": "ALM_DRIVE",
                                 "priority": "HIGH",
+                                "description": "Qualified equipment alarm.",
+                                "on_delay_ms": 0,
                                 "operator_response": "Inspect drive.",
                                 "source_signal": "DRIVE_FAULT",
                             }
