@@ -188,7 +188,7 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
         _result(
             "CTRL-E405",
             standard.command_model in {
-                "SEAL_IN_PRIMARY_STOP_DOMINANT",
+                "RISING_EDGE_SEAL_IN_STOP_DOMINANT",
                 "MUTUALLY_EXCLUSIVE_LEVEL",
             },
             item.id,
