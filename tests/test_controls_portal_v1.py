@@ -16,7 +16,7 @@ def _payload():
                 "type": "MOTOR",
                 "standard": "motor-v1",
                 "controller": "PLC1",
-                "signals": ["SAFETY_OK", "OVERLOAD"],
+                "signals": ["SAFETY_OK", "OVERLOAD", "RUN_FB"],
                 "commands": {"START": True, "STOP": True, "RESET": True},
                 "status": ["READY", "RUNNING", "FAULTED"],
                 "permissives": ["SAFETY_OK"],
