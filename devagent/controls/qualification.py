@@ -421,6 +421,29 @@ def _controls_fat_qualification(
                 f"Controls FAT {test_id} observed_value {observed_value} "
                 f"does not match expected_value {expected_value}"
             )
+        observed_after_ms = item.get("observed_after_ms")
+        if isinstance(observed_after_ms, bool) or not isinstance(observed_after_ms, int):
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} observed_after_ms must be an integer"
+            )
+        if observed_after_ms < 0:
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} observed_after_ms must be non-negative"
+            )
+        evaluation_delay_ms = planned.get("evaluation_delay_ms", 0)
+        if (
+            isinstance(evaluation_delay_ms, bool)
+            or not isinstance(evaluation_delay_ms, int)
+            or evaluation_delay_ms < 0
+        ):
+            raise ControlsQualificationError(
+                f"Controls FAT plan {test_id} has invalid evaluation_delay_ms"
+            )
+        if observed_after_ms < evaluation_delay_ms:
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} was observed at {observed_after_ms} ms "
+                f"before required evaluation delay {evaluation_delay_ms} ms"
+            )
         if not isinstance(evidence, list) or not evidence or not all(
             isinstance(value, str) and value.strip() for value in evidence
         ):
