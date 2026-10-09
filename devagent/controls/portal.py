@@ -13,6 +13,7 @@ from devagent.controls.build import (
     build_controls_spec,
     verify_controls_build,
 )
+from devagent.controls.diff import diff_build_against_spec
 from devagent.controls.ir import build_controls_ir, controls_ir_payload, controls_ir_sha256
 from devagent.controls.manifest import build_authoring_manifest
 from devagent.controls.normalize import normalized_spec_payload
@@ -109,6 +110,60 @@ class PortalService:
             "readiness": result.readiness,
             "verification": verified,
         }
+
+    def _find_baseline_build(
+        self,
+        *,
+        project_id: str,
+        controls_ir_sha256_value: str,
+    ) -> Path:
+        digest = controls_ir_sha256_value.strip().lower()
+        if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+            raise ControlsBuildError(
+                "baseline_controls_ir_sha256 must be a 64-character SHA-256 hex digest"
+            )
+
+        matches: list[Path] = []
+        for candidate in sorted(self.workspace.iterdir()):
+            if not candidate.is_dir():
+                continue
+            manifest_path = candidate / "generation-manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (
+                manifest.get("project_id") == project_id
+                and manifest.get("controls_ir_sha256") == digest
+            ):
+                matches.append(candidate)
+        if not matches:
+            raise ControlsBuildError(
+                "no verified portal build matches the requested project/hash baseline"
+            )
+        baseline = matches[0]
+        verified = verify_controls_build(baseline)
+        if verified["status"] != "PASS":
+            raise ControlsBuildError(
+                "requested baseline build failed verification: "
+                + " | ".join(verified["errors"])
+            )
+        return baseline
+
+    def diff_payload(
+        self,
+        payload: Any,
+        *,
+        baseline_controls_ir_sha256: str,
+    ) -> dict[str, Any]:
+        candidate = parse_control_system_payload(payload)
+        baseline = self._find_baseline_build(
+            project_id=candidate.project_id,
+            controls_ir_sha256_value=baseline_controls_ir_sha256,
+        )
+        return diff_build_against_spec(baseline, candidate)
 
     def request_review_payload(
         self,
@@ -212,7 +267,11 @@ portal never performs PLC writes/downloads or Ignition Gateway deployment.</p>
 <button onclick="callApi('validate')">Validate</button>
 <button onclick="callApi('build')">Build staging artifacts</button>
 <br>
-<input id="requestedBy" placeholder="Engineer name for review request">
+<div class="grid">
+<div><label>Baseline Controls IR SHA-256</label><input id="baselineHash" placeholder="Paste a prior verified build Controls IR hash"></div>
+<div><label>Engineer</label><input id="requestedBy" placeholder="Engineer name for review request"></div>
+</div>
+<button onclick="callApi('diff')">Review diff against baseline</button>
 <button onclick="callApi('review')">Request engineering review</button>
 
 <h2>Generated / advanced specification</h2>
@@ -301,6 +360,8 @@ async function callApi(action){
    const spec=text?JSON.parse(text):generateSpec();
    const payload=action==='review'
      ? {spec:spec,requested_by:document.getElementById('requestedBy').value}
+     : action==='diff'
+     ? {spec:spec,baseline_controls_ir_sha256:document.getElementById('baselineHash').value}
      : spec;
    const response=await fetch('/api/'+action,{
      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)
@@ -368,7 +429,7 @@ def serve_portal(
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path not in {"/api/validate", "/api/build", "/api/review"}:
+            if self.path not in {"/api/validate", "/api/build", "/api/diff", "/api/review"}:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             try:
@@ -380,6 +441,15 @@ def serve_portal(
                     result = service.validate_payload(payload)
                 elif self.path == "/api/build":
                     result = service.build_payload(payload)
+                elif self.path == "/api/diff":
+                    if not isinstance(payload, dict):
+                        raise ValueError("diff request body must be a JSON object")
+                    result = service.diff_payload(
+                        payload.get("spec"),
+                        baseline_controls_ir_sha256=str(
+                            payload.get("baseline_controls_ir_sha256", "")
+                        ),
+                    )
                 else:
                     if not isinstance(payload, dict):
                         raise ValueError("review request body must be a JSON object")
