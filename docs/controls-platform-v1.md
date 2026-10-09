@@ -1,188 +1,274 @@
 # DevAgent Controls Platform V1
 
-DevAgent Controls adds a deterministic controls-authoring and staging layer
-above the existing DevAgent PLC verification engine.
+DevAgent Controls is the deterministic controls-authoring, staging, verification,
+and evidence-ingestion branch above the existing DevAgent PLC verification
+engine. The product release is V1; the hardened authoring contracts are
+`devagent-controls-spec-v2` and `devagent-controls-ir-v2`.
 
 ## Authority boundary
 
-The Controls product can:
+Controls can:
 
-- validate a company controls specification;
-- normalize it into an immutable Controls IR;
-- enforce versioned Motor/VFD/Conveyor/Valve standards;
+- validate strict, versioned company controls specifications;
+- normalize them into an immutable Controls IR with stable SHA-256 identities;
+- enforce qualified Motor/VFD/Conveyor/Valve equipment contracts;
 - generate deterministic Rockwell full-project `.L5X` staging artifacts;
-- re-import those artifacts through the existing DevAgent Rockwell analyzer;
-- generate Ignition staging configuration from the same equipment identity;
-- generate FAT plans from standard intent;
-- run a deterministic standard-model simulation;
-- package evidence and hashes;
-- expose the same workflows through CLI and a local self-service portal.
+- re-import generated Rockwell artifacts through the existing DevAgent PLC analyzer;
+- compare the re-imported `CanonicalPLCProject` with a formal expected PLC projection;
+- generate deterministic Ignition staging configuration from the same equipment IDs;
+- generate requirement-traceable FAT plans and a bounded deterministic model simulation;
+- ingest and cryptographically verify qualified external vendor/runtime evidence;
+- bind external FAT and human approvals to the exact build/evidence revision;
+- provide CLI and local self-service portal workflows, including revision diff.
 
-It does **not** connect to a PLC, force/write a tag, change controller mode,
-download a PLC project, deploy an Ignition Gateway project, or claim external
-FAT execution.
+Controls does **not** connect to a PLC, write/force tags, change controller mode,
+download PLC projects, deploy an Ignition Gateway project, or execute a physical
+FAT. External evidence is supplied by qualified engineering/vendor environments
+and is verified rather than invented.
 
-The release-readiness output is therefore
-`READY_FOR_ENGINEERING_REVIEW`, never production release approval.
+A staging build can reach only:
+
+```text
+READY_FOR_ENGINEERING_REVIEW
+```
+
+An external qualification can later reach:
+
+```text
+READY_FOR_ENGINEERING_APPROVAL
+APPROVED_FOR_RELEASE_HANDOFF
+```
+
+only when the required signed evidence and approvals are present. Even then,
+DevAgent Controls performs no production deployment.
 
 ## Architecture
 
 ```text
-ControlSystemSpec
+ControlSystemSpec v2
   -> strict fail-closed validation
-  -> immutable ControlsIR
-  -> company standards
+  -> deterministic normalization
+  -> immutable ControlsIR v2
+  -> company equipment standards
        |
        +-> Rockwell generator -> .L5X
        |                         |
        |                         +-> existing DevAgent PLC analyzer
-       |                              -> round-trip proof
+       |                              -> CanonicalPLCProject
+       |                              -> formal IR/PLC semantic projection proof
        |
        +-> Ignition staging generator
        |      -> UDT-equivalent definitions
        |      -> equipment instances
        |      -> alarm bindings
        |      -> history policy
-       |      -> faceplate bindings
+       |      -> faceplate/navigation bindings
        |
        +-> FAT generator
+              -> standard cases
+              -> structured requirement cases
+              -> PLC/HMI alarm cases
               -> deterministic standard-model simulation
 
 all outputs
   -> SHA-256 generation manifest
-  -> self-verification
-  -> engineering review
+  -> build self-verification
+  -> deterministic revision diff / engineering review
+  -> signed Studio 5000 import + re-export evidence
+  -> signed Ignition import + normalized semantic export evidence
+  -> qualified execution-backend evidence
+  -> signed integrated Controls FAT results
+  -> per-controller approval
+  -> build-wide signed engineering approval
+  -> release handoff only
 ```
 
-## V1 company standards
+## Company standards
 
-V1 explicitly qualifies four standard IDs:
+The V1 product release qualifies these exact standard IDs:
 
 - `motor-v1`
 - `vfd-v1`
 - `conveyor-v1`
 - `valve-v1`
 
-A version-shaped but unqualified name such as `conveyor-v999` fails closed.
-Required command/status contracts are checked by the company rules engine.
+Each standard pins the required command/status contract, generated output
+surface, minimum permissive/interlock/alarm coverage, fault-status contract,
+alarm-source policy, historian policy, and qualified faceplate. A version-shaped
+but unknown standard such as `conveyor-v999` fails closed; `latest` is never
+accepted as an engineering standard.
 
-Every generated alarm requires an explicit `source_signal`. V1 also requires
-an explicit qualified faceplate for every equipment object. Missing bindings
-fail closed rather than allowing generated HMI configuration to pretend that
-an alarm or faceplate relationship is known.
+Company rules include explicit checks such as:
+
+- `CTRL-E310` required permissive coverage;
+- `CTRL-E417` required reset behavior where applicable;
+- `CTRL-E500` explicit alarm source binding;
+- `CTRL-W500` operator response guidance;
+- `CTRL-E600` structured assertion requirement for HIGH/CRITICAL requirements;
+- `CTRL-E700` unique logical I/O mapping.
+
+The authoring model also supports controller network metadata, equipment
+`area`, `safety_zone`, and explicit staged I/O mappings. Physical I/O
+addresses are metadata only; generated standard logic does not write physical
+addresses directly.
+
+## Structured requirements
+
+HIGH/CRITICAL behavior can be expressed as deterministic Boolean assertions:
+
+```json
+{
+  "id": "REQ_CONV101_GUARD",
+  "text": "CONV_101 must not run while GUARD_OPEN is active.",
+  "criticality": "HIGH",
+  "assertion": {
+    "conditions": {
+      "COMMAND.START": true,
+      "SIGNAL.GUARD_OPEN": true
+    },
+    "expect": {
+      "OUTPUT.RUN": false
+    }
+  }
+}
+```
+
+Supported condition references are `COMMAND.*` and `SIGNAL.*`. Supported
+expected references are `OUTPUT.*`, `STATUS.*`, and `ALARM.*`. References
+must resolve to declared authoring members or validation fails.
+
+PLC-verifiable assertions are converted into per-controller DevAgent PLC
+requirement handoffs. HMI/cross-domain assertions remain on the Controls
+FAT/HMI evidence surface and are not misrepresented as PLC-only proof.
 
 ## Determinism
 
-The following identities are stable for the same semantic input:
+The following are stable for the same semantic input:
 
-- `spec_sha256`
-- `controls_ir_sha256`
+- `spec_sha256`;
+- `controls_ir_sha256`;
+- normalized authoring bytes;
 - generated Rockwell bytes;
 - Ignition staging JSON;
 - FAT plan;
-- build artifact hashes.
+- build artifact SHA-256 values.
 
-Reordering semantically unordered input does not change the normalized IR.
-Engineering-significant changes do change the IR hash.
+Semantically unordered collections are canonicalized before hashing. Company
+rule evidence is emitted in canonical order, so merely reordering author input
+does not change deterministic build evidence.
 
-Rockwell identifiers are deterministically normalized to Logix-safe names and
-bounded to 40 characters. Long identifiers receive a stable hash suffix.
-Controller identities that would collide after normalization fail closed.
-Portal/build filesystem names are separately normalized to portable path
-components.
+## Rockwell generation and round-trip proof
 
-Generated Rockwell tag external access is least-privilege: command tags are
-`Read/Write`; signals, status, and generated outputs are `Read Only`.
-Required logical status tags are also given deterministic PLC writers: READY is
-derived from permissives/interlocks, RUNNING follows the generated run output,
-and FAULTED is derived from explicit interlock/fault sources. Standards that
-require FAULTED fail closed when no fault/interlock source is declared. Valve
-OPEN/CLOSED status follows its generated commanded outputs; physical position
-feedback remains a separate field-signal contract and is not inferred.
+The qualified generator target is currently **Rockwell ControlLogix only**.
+It uses a pinned Studio-5000-exported golden template and deterministic XML
+transforms. CompactLogix fails closed until a pinned CompactLogix golden
+template has its own qualification; DevAgent does not synthesize an
+unqualified project shell.
 
-## Rockwell generation
+The generator emits bounded RLL using the supported deterministic instruction
+surface and does not create `.ACD` files. It never asks an LLM to invent ladder
+logic.
 
-V1 generation supports Rockwell `CONTROLLOGIX` and `COMPACTLOGIX`
-controllers. The generator emits simple bounded RLL using only the already
-supported deterministic instruction surface (`XIC`, `XIO`, `OTE`).
-
-Generated projects are not trusted merely because DevAgent created them.
-Every generated project is re-imported through
-`devagent.plc.safe_analysis.analyze_rockwell_l5x`.
-
-Round-trip verification checks:
-
-- controller identity;
-- exact generated tag inventory;
-- exact generated rung sequence/text;
-- no unknown instructions;
-- exactly one writer for every generated output;
-- existing DevAgent PLC outcome is `STATICALLY_VERIFIED`.
+Generated projects are re-imported through
+`devagent.plc.safe_analysis.analyze_rockwell_l5x`. Controls independently
+projects the authoring IR into the expected canonical PLC semantic surface and
+compares it with the re-imported project. Verification covers controller
+identity, controller tag inventory/contracts, generated program/rung
+read/write semantics, one-writer output ownership, unknown/partial
+instructions, direct physical output writes, and the existing DevAgent PLC
+verification outcome.
 
 A mismatch blocks build finalization.
 
-## Ignition staging
+## Ignition staging and semantic qualification
 
-Ignition artifacts deliberately use the schema
-`devagent-ignition-staging-v1`. They are deterministic staging data, not a
-claim that DevAgent has changed a running Gateway.
+Ignition staging uses `devagent-ignition-staging-v2` and generates:
 
-PLC, HMI, historian, alarm, FAT, and requirement traceability all retain the
-same stable equipment ID, for example `CONV_101`.
+- `udts.json`;
+- `equipment.json`;
+- `alarms.json`;
+- `history.json`;
+- `views.json`;
+- `navigation.json`.
 
-## FAT and simulation boundary
+PLC, HMI, historian, alarm, FAT, and requirement traceability retain the same
+stable equipment ID, for example `CONV_101`.
 
-Controls V1 generates deterministic standard FAT cases for positive paths,
-permissive loss, interlock activation, stop/opposite-command inhibition, and
-reset where applicable.
+A real Gateway qualification remains external. The qualification adapter must
+return signed import evidence plus a normalized Gateway export projection.
+DevAgent canonicalizes semantically unordered exported collections and requires
+the actual Gateway projection to match the deterministic staging projection.
+This avoids treating a simple "import succeeded" checkbox as semantic proof.
 
-The generated plan always says:
+## FAT and runtime evidence
+
+The generated FAT plan always starts as:
 
 ```text
 execution_status = NOT_RUN
 execution_owner  = CONTROLS_ENGINEER
 ```
 
-The built-in simulation is a deterministic **standard model** check only.
-It proves the generated intent is internally self-consistent. It is not
-FactoryTalk Logix Echo, HIL, a real PLC, process physics, or machine safety
-validation.
+Generated cases cover standard positive paths, permissive loss, interlock/fault
+activation, stop/opposite-command inhibition, reset where applicable,
+PLC/HMI alarm bindings, and explicit structured requirement assertions.
 
-Qualified runtime evidence and human engineering approval remain downstream
-requirements before production release.
+The built-in simulation is a **model-only** consistency check. It is not Logix
+Echo, HIL, a real controller, process physics, or machine-safety validation.
+
+External qualification reuses DevAgent PLC's qualified execution-backend
+registry, signed execution results, verification-context binding, release
+policy, trust store, and per-controller human approval. In addition, Controls
+requires a signed `controls-fat-results.json` whose exact test set matches the
+generated FAT plan and whose runtime bindings match the qualified controller
+execution contexts.
+
+## Build-wide approval
+
+Per-controller PLC approvals do not by themselves approve the HMI or integrated
+Controls evidence. DevAgent therefore computes a build-wide approval-context
+hash that binds:
+
+- the generation manifest;
+- trust store;
+- Studio 5000 import/re-export semantic evidence;
+- Ignition import/export semantic evidence;
+- integrated FAT evidence;
+- controller runtime verification contexts.
+
+A separate signed `controls-engineering-approval.json` must approve that exact
+context before the result can become `APPROVED_FOR_RELEASE_HANDOFF`. A later
+change to any bound evidence changes the approval-context hash and invalidates
+reuse of the old approval.
 
 ## CLI
 
-Validate:
+Validate and inspect:
 
 ```bash
 devagent controls validate examples/controls/conveyor_v1.json
-```
-
-Inspect normalized intent:
-
-```bash
 devagent controls inspect examples/controls/conveyor_v1.json
 ```
 
-Build the complete staging package:
+Build and verify:
 
 ```bash
 devagent controls build \
   examples/controls/conveyor_v1.json \
   --output-dir /tmp/controls-build
-```
 
-`generate` is an alias of `build`.
-
-Verify an existing build:
-
-```bash
 devagent controls verify /tmp/controls-build
 ```
 
-Create a hash-bound engineering review request without granting release or
-deployment authority:
+Compare a candidate spec with a verified baseline build:
+
+```bash
+devagent controls diff \
+  /tmp/controls-build \
+  candidate-controls.json
+```
+
+Create a hash-bound review request:
 
 ```bash
 devagent controls request-review /tmp/controls-build \
@@ -190,7 +276,15 @@ devagent controls request-review /tmp/controls-build \
   --output /tmp/controls-review-request.json
 ```
 
-Run the local self-service portal:
+Verify external signed qualification evidence:
+
+```bash
+devagent controls qualify /tmp/controls-build \
+  --evidence-dir /path/to/controls-evidence \
+  --output /tmp/controls-external-qualification.json
+```
+
+Run the local portal:
 
 ```bash
 devagent controls portal \
@@ -200,17 +294,19 @@ devagent controls portal \
 ```
 
 Remote portal binding is refused unless the operator explicitly supplies
-`--allow-remote`.
+`--allow-remote`; that option is intended only behind an operator-managed
+secure boundary.
 
 ## Build package
 
-A successful build contains:
+A successful staging build contains:
 
 ```text
 build/
   input/spec.json
   controls-ir.json
   company-standards.json
+  io-map.json
   generation-manifest.json
   release-readiness.json
   engineering-handoff.json
@@ -225,6 +321,13 @@ build/
     alarms.json
     history.json
     views.json
+    navigation.json
+
+  requirements/
+    controls-requirements.json
+    hmi-requirements.json
+    by-controller/
+      <controller>.json
 
   tests/
     fat-plan.json
@@ -235,48 +338,71 @@ build/
     ignition-binding.json
 ```
 
-Every file except the manifest itself is SHA-256 bound by
-`generation-manifest.json`. `devagent controls verify` fails if files are
-missing, added, changed, non-deterministic, or no longer round-trip.
+Every build artifact except the generation manifest itself is SHA-256 bound by
+`generation-manifest.json`. `devagent controls verify` fails closed on
+missing, added, modified, stale, or non-deterministic artifacts.
 
-## CI/CD boundary
+## External evidence package
 
-`.github/workflows/controls-qualification.yml` performs the first vertical
-slice in CI:
+External qualification expects an operator-controlled evidence directory:
+
+```text
+evidence/
+  trust-store.json
+  release-policy.json                  # optional; default policy otherwise
+  ignition-gateway-import.json         # signed
+  ignition-gateway-export.json         # signed normalized semantic export
+  controls-fat-results.json            # signed integrated FAT
+  controls-engineering-approval.json   # signed; added only after review
+
+  <controller>/
+    studio5000-import.json             # signed
+    studio5000-export.L5X
+    backend-registry.json              # signed
+    execution-results.json             # signed
+    approval.json                      # signed PLC/controller approval
+```
+
+The first qualification run can intentionally return
+`READY_FOR_ENGINEERING_APPROVAL` and the exact
+`approval_context_sha256`. After the engineer signs an approval bound to that
+hash, re-running qualification can return `APPROVED_FOR_RELEASE_HANDOFF`.
+
+## Portal
+
+The local portal is a thin facade over the same deterministic library used by
+the CLI. It supports a guided equipment form for controller/equipment identity,
+area, safety zone, signals, permissives, interlocks, alarms, I/O mapping,
+historian, and structured requirement assertions. It can validate, build,
+compare against a prior verified Controls-IR hash, and create a review request.
+It does not contain an independent controls rules/generation implementation.
+
+## CI
+
+`.github/workflows/controls-qualification.yml` runs every
+`tests/test_controls*.py` test and then performs:
 
 ```text
 validate
- -> focused controls tests
- -> build
- -> round-trip verification
+ -> company standards
+ -> deterministic build
+ -> PLC semantic round-trip
  -> Ignition coherence
- -> FAT generation
- -> deterministic model simulation
- -> reproducibility proof
+ -> FAT generation/model check
+ -> build self-verification
+ -> independent second build
+ -> reproducibility comparison
  -> evidence artifact upload
 ```
 
-This is CI and staging artifact delivery. Production PLC/HMI deployment is
-intentionally a separate controlled authority.
+External Studio 5000/Gateway/runtime qualification cannot be honestly
+fabricated in Linux CI. The software contracts and signature-verification path
+are exercised with deterministic fixtures; real vendor qualification requires
+real tool/runtime evidence.
 
-## First qualified vertical slice
+## Acceptance contract
 
-The included example is:
-
-```text
-CONV_101
-  + Rockwell ControlLogix
-  + conveyor-v1
-  + explicit high-priority drive-fault alarm binding
-  + standard HMI faceplate
-  + historian
-  + deterministic FAT
-```
-
-The portal exposes the same validate/build/review-request library operations;
-it does not contain a second copy of controls business logic.
-
-The branch acceptance target is:
+The internal staging gate is:
 
 ```text
 SPEC_VALIDATION=PASS
@@ -288,6 +414,18 @@ IGNITION_BINDING_COHERENCE=PASS
 FAT_GENERATION=PASS
 MODEL_SIMULATION=PASS
 UNQUALIFIED_DYNAMIC_PASS=0
-HUMAN_APPROVAL_REQUIRED=PASS
+PRODUCTION_DEPLOYMENT=NOT_PERFORMED
+```
+
+The external release-handoff gate additionally requires:
+
+```text
+STUDIO5000_IMPORT_EXPORT_SEMANTICS=PASS
+IGNITION_IMPORT_EXPORT_SEMANTICS=PASS
+QUALIFIED_RUNTIME_BACKEND=PASS
+SIGNED_RUNTIME_RESULTS=PASS
+SIGNED_INTEGRATED_CONTROLS_FAT=PASS
+PER_CONTROLLER_ENGINEERING_APPROVAL=PASS
+BUILD_WIDE_ENGINEERING_APPROVAL=PASS
 PRODUCTION_DEPLOYMENT=NOT_PERFORMED
 ```
