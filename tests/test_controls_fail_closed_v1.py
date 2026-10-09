@@ -21,11 +21,12 @@ def _payload():
                 "type": "CONVEYOR",
                 "standard": "conveyor-v1",
                 "controller": "PLC1",
-                "signals": ["SAFE", "GUARD_OPEN"],
+                "signals": ["SAFE", "GUARD_OPEN", "DRIVE_FAULT"],
                 "commands": {"START": True},
                 "status": ["RUNNING"],
                 "permissives": ["SAFE"],
-                "interlocks": ["GUARD_OPEN"],
+                "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+                "faults": ["DRIVE_FAULT"],
                 "alarms": [],
                 "hmi": {"faceplate": "conveyor-v1", "historian": False},
                 "requirements": [],
@@ -109,4 +110,18 @@ def test_missing_explicit_engineering_field_fails() -> None:
     payload = _payload()
     del payload["equipment"][0]["hmi"]
     with pytest.raises(ControlSpecError, match="missing required field"):
+        parse_control_system_payload(payload)
+
+
+def test_undeclared_fault_fails_closed() -> None:
+    payload = _payload()
+    payload["equipment"][0]["faults"].append("NOT_DECLARED")
+    with pytest.raises(ControlSpecError, match="undeclared signal"):
+        parse_control_system_payload(payload)
+
+
+def test_fault_that_does_not_inhibit_fails_closed() -> None:
+    payload = _payload()
+    payload["equipment"][0]["interlocks"] = ["GUARD_OPEN"]
+    with pytest.raises(ControlSpecError, match="faults must also be declared as interlocks"):
         parse_control_system_payload(payload)
