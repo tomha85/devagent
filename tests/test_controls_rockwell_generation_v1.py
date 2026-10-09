@@ -23,7 +23,7 @@ def _spec():
                     "type": "CONVEYOR",
                     "standard": "conveyor-v1",
                     "controller": "PLC_PACK_01",
-                    "signals": ["SAFETY_OK", "DOWNSTREAM_READY", "GUARD_OPEN", "DRIVE_FAULT"],
+                    "signals": ["SAFETY_OK", "DOWNSTREAM_READY", "GUARD_OPEN", "DRIVE_FAULT", "RUN_FB"],
                     "commands": {"START": True, "STOP": True, "RESET": True},
                     "status": ["READY", "RUNNING", "FAULTED"],
                     "permissives": ["SAFETY_OK", "DOWNSTREAM_READY"],
