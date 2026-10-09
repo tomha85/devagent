@@ -38,7 +38,7 @@ def _equipment(equipment_id: str, controller: str):
 
 def _payload():
     return {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "PROCESS01",
         "controllers": [
             {"id": "PLC_B", "vendor": "SIEMENS", "platform": "S7-1500"},
