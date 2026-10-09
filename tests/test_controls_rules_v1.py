@@ -160,6 +160,6 @@ def test_command_semantics_are_explicit_in_company_standard() -> None:
     assert any(
         item.id == "CTRL-E405"
         and item.status == "PASS"
-        and "SEAL_IN_PRIMARY_STOP_DOMINANT" in item.summary
+        and "RISING_EDGE_SEAL_IN_STOP_DOMINANT" in item.summary
         for item in results
     )
