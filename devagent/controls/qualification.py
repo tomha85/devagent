@@ -839,7 +839,11 @@ def qualify_controls_build(
             "PASS" if engineering_approval["status"] == "APPROVED" else "PENDING"
         ),
         "human_engineering_approval_required": True,
-        "production_release_ready": approved,
+        "release_handoff_ready": approved,
+        # Controls owns an approval-ready handoff, not final machine release.
+        # Physical I/O realization, safety validation, vendor compile/runtime
+        # acceptance, and deployment remain downstream engineering authorities.
+        "production_release_ready": False,
         "production_deployment_performed": False,
         "deployment_authority_present": False,
     }
