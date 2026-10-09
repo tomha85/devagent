@@ -110,6 +110,19 @@ def _bool(value: Any, where: str) -> bool:
     return value
 
 
+def _nonnegative_int(
+    value: Any,
+    where: str,
+    *,
+    maximum: int = 3_600_000,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ControlSpecError(f"{where} must be an integer")
+    if value < 0 or value > maximum:
+        raise ControlSpecError(f"{where} must be between 0 and {maximum}")
+    return value
+
+
 def _ensure_casefold_unique(values: list[str], where: str) -> None:
     seen: dict[str, str] = {}
     for value in values:
@@ -156,7 +169,13 @@ def _parse_controller(raw: Any, index: int) -> ControllerSpec:
 
 def _parse_alarm(raw: Any, where: str) -> AlarmSpec:
     item = _object(raw, where)
-    required = {"id", "priority", "operator_response"}
+    required = {
+        "id",
+        "description",
+        "priority",
+        "on_delay_ms",
+        "operator_response",
+    }
     allowed = {*required, "source_signal"}
     _fields(item, where=where, required=required, allowed=allowed)
     priority = _text(item["priority"], f"{where}.priority", maximum=16).upper()
@@ -172,7 +191,13 @@ def _parse_alarm(raw: Any, where: str) -> AlarmSpec:
     )
     return AlarmSpec(
         id=_identifier(item["id"], f"{where}.id"),
+        description=_text(
+            item["description"], f"{where}.description", maximum=1024
+        ),
         priority=priority,
+        on_delay_ms=_nonnegative_int(
+            item["on_delay_ms"], f"{where}.on_delay_ms"
+        ),
         operator_response=_text(
             item["operator_response"], f"{where}.operator_response", maximum=1024
         ),
