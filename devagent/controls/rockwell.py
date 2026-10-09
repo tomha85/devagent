@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.0.0"
+ROCKWELL_GENERATOR_VERSION = "1.1.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
