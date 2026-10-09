@@ -26,6 +26,7 @@ def _write_spec(tmp_path):
                         "status": ["READY", "RUNNING", "FAULTED"],
                         "permissives": ["DRIVE_READY"],
                         "interlocks": ["DRIVE_FAULT"],
+                        "faults": ["DRIVE_FAULT"],
                         "alarms": [
                             {
                                 "id": "ALM_VFD101_FAULT",
