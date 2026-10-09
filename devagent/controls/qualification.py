@@ -361,11 +361,17 @@ def _controls_fat_qualification(
         )
 
     plan = _load_json(fat_plan_path)
-    expected_ids = [str(item["id"]) for item in plan.get("cases", [])]
+    planned_cases = plan.get("cases", [])
+    if not isinstance(planned_cases, list) or not all(
+        isinstance(item, dict) for item in planned_cases
+    ):
+        raise ControlsQualificationError("Controls FAT plan cases must be objects")
+    expected_ids = [str(item["id"]) for item in planned_cases]
     if not expected_ids:
         raise ControlsQualificationError("Controls FAT plan has no cases")
     if len(expected_ids) != len(set(expected_ids)):
         raise ControlsQualificationError("Controls FAT plan contains duplicate test ids")
+    planned_by_id = {str(item["id"]): item for item in planned_cases}
 
     results = metadata.get("results")
     if not isinstance(results, list):
@@ -387,6 +393,7 @@ def _controls_fat_qualification(
     failures: list[str] = []
     for item in results:
         test_id = str(item["test_id"])
+        planned = planned_by_id[test_id]
         if item.get("status") != "PASS":
             failures.append(f"{test_id}:{item.get('status')}")
         _timestamp(
@@ -398,6 +405,21 @@ def _controls_fat_qualification(
         if not observed:
             raise ControlsQualificationError(
                 f"Controls FAT {test_id} observed result is required"
+            )
+        observed_value = item.get("observed_value")
+        if not isinstance(observed_value, bool):
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} observed_value must be Boolean"
+            )
+        expected_value = planned.get("expected_value")
+        if not isinstance(expected_value, bool):
+            raise ControlsQualificationError(
+                f"Controls FAT plan {test_id} expected_value must be Boolean"
+            )
+        if observed_value != expected_value:
+            raise ControlsQualificationError(
+                f"Controls FAT {test_id} observed_value {observed_value} "
+                f"does not match expected_value {expected_value}"
             )
         if not isinstance(evidence, list) or not evidence or not all(
             isinstance(value, str) and value.strip() for value in evidence
