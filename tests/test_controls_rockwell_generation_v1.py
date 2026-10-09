@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from devagent.controls.ir import build_controls_ir
 from devagent.controls.rockwell import render_rockwell_project
 from devagent.controls.schema import parse_control_system_payload
+from devagent.controls.verification import verify_rockwell_roundtrip
 from devagent.plc.safe_analysis import analyze_rockwell_l5x
 
 
@@ -97,3 +100,31 @@ def test_required_status_tags_have_exactly_one_generated_writer(tmp_path) -> Non
     for status_tag in dict(symbols["status"]).values():
         writers = [rung.id for rung in project.rungs if status_tag in rung.writes]
         assert len(writers) == 1
+
+
+def test_roundtrip_tolerates_studio_whitespace_rewrite(tmp_path) -> None:
+    ir = build_controls_ir(_spec())
+    controller = ir.controllers[0]
+    artifact = render_rockwell_project(ir, controller)
+    root = ET.fromstring(artifact.content)
+
+    for node in root.findall(".//Rung/Text"):
+        text = node.text or ""
+        node.text = text.replace("XIC(", " XIC(").replace("XIO(", " XIO(").replace(
+            "OTE(", " OTE("
+        )
+
+    path = tmp_path / "studio-reexport.L5X"
+    path.write_bytes(
+        ET.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+            short_empty_elements=True,
+        )
+    )
+
+    result = verify_rockwell_roundtrip(ir, controller, path)
+
+    assert result["status"] == "PASS"
+    assert result["semantic_projection_status"] == "PASS"
