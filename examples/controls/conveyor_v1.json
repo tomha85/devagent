@@ -21,7 +21,8 @@
         "SAFETY_OK",
         "DOWNSTREAM_READY",
         "GUARD_OPEN",
-        "DRIVE_FAULT"
+        "DRIVE_FAULT",
+        "RUN_FB"
       ],
       "commands": {
         "START": true,
@@ -63,6 +64,11 @@
           "member": "SIGNAL.DRIVE_FAULT",
           "direction": "INPUT",
           "address": "Local:1:I.Data.1"
+        },
+        {
+          "member": "SIGNAL.RUN_FB",
+          "direction": "INPUT",
+          "address": "Local:1:I.Data.2"
         },
         {
           "member": "OUTPUT.RUN",
