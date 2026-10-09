@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import copy
+
 from devagent.controls.fat import generate_controls_fat, run_model_simulation
-from devagent.controls.ignition import generate_ignition_payloads, ignition_binding_check
+from devagent.controls.ignition import (
+    generate_ignition_payloads,
+    ignition_binding_check,
+    ignition_semantic_projection,
+    normalize_ignition_projection,
+)
 from devagent.controls.ir import build_controls_ir
 from devagent.controls.schema import parse_control_system_payload
 
@@ -84,3 +91,20 @@ def test_generated_fat_remains_not_run_but_model_cases_are_self_consistent() -> 
     assert any(case.expected_output == "ALARM.ALM_CONV101_DRIVE" for case in cases)
     assert simulation["status"] == "PASS"
     assert simulation["vendor_runtime_execution"] == "NOT_RUN"
+
+
+def test_ignition_semantic_projection_is_order_independent() -> None:
+    payloads = generate_ignition_payloads(_ir())
+    expected = ignition_semantic_projection(payloads)
+    reordered = copy.deepcopy(expected)
+    for name in (
+        "udt_definitions",
+        "instances",
+        "alarms",
+        "history",
+        "views",
+        "navigation",
+    ):
+        reordered[name].reverse()
+
+    assert normalize_ignition_projection(reordered) == expected
