@@ -7,7 +7,30 @@ from typing import Any
 from devagent.controls.models import (
     ControlSystemSpec,
     EquipmentSpec,
+    RequirementAssertion,
+    RequirementSpec,
 )
+
+
+def _canonical_assertion(
+    assertion: RequirementAssertion | None,
+) -> RequirementAssertion | None:
+    if assertion is None:
+        return None
+    return RequirementAssertion(
+        conditions=tuple(sorted(assertion.conditions, key=lambda pair: pair[0])),
+        expected_ref=assertion.expected_ref,
+        expected_value=assertion.expected_value,
+    )
+
+
+def _canonical_requirement(item: RequirementSpec) -> RequirementSpec:
+    return RequirementSpec(
+        id=item.id,
+        text=item.text,
+        criticality=item.criticality,
+        assertion=_canonical_assertion(item.assertion),
+    )
 
 
 def _canonical_equipment(item: EquipmentSpec) -> EquipmentSpec:
@@ -25,7 +48,13 @@ def _canonical_equipment(item: EquipmentSpec) -> EquipmentSpec:
         interlocks=tuple(sorted(item.interlocks)),
         alarms=tuple(sorted(item.alarms, key=lambda value: value.id)),
         hmi=item.hmi,
-        requirements=tuple(sorted(item.requirements, key=lambda value: value.id)),
+        requirements=tuple(
+            _canonical_requirement(value)
+            for value in sorted(item.requirements, key=lambda value: value.id)
+        ),
+        area=item.area,
+        safety_zone=item.safety_zone,
+        io=tuple(sorted(item.io, key=lambda value: (value.member, value.address))),
     )
 
 
@@ -55,6 +84,7 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
             "id": item.id,
             "vendor": item.vendor,
             "platform": item.platform,
+            "network": item.network,
         }
         for item in canonical.controllers
     ]
@@ -67,6 +97,8 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
                 "type": item.type,
                 "standard": item.standard,
                 "controller": item.controller,
+                "area": item.area,
+                "safety_zone": item.safety_zone,
                 "signals": list(item.signals),
                 "commands": {name: enabled for name, enabled in item.commands},
                 "status": list(item.status),
@@ -85,11 +117,33 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
                     "faceplate": item.hmi.faceplate,
                     "historian": item.hmi.historian,
                 },
+                "io": [
+                    {
+                        "member": mapping.member,
+                        "direction": mapping.direction,
+                        "address": mapping.address,
+                    }
+                    for mapping in item.io
+                ],
                 "requirements": [
                     {
                         "id": requirement.id,
                         "text": requirement.text,
                         "criticality": requirement.criticality,
+                        "assertion": (
+                            None
+                            if requirement.assertion is None
+                            else {
+                                "conditions": {
+                                    ref: value
+                                    for ref, value in requirement.assertion.conditions
+                                },
+                                "expect": {
+                                    requirement.assertion.expected_ref:
+                                        requirement.assertion.expected_value
+                                },
+                            }
+                        ),
                     }
                     for requirement in item.requirements
                 ],
