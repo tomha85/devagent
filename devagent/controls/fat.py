@@ -5,7 +5,7 @@ from typing import Any
 
 from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
-from devagent.controls.models import EquipmentSpec
+from devagent.controls.models import EquipmentSpec, RequirementSpec
 
 
 @dataclass(frozen=True)
@@ -22,18 +22,25 @@ class ControlsFATCase:
     method: str = "DETERMINISTIC_STANDARD_MODEL"
 
 
-def _base_inputs(item: EquipmentSpec, action: str) -> dict[str, bool]:
-    standard = get_standard(item.standard)
+def _safe_baseline_inputs(item: EquipmentSpec) -> dict[str, bool]:
     result: dict[str, bool] = {
         f"COMMAND.{name}": False for name, _enabled in item.commands
     }
-    result[f"COMMAND.{action}"] = True
-    if standard.stop_action is not None and standard.stop_action != action:
-        result[f"COMMAND.{standard.stop_action}"] = False
     for name in item.permissives:
         result[f"SIGNAL.{name}"] = True
     for name in item.interlocks:
         result[f"SIGNAL.{name}"] = False
+    for name in item.signals:
+        result.setdefault(f"SIGNAL.{name}", False)
+    return result
+
+
+def _base_inputs(item: EquipmentSpec, action: str) -> dict[str, bool]:
+    result = _safe_baseline_inputs(item)
+    result[f"COMMAND.{action}"] = True
+    standard = get_standard(item.standard)
+    if standard.stop_action is not None and standard.stop_action != action:
+        result[f"COMMAND.{standard.stop_action}"] = False
     return result
 
 
@@ -44,8 +51,10 @@ def _case(
     title: str,
     action: str,
     inputs: dict[str, bool],
-    output: str,
+    expected_output: str,
     expected: bool,
+    requirement_ids: tuple[str, ...] = (),
+    method: str = "DETERMINISTIC_STANDARD_MODEL",
 ) -> ControlsFATCase:
     return ControlsFATCase(
         id=f"FAT-{item.id}-{suffix}",
@@ -53,9 +62,38 @@ def _case(
         title=title,
         action=action,
         inputs=tuple(sorted(inputs.items())),
-        expected_output=f"OUTPUT.{output}",
+        expected_output=expected_output,
         expected_value=expected,
-        requirement_ids=tuple(sorted(requirement.id for requirement in item.requirements)),
+        requirement_ids=tuple(sorted(requirement_ids)),
+        method=method,
+    )
+
+
+def _structured_requirement_case(
+    item: EquipmentSpec,
+    requirement: RequirementSpec,
+) -> ControlsFATCase | None:
+    assertion = requirement.assertion
+    if assertion is None:
+        return None
+    inputs = _safe_baseline_inputs(item)
+    inputs.update(dict(assertion.conditions))
+    true_commands = sorted(
+        ref.split(".", 1)[1]
+        for ref, value in assertion.conditions
+        if ref.startswith("COMMAND.") and value
+    )
+    action = true_commands[0] if true_commands else "ASSERT"
+    return _case(
+        item,
+        suffix=f"REQ-{requirement.id}",
+        title=f"{item.id} requirement {requirement.id}",
+        action=action,
+        inputs=inputs,
+        expected_output=assertion.expected_ref,
+        expected=assertion.expected_value,
+        requirement_ids=(requirement.id,),
+        method="STRUCTURED_REQUIREMENT",
     )
 
 
@@ -73,7 +111,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                 title=f"{item.id} primary run path",
                 action=action,
                 inputs=base,
-                output="RUN",
+                expected_output="OUTPUT.RUN",
                 expected=True,
             )
         )
@@ -87,7 +125,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} stop command inhibits run output",
                     action=action,
                     inputs=stopped,
-                    output="RUN",
+                    expected_output="OUTPUT.RUN",
                     expected=False,
                 )
             )
@@ -101,7 +139,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} requires permissive {name}",
                     action=action,
                     inputs=blocked,
-                    output="RUN",
+                    expected_output="OUTPUT.RUN",
                     expected=False,
                 )
             )
@@ -115,15 +153,13 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} is inhibited by interlock {name}",
                     action=action,
                     inputs=blocked,
-                    output="RUN",
+                    expected_output="OUTPUT.RUN",
                     expected=False,
                 )
             )
         if "RESET" in standard.generated_outputs:
-            reset_inputs = {
-                f"COMMAND.{name}": name == "RESET"
-                for name, _enabled in item.commands
-            }
+            reset_inputs = _safe_baseline_inputs(item)
+            reset_inputs["COMMAND.RESET"] = True
             cases.append(
                 _case(
                     item,
@@ -131,7 +167,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} reset output follows reset command",
                     action="RESET",
                     inputs=reset_inputs,
-                    output="RESET",
+                    expected_output="OUTPUT.RESET",
                     expected=True,
                 )
             )
@@ -147,7 +183,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} {action.lower()} path",
                     action=action,
                     inputs=base,
-                    output=action,
+                    expected_output=f"OUTPUT.{action}",
                     expected=True,
                 )
             )
@@ -160,7 +196,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                     title=f"{item.id} opposite command inhibits {action.lower()} output",
                     action=action,
                     inputs=conflict,
-                    output=action,
+                    expected_output=f"OUTPUT.{action}",
                     expected=False,
                 )
             )
@@ -174,10 +210,34 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                         title=f"{item.id} {action.lower()} is inhibited by {name}",
                         action=action,
                         inputs=blocked,
-                        output=action,
+                        expected_output=f"OUTPUT.{action}",
                         expected=False,
                     )
                 )
+
+    for alarm in item.alarms:
+        if alarm.source_signal is None:
+            continue
+        alarm_inputs = _safe_baseline_inputs(item)
+        alarm_inputs[f"SIGNAL.{alarm.source_signal}"] = True
+        cases.append(
+            _case(
+                item,
+                suffix=f"ALARM-{alarm.id}",
+                title=f"{item.id} alarm {alarm.id} follows {alarm.source_signal}",
+                action="ALARM_ASSERT",
+                inputs=alarm_inputs,
+                expected_output=f"ALARM.{alarm.id}",
+                expected=True,
+                method="PLC_HMI_BINDING_MODEL",
+            )
+        )
+
+    for requirement in item.requirements:
+        generated = _structured_requirement_case(item, requirement)
+        if generated is not None:
+            cases.append(generated)
+
     return tuple(cases)
 
 
@@ -185,49 +245,103 @@ def generate_controls_fat(ir: ControlsIR) -> tuple[ControlsFATCase, ...]:
     return tuple(case for item in ir.equipment for case in generate_equipment_fat(item))
 
 
-def evaluate_standard_model(item: EquipmentSpec, action: str, inputs: dict[str, bool]) -> dict[str, bool]:
+def evaluate_standard_state(
+    item: EquipmentSpec,
+    inputs: dict[str, bool],
+) -> dict[str, bool]:
     standard = get_standard(item.standard)
-    outputs = {name: False for name in standard.generated_outputs}
+    result: dict[str, bool] = {}
 
-    if action == "RESET" and "RESET" in outputs:
-        outputs["RESET"] = bool(inputs.get("COMMAND.RESET", False))
-        return outputs
+    commands = {
+        name: bool(inputs.get(f"COMMAND.{name}", False))
+        for name, _enabled in item.commands
+    }
+    signals = {
+        name: bool(inputs.get(f"SIGNAL.{name}", False))
+        for name in item.signals
+    }
+    permissives_ok = all(signals.get(name, False) for name in item.permissives)
+    interlocks_clear = all(not signals.get(name, False) for name in item.interlocks)
 
-    command_on = bool(inputs.get(f"COMMAND.{action}", False))
-    stop_action: str | None
-    if standard.equipment_type == "VALVE":
-        stop_action = "CLOSE" if action == "OPEN" else "OPEN"
-    else:
-        stop_action = standard.stop_action
-    stop_clear = True if stop_action is None else not bool(
-        inputs.get(f"COMMAND.{stop_action}", False)
-    )
-    permissives_ok = all(
-        bool(inputs.get(f"SIGNAL.{name}", False)) for name in item.permissives
-    )
-    interlocks_clear = all(
-        not bool(inputs.get(f"SIGNAL.{name}", False)) for name in item.interlocks
-    )
+    if standard.equipment_type in {"MOTOR", "VFD", "CONVEYOR"}:
+        primary = commands.get(standard.primary_action, False)
+        stop_clear = (
+            True
+            if standard.stop_action is None
+            else not commands.get(standard.stop_action, False)
+        )
+        run = primary and stop_clear and permissives_ok and interlocks_clear
+        result["OUTPUT.RUN"] = run
+        if "RESET" in standard.generated_outputs:
+            result["OUTPUT.RESET"] = commands.get("RESET", False)
+        result["STATUS.READY"] = permissives_ok and interlocks_clear
+        result["STATUS.RUNNING"] = run
+        if standard.fault_status_member is not None:
+            result[f"STATUS.{standard.fault_status_member}"] = not interlocks_clear
 
-    output_name = "RUN" if standard.equipment_type != "VALVE" else action
-    outputs[output_name] = command_on and stop_clear and permissives_ok and interlocks_clear
-    return outputs
+    elif standard.equipment_type == "VALVE":
+        open_output = (
+            commands.get("OPEN", False)
+            and not commands.get("CLOSE", False)
+            and permissives_ok
+            and interlocks_clear
+        )
+        close_output = (
+            commands.get("CLOSE", False)
+            and not commands.get("OPEN", False)
+            and permissives_ok
+            and interlocks_clear
+        )
+        result["OUTPUT.OPEN"] = open_output
+        result["OUTPUT.CLOSE"] = close_output
+        result["STATUS.OPEN"] = open_output
+        result["STATUS.CLOSED"] = close_output
+
+    for alarm in item.alarms:
+        result[f"ALARM.{alarm.id}"] = (
+            False
+            if alarm.source_signal is None
+            else signals.get(alarm.source_signal, False)
+        )
+
+    return result
 
 
-def run_model_simulation(ir: ControlsIR, cases: tuple[ControlsFATCase, ...]) -> dict[str, Any]:
+def evaluate_standard_model(
+    item: EquipmentSpec,
+    action: str,
+    inputs: dict[str, bool],
+) -> dict[str, bool]:
+    """Compatibility view exposing generated OUTPUT members only."""
+
+    state = evaluate_standard_state(item, inputs)
+    return {
+        ref.split(".", 1)[1]: value
+        for ref, value in state.items()
+        if ref.startswith("OUTPUT.")
+    }
+
+
+def run_model_simulation(
+    ir: ControlsIR,
+    cases: tuple[ControlsFATCase, ...],
+) -> dict[str, Any]:
     equipment = {item.id: item for item in ir.equipment}
     results: list[dict[str, Any]] = []
     for case in cases:
         item = equipment[case.equipment_id]
-        observed = evaluate_standard_model(item, case.action, dict(case.inputs))
-        output = case.expected_output.split(".", 1)[1]
-        actual = bool(observed.get(output, False))
+        state = evaluate_standard_state(item, dict(case.inputs))
+        present = case.expected_output in state
+        actual = state.get(case.expected_output)
+        passed = present and bool(actual) == case.expected_value
         results.append(
             {
                 "test_id": case.id,
-                "status": "PASS" if actual == case.expected_value else "FAIL",
+                "status": "PASS" if passed else "FAIL",
+                "expected_ref": case.expected_output,
                 "expected": case.expected_value,
-                "observed": actual,
+                "observed": actual if present else None,
+                "modeled_reference": present,
                 "model_only": True,
             }
         )
@@ -242,7 +356,7 @@ def run_model_simulation(ir: ControlsIR, cases: tuple[ControlsFATCase, ...]) -> 
 
 def fat_payload(cases: tuple[ControlsFATCase, ...]) -> dict[str, Any]:
     return {
-        "schema": "devagent-controls-fat-plan-v1",
+        "schema": "devagent-controls-fat-plan-v2",
         "execution_status": "NOT_RUN",
         "execution_owner": "CONTROLS_ENGINEER",
         "cases": [
