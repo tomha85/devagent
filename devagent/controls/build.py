@@ -29,7 +29,11 @@ from devagent.controls.rockwell import (
     render_rockwell_project,
     rockwell_reference_provenance,
 )
-from devagent.controls.rules import evaluate_controls_rules, rules_pass
+from devagent.controls.rules import (
+    evaluate_controls_rules,
+    release_io_mapping_check,
+    rules_pass,
+)
 from devagent.controls.schema import parse_control_system_payload
 from devagent.controls.symbols import controller_symbol
 from devagent.controls.verification import verify_rockwell_roundtrip
@@ -152,6 +156,8 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
             "direct_physical_output_generation": False,
         },
     )
+    io_coverage = release_io_mapping_check(spec)
+    _write_json(root / "verification" / "io-coverage.json", io_coverage)
 
     rockwell_manifest: list[dict[str, Any]] = []
     symbol_maps: dict[str, Any] = {}
@@ -338,6 +344,9 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
         "ignition_binding_coherence": "PASS" if ignition_ok else "FAIL",
         "fat_generation": "PASS",
         "deterministic_model_simulation": "PASS" if model_ok else "FAIL",
+        "release_io_mapping": (
+            "PASS" if io_coverage["status"] == "PASS" else "REVIEW_REQUIRED"
+        ),
         "studio5000_import_validation": "NOT_RUN",
         "ignition_gateway_import_validation": "NOT_RUN",
         "vendor_runtime_execution": "NOT_RUN",
@@ -571,6 +580,9 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
         }
         if _load_json(root / "io-map.json") != expected_io_map:
             errors.append("io-map.json does not match deterministic Controls IR")
+        expected_io_coverage = release_io_mapping_check(spec)
+        if _load_json(root / "verification" / "io-coverage.json") != expected_io_coverage:
+            errors.append("verification/io-coverage.json does not match Controls IR")
 
         _ensure_generation_scope(ir)
         for controller in ir.controllers:
