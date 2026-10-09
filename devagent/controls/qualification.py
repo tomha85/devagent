@@ -171,6 +171,7 @@ def _studio5000_qualification(
         "imported_at": imported_at,
         "generated_project_sha256": generated_sha,
         "exported_project_sha256": exported_sha,
+        "import_evidence_sha256": _sha256(metadata_path),
         "semantic_projection_status": semantic["semantic_projection_status"],
         "expected_semantic_sha256": semantic["expected_semantic_sha256"],
         "actual_semantic_sha256": semantic["actual_semantic_sha256"],
@@ -307,6 +308,8 @@ def _ignition_gateway_qualification(
         "actual_projection_sha256": actual_projection_sha256,
         "adapter": adapter,
         "adapter_version": adapter_version,
+        "import_evidence_sha256": _sha256(evidence_path),
+        "export_evidence_sha256": _sha256(export_evidence_path),
         "import_signature": import_signature,
         "export_signature": export_signature,
     }
@@ -430,6 +433,126 @@ def _controls_fat_qualification(
         "runtime_bindings": runtime_bindings,
         "tests_total": len(expected_ids),
         "tests_passed": len(expected_ids),
+        "evidence_sha256": _sha256(evidence_path),
+        "signature": signature,
+    }
+
+
+def _controls_approval_context(
+    *,
+    manifest: dict[str, Any],
+    build: Path,
+    trust_store_sha256: str,
+    studio_results: list[dict[str, Any]],
+    ignition_result: dict[str, Any],
+    integrated_fat_result: dict[str, Any],
+    runtime_results: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str]:
+    context = {
+        "schema": "devagent-controls-engineering-approval-context-v1",
+        "project_id": manifest["project_id"],
+        "spec_sha256": manifest["spec_sha256"],
+        "controls_ir_sha256": manifest["controls_ir_sha256"],
+        "generation_manifest_sha256": _sha256(build / "generation-manifest.json"),
+        "trust_store_sha256": trust_store_sha256,
+        "studio5000": {
+            str(item["controller_id"]): {
+                "generated_project_sha256": item["generated_project_sha256"],
+                "exported_project_sha256": item["exported_project_sha256"],
+                "expected_semantic_sha256": item["expected_semantic_sha256"],
+                "actual_semantic_sha256": item["actual_semantic_sha256"],
+                "import_evidence_sha256": item["import_evidence_sha256"],
+            }
+            for item in studio_results
+        },
+        "ignition_gateway": {
+            "expected_projection_sha256": ignition_result["expected_projection_sha256"],
+            "actual_projection_sha256": ignition_result["actual_projection_sha256"],
+            "import_evidence_sha256": ignition_result["import_evidence_sha256"],
+            "export_evidence_sha256": ignition_result["export_evidence_sha256"],
+        },
+        "integrated_fat": {
+            "run_id": integrated_fat_result["run_id"],
+            "fat_plan_sha256": integrated_fat_result["fat_plan_sha256"],
+            "evidence_sha256": integrated_fat_result["evidence_sha256"],
+            "runtime_bindings": integrated_fat_result["runtime_bindings"],
+        },
+        "runtime": {
+            str(item["controller_id"]): {
+                "readiness": item["readiness"],
+                "backend_id": item["backend_id"],
+                "execution_results_sha256": item["execution_results_sha256"],
+                "verification_context_sha256": item["verification_context_sha256"],
+            }
+            for item in runtime_results
+        },
+    }
+    return context, _json_sha256(context)
+
+
+def _controls_engineering_approval(
+    *,
+    evidence_root: Path,
+    trust_store,
+    manifest: dict[str, Any],
+    approval_context_sha256: str,
+) -> dict[str, Any]:
+    approval_path = evidence_root / "controls-engineering-approval.json"
+    if not approval_path.is_file():
+        return {
+            "status": "REQUIRED",
+            "approval_context_sha256": approval_context_sha256,
+            "decision": None,
+            "approved_by": None,
+            "approved_at": None,
+            "signature": None,
+        }
+
+    payload, signature = _signed_snapshot(
+        approval_path,
+        purpose="CONTROLS_ENGINEERING_APPROVAL",
+        trust_store=trust_store,
+    )
+    if payload.get("schema") != "devagent-controls-engineering-approval-v1":
+        raise ControlsQualificationError(
+            "Controls engineering approval has unsupported schema"
+        )
+    if payload.get("project_id") != manifest["project_id"]:
+        raise ControlsQualificationError(
+            "Controls engineering approval project_id mismatch"
+        )
+    if payload.get("spec_sha256") != manifest["spec_sha256"]:
+        raise ControlsQualificationError(
+            "Controls engineering approval spec_sha256 mismatch"
+        )
+    if payload.get("controls_ir_sha256") != manifest["controls_ir_sha256"]:
+        raise ControlsQualificationError(
+            "Controls engineering approval Controls IR hash mismatch"
+        )
+    if payload.get("approval_context_sha256") != approval_context_sha256:
+        raise ControlsQualificationError(
+            "Controls engineering approval context hash mismatch"
+        )
+    if payload.get("decision") != "APPROVE":
+        raise ControlsQualificationError(
+            "Controls engineering approval decision must be APPROVE"
+        )
+    approved_by = str(payload.get("approved_by") or "").strip()
+    if not approved_by:
+        raise ControlsQualificationError(
+            "Controls engineering approval approved_by is required"
+        )
+    approved_at = _timestamp(
+        payload.get("approved_at"),
+        field="Controls engineering approval approved_at",
+    )
+    return {
+        "status": "APPROVED",
+        "approval_context_sha256": approval_context_sha256,
+        "decision": "APPROVE",
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+        "evidence_sha256": _sha256(approval_path),
         "signature": signature,
     }
 
@@ -561,9 +684,30 @@ def qualify_controls_build(
         }
         for item in runtime_results
     )
-    approved = external_vendor_ready and runtime_ready and all(
+    controller_approvals_complete = all(
         item["readiness"] == "APPROVED_FOR_RELEASE"
         for item in runtime_results
+    )
+
+    approval_context, approval_context_sha256 = _controls_approval_context(
+        manifest=manifest,
+        build=build,
+        trust_store_sha256=trust_store.source_sha256,
+        studio_results=studio_results,
+        ignition_result=ignition_result,
+        integrated_fat_result=integrated_fat_result,
+        runtime_results=runtime_results,
+    )
+    engineering_approval = _controls_engineering_approval(
+        evidence_root=evidence_root,
+        trust_store=trust_store,
+        manifest=manifest,
+        approval_context_sha256=approval_context_sha256,
+    )
+    approved = (
+        runtime_ready
+        and controller_approvals_complete
+        and engineering_approval["status"] == "APPROVED"
     )
     status = (
         "APPROVED_FOR_RELEASE_HANDOFF"
@@ -584,6 +728,9 @@ def qualify_controls_build(
         "ignition_gateway": ignition_result,
         "integrated_fat": integrated_fat_result,
         "runtime": runtime_results,
+        "approval_context": approval_context,
+        "approval_context_sha256": approval_context_sha256,
+        "engineering_approval": engineering_approval,
         "human_engineering_approval_required": True,
         "production_release_ready": approved,
         "production_deployment_performed": False,
