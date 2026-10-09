@@ -221,6 +221,66 @@ def _build_into(spec: ControlSystemSpec, root: Path) -> tuple[dict[str, Any], di
     fat_cases = generate_controls_fat(ir)
     if not fat_cases:
         raise ControlsBuildError("no deterministic FAT cases were generated")
+
+    structured_requirements = {
+        (item.id, requirement.id)
+        for item in ir.equipment
+        for requirement in item.requirements
+        if requirement.assertion is not None
+    }
+    requirement_counts: dict[tuple[str, str], int] = {}
+    for case in fat_cases:
+        for requirement_id in case.requirement_ids:
+            key = (case.equipment_id, requirement_id)
+            requirement_counts[key] = requirement_counts.get(key, 0) + 1
+    bad_requirement_coverage = {
+        f"{equipment_id}:{requirement_id}": requirement_counts.get(
+            (equipment_id, requirement_id), 0
+        )
+        for equipment_id, requirement_id in sorted(structured_requirements)
+        if requirement_counts.get((equipment_id, requirement_id), 0) != 1
+    }
+    if bad_requirement_coverage:
+        raise ControlsBuildError(
+            "structured requirement FAT coverage must equal one case per assertion: "
+            + ", ".join(
+                f"{key}={count}"
+                for key, count in sorted(bad_requirement_coverage.items())
+            )
+        )
+
+    expected_alarm_refs = {
+        (item.id, f"ALARM.{alarm.id}")
+        for item in ir.equipment
+        for alarm in item.alarms
+    }
+    actual_alarm_refs = {
+        (case.equipment_id, case.expected_output)
+        for case in fat_cases
+        if case.expected_output.startswith("ALARM.")
+    }
+    if expected_alarm_refs != actual_alarm_refs:
+        raise ControlsBuildError(
+            "generated FAT alarm coverage differs from declared alarm contract"
+        )
+    fat_coverage = {
+        "schema": "devagent-controls-fat-coverage-v1",
+        "status": "PASS",
+        "structured_requirements": [
+            {
+                "equipment_id": equipment_id,
+                "requirement_id": requirement_id,
+                "case_count": requirement_counts[(equipment_id, requirement_id)],
+            }
+            for equipment_id, requirement_id in sorted(structured_requirements)
+        ],
+        "alarms": [
+            {"equipment_id": equipment_id, "expected_ref": expected_ref}
+            for equipment_id, expected_ref in sorted(expected_alarm_refs)
+        ],
+    }
+    _write_json(root / "verification" / "fat-coverage.json", fat_coverage)
+
     _write_json(root / "tests" / "fat-plan.json", fat_payload(fat_cases))
     model_simulation = run_model_simulation(ir, fat_cases)
     _write_json(root / "tests" / "model-simulation.json", model_simulation)
@@ -567,6 +627,44 @@ def verify_controls_build(build_dir: Path) -> dict[str, Any]:
             errors.append("authoring build must never claim production deployment")
         if readiness.get("human_engineering_approval_required") is not True:
             errors.append("human engineering approval must remain required")
+
+        expected_fat_cases = generate_controls_fat(ir)
+        structured_requirements = {
+            (item.id, requirement.id)
+            for item in ir.equipment
+            for requirement in item.requirements
+            if requirement.assertion is not None
+        }
+        requirement_counts: dict[tuple[str, str], int] = {}
+        for case in expected_fat_cases:
+            for requirement_id in case.requirement_ids:
+                key = (case.equipment_id, requirement_id)
+                requirement_counts[key] = requirement_counts.get(key, 0) + 1
+        expected_alarm_refs = {
+            (item.id, f"ALARM.{alarm.id}")
+            for item in ir.equipment
+            for alarm in item.alarms
+        }
+        expected_fat_coverage = {
+            "schema": "devagent-controls-fat-coverage-v1",
+            "status": "PASS",
+            "structured_requirements": [
+                {
+                    "equipment_id": equipment_id,
+                    "requirement_id": requirement_id,
+                    "case_count": requirement_counts.get(
+                        (equipment_id, requirement_id), 0
+                    ),
+                }
+                for equipment_id, requirement_id in sorted(structured_requirements)
+            ],
+            "alarms": [
+                {"equipment_id": equipment_id, "expected_ref": expected_ref}
+                for equipment_id, expected_ref in sorted(expected_alarm_refs)
+            ],
+        }
+        if _load_json(root / "verification" / "fat-coverage.json") != expected_fat_coverage:
+            errors.append("fat-coverage.json does not match deterministic Controls intent")
 
         expected_handoff = {
             "schema": "devagent-controls-engineering-handoff-v2",
