@@ -221,9 +221,10 @@ def _ignition_gateway_qualification(
             "the verified staging artifacts"
         )
     gateway_version = str(metadata.get("gateway_version") or "").strip()
-    if not gateway_version:
+    gateway_id = str(metadata.get("gateway_id") or "").strip()
+    if not gateway_version or not gateway_id:
         raise ControlsQualificationError(
-            "Ignition Gateway import evidence requires gateway_version"
+            "Ignition Gateway import evidence requires gateway_id and gateway_version"
         )
     imported_at = _timestamp(
         metadata.get("imported_at"),
@@ -264,6 +265,10 @@ def _ignition_gateway_qualification(
         raise ControlsQualificationError(
             "Ignition Gateway import/export evidence gateway_version mismatch"
         )
+    if str(export_metadata.get("gateway_id") or "").strip() != gateway_id:
+        raise ControlsQualificationError(
+            "Ignition Gateway import/export evidence gateway_id mismatch"
+        )
     adapter = str(export_metadata.get("adapter") or "").strip()
     adapter_version = str(export_metadata.get("adapter_version") or "").strip()
     if not adapter or not adapter_version:
@@ -298,6 +303,7 @@ def _ignition_gateway_qualification(
 
     return {
         "status": "PASS",
+        "gateway_id": gateway_id,
         "gateway_version": gateway_version,
         "imported_at": imported_at,
         "exported_at": exported_at,
@@ -419,6 +425,12 @@ def _controls_fat_qualification(
     run_id = str(metadata.get("run_id") or "").strip()
     if not run_id:
         raise ControlsQualificationError("Controls FAT evidence run_id is required")
+    executed_by = str(metadata.get("executed_by") or "").strip()
+    environment_id = str(metadata.get("environment_id") or "").strip()
+    if not executed_by or not environment_id:
+        raise ControlsQualificationError(
+            "Controls FAT evidence requires executed_by and environment_id"
+        )
     executed_at = _timestamp(
         metadata.get("executed_at"),
         field="Controls FAT executed_at",
@@ -427,6 +439,8 @@ def _controls_fat_qualification(
         "status": "PASS",
         "run_id": run_id,
         "executed_at": executed_at,
+        "executed_by": executed_by,
+        "environment_id": environment_id,
         "fat_plan_sha256": fat_plan_sha256,
         "generation_manifest_sha256": manifest_sha256,
         "runtime_backend_ids": expected_backend_ids,
