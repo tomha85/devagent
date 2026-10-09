@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.2.0"
+ROCKWELL_GENERATOR_VERSION = "1.3.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
@@ -125,17 +125,26 @@ def _series(
     output: str,
     symbols: dict[str, object],
     purpose: str,
+    seal_in: bool = False,
 ) -> GeneratedRung:
     commands = dict(symbols["commands"])
     signals = dict(symbols["signals"])
     outputs = dict(symbols["outputs"])
+    output_tag = str(outputs[output])
 
-    contacts: list[str] = [f"XIC({commands[command]})"]
+    if seal_in:
+        # One-writer seal-in: a momentary primary command can establish the
+        # request, while STOP/permissive/interlock loss drops the request and
+        # requires a new primary command before restart.
+        contacts: list[str] = [
+            f"[XIC({commands[command]}),XIC({output_tag})]"
+        ]
+    else:
+        contacts = [f"XIC({commands[command]})"]
     if inverse_command is not None:
         contacts.append(f"XIO({commands[inverse_command]})")
     contacts.extend(f"XIC({signals[name]})" for name in equipment.permissives)
     contacts.extend(f"XIO({signals[name]})" for name in equipment.interlocks)
-    output_tag = str(outputs[output])
     return GeneratedRung(
         equipment_id=equipment.id,
         purpose=purpose,
@@ -151,7 +160,6 @@ def _status_rungs(
     standard = get_standard(equipment.standard)
     signals = dict(symbols["signals"])
     status = dict(symbols["status"])
-    outputs = dict(symbols["outputs"])
     rungs: list[GeneratedRung] = []
 
     if standard.equipment_type in {"MOTOR", "VFD", "CONVEYOR"}:
@@ -173,19 +181,27 @@ def _status_rungs(
             )
         )
 
-        running_tag = status["RUNNING"]
+    for status_member, signal_name in standard.status_signal_map:
+        if signal_name not in signals:
+            raise RockwellGenerationError(
+                f"{equipment.id} standard {standard.id} requires feedback signal "
+                f"{signal_name} for status {status_member}"
+            )
+        status_tag = status[status_member]
         rungs.append(
             GeneratedRung(
                 equipment_id=equipment.id,
-                purpose="STATUS_RUNNING",
-                text=f"XIC({outputs['RUN']})OTE({running_tag});",
-                output_tag=str(running_tag),
+                purpose=f"STATUS_{status_member}",
+                text=f"XIC({signals[signal_name]})OTE({status_tag});",
+                output_tag=str(status_tag),
             )
         )
 
+    if standard.fault_status_member is not None:
         if not equipment.faults:
             raise RockwellGenerationError(
-                f"{equipment.id} cannot derive FAULTED without an explicit fault source"
+                f"{equipment.id} cannot derive {standard.fault_status_member} "
+                "without an explicit fault source"
             )
         fault_contacts = [f"XIC({signals[name]})" for name in equipment.faults]
         fault_logic = (
@@ -193,27 +209,15 @@ def _status_rungs(
             if len(fault_contacts) == 1
             else "[" + ",".join(fault_contacts) + "]"
         )
-        faulted_tag = status["FAULTED"]
+        faulted_tag = status[standard.fault_status_member]
         rungs.append(
             GeneratedRung(
                 equipment_id=equipment.id,
-                purpose="STATUS_FAULTED",
+                purpose=f"STATUS_{standard.fault_status_member}",
                 text=f"{fault_logic}OTE({faulted_tag});",
                 output_tag=str(faulted_tag),
             )
         )
-    elif standard.equipment_type == "VALVE":
-        for member in ("OPEN", "CLOSED"):
-            output_name = "OPEN" if member == "OPEN" else "CLOSE"
-            status_tag = status[member]
-            rungs.append(
-                GeneratedRung(
-                    equipment_id=equipment.id,
-                    purpose=f"STATUS_{member}",
-                    text=f"XIC({outputs[output_name]})OTE({status_tag});",
-                    output_tag=str(status_tag),
-                )
-            )
     return tuple(rungs)
 
 
@@ -242,6 +246,7 @@ def generated_rungs(equipment: EquipmentSpec) -> tuple[GeneratedRung, ...]:
                 output="RUN",
                 symbols=symbols,
                 purpose="PRIMARY_RUN",
+                seal_in=standard.command_model == "SEAL_IN_PRIMARY_STOP_DOMINANT",
             )
         )
         if "RESET" in dict(symbols["outputs"]):
