@@ -50,6 +50,12 @@ class PortalService:
                     "equipment_type": item.equipment_type,
                     "required_commands": list(item.required_commands),
                     "required_status": list(item.required_status),
+                    "required_feedback_signals": list(item.required_feedback_signals),
+                    "status_signal_map": {
+                        status_member: signal_name
+                        for status_member, signal_name in item.status_signal_map
+                    },
+                    "command_model": item.command_model,
                     "generated_outputs": list(item.generated_outputs),
                     "default_faceplate": item.default_faceplate,
                     "min_permissives": item.min_permissives,
@@ -253,7 +259,7 @@ portal never performs PLC writes/downloads or Ignition Gateway deployment.</p>
 <div><label>Equipment ID</label><input id="equipmentId" value="CONV_101"></div>
 <div><label>Area</label><input id="area" value="Packaging"></div>
 <div><label>Safety zone</label><input id="safetyZone" value="SZ03"></div>
-<div class="full"><label>Signals (comma separated)</label><input id="signals" value="SAFETY_OK,DOWNSTREAM_READY,GUARD_OPEN,DRIVE_FAULT"></div>
+<div class="full"><label>Signals (comma separated)</label><input id="signals" value="SAFETY_OK,DOWNSTREAM_READY,GUARD_OPEN,DRIVE_FAULT,RUN_FB"><small id="commandModel"></small></div>
 <div class="full"><label>Permissives</label><input id="permissives" value="SAFETY_OK,DOWNSTREAM_READY"></div>
 <div class="full"><label>Interlocks</label><input id="interlocks" value="GUARD_OPEN,DRIVE_FAULT"></div>
 <div class="full"><label>Fault sources</label><input id="faults" value="DRIVE_FAULT"></div>
@@ -316,8 +322,18 @@ function selectedStandard(){
  if(!found) throw new Error('No qualified standard for '+type);
  return found;
 }
+function applyStandardContract(){
+ const s=selectedStandard();
+ const current=csv('signals');
+ const merged=[...new Set([...current,...s.required_feedback_signals])];
+ document.getElementById('signals').value=merged.join(',');
+ document.getElementById('commandModel').textContent=
+   'Qualified command model: '+s.command_model+
+   '; feedback status: '+JSON.stringify(s.status_signal_map);
+}
 function generateSpec(){
  const s=selectedStandard();
+ applyStandardContract();
  const spec={
    schema:'devagent-controls-spec-v2',
    project_id:document.getElementById('projectId').value.trim(),
@@ -387,6 +403,8 @@ async function init(){
    const option=document.createElement('option'); option.value=type; option.textContent=type; select.appendChild(option);
  }
  select.value='CONVEYOR';
+ select.addEventListener('change',()=>{applyStandardContract();generateSpec();});
+ applyStandardContract();
  generateSpec();
 }
 init().catch(error=>document.getElementById('result').textContent=String(error));
