@@ -31,6 +31,8 @@ def _write_spec(tmp_path):
                             {
                                 "id": "ALM_VFD101_FAULT",
                                 "priority": "HIGH",
+                                "description": "Equipment alarm.",
+                                "on_delay_ms": 0,
                                 "operator_response": "Inspect drive fault.",
                                 "source_signal": "DRIVE_FAULT",
                             }
