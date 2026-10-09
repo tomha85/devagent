@@ -19,7 +19,7 @@ def _payload(*, historian: bool) -> dict:
                 "type": "CONVEYOR",
                 "standard": "conveyor-v1",
                 "controller": "PLC1",
-                "signals": ["SAFE", "GUARD_OPEN", "DRIVE_FAULT"],
+                "signals": ["SAFE", "GUARD_OPEN", "DRIVE_FAULT", "RUN_FB"],
                 "commands": {"START": True, "STOP": True, "RESET": True},
                 "status": ["READY", "RUNNING", "FAULTED"],
                 "permissives": ["SAFE"],
