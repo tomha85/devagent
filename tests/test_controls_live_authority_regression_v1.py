@@ -40,7 +40,7 @@ def test_controls_manifest_declares_no_control_authority() -> None:
 
     spec = parse_control_system_payload(
         {
-            "schema": "devagent-controls-spec-v1",
+            "schema": "devagent-controls-spec-v2",
             "project_id": "CELL01",
             "controllers": [
                 {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
