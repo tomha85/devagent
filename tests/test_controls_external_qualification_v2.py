@@ -56,7 +56,23 @@ def _spec():
                         }
                     ],
                     "hmi": {"faceplate": "conveyor-v1", "historian": True},
-                    "io": [],
+                    "io": [
+                        {
+                            "member": "SIGNAL.RUN_FB",
+                            "direction": "INPUT",
+                            "address": "Local:1:I.Data.0",
+                        },
+                        {
+                            "member": "OUTPUT.RUN",
+                            "direction": "OUTPUT",
+                            "address": "Local:2:O.Data.0",
+                        },
+                        {
+                            "member": "OUTPUT.RESET",
+                            "direction": "OUTPUT",
+                            "address": "Local:2:O.Data.1",
+                        },
+                    ],
                     "requirements": [
                         {
                             "id": "REQ_GUARD",
