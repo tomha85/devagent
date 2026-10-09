@@ -72,6 +72,18 @@ def equipment_symbol_map(equipment: EquipmentSpec) -> dict[str, object]:
             name: equipment_tag(equipment.id, "OUT", name)
             for name in standard.generated_outputs
         },
+        "internal": (
+            {
+                f"{standard.primary_action}_PREV": equipment_tag(
+                    equipment.id, "INT", f"{standard.primary_action}_PREV"
+                ),
+                f"{standard.primary_action}_PULSE": equipment_tag(
+                    equipment.id, "INT", f"{standard.primary_action}_PULSE"
+                ),
+            }
+            if standard.command_model == "RISING_EDGE_SEAL_IN_STOP_DOMINANT"
+            else {}
+        ),
         "alarms": {
             alarm.id: (
                 equipment_tag(equipment.id, "SIG", alarm.source_signal)
@@ -82,7 +94,7 @@ def equipment_symbol_map(equipment: EquipmentSpec) -> dict[str, object]:
         },
     }
     names: list[str] = []
-    for category in ("signals", "commands", "status", "outputs"):
+    for category in ("signals", "commands", "status", "outputs", "internal"):
         names.extend(str(value) for value in dict(result[category]).values())
     if len(names) != len(set(names)):
         raise ValueError(
