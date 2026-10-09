@@ -54,7 +54,7 @@ def test_rockwell_generator_is_byte_deterministic_and_logix_bounded() -> None:
     assert first.content == second.content
     assert first.sha256 == second.sha256
     assert all(len(name) <= 40 for name in first.tags)
-    assert len(first.rungs) == 5
+    assert len(first.rungs) == 7
 
 
 def test_generated_l5x_reimports_through_existing_production_analyzer(tmp_path) -> None:
@@ -152,10 +152,27 @@ def test_run_rung_seals_in_primary_command_and_status_uses_feedback() -> None:
     signals = dict(symbols["signals"])
     status = dict(symbols["status"])
 
+    internal = dict(symbols["internal"])
+    pulse_rung = next(
+        rung for rung in artifact.rungs if rung.purpose == "PRIMARY_EDGE_PULSE"
+    )
+    memory_rung = next(
+        rung for rung in artifact.rungs if rung.purpose == "PRIMARY_EDGE_MEMORY"
+    )
     run_rung = next(rung for rung in artifact.rungs if rung.purpose == "PRIMARY_RUN")
-    assert f"XIC({commands['START']})" in run_rung.text
+
+    assert pulse_rung.text == (
+        f"XIC({commands['START']})"
+        f"XIO({internal['START_PREV']})"
+        f"OTE({internal['START_PULSE']});"
+    )
+    assert memory_rung.text == (
+        f"XIC({commands['START']})OTE({internal['START_PREV']});"
+    )
+    assert f"XIC({internal['START_PULSE']})" in run_rung.text
     assert f"XIC({outputs['RUN']})" in run_rung.text
     assert f"XIO({commands['STOP']})" in run_rung.text
+    assert f"XIC({commands['START']})" not in run_rung.text
 
     running_rung = next(rung for rung in artifact.rungs if rung.purpose == "STATUS_RUNNING")
     assert running_rung.text == f"XIC({signals['RUN_FB']})OTE({status['RUNNING']});"
