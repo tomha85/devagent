@@ -164,6 +164,7 @@ def test_run_rung_seals_in_primary_command_and_status_uses_feedback() -> None:
     assert pulse_rung.text == (
         f"XIC({commands['START']})"
         f"XIO({internal['START_PREV']})"
+        "XIO(S:FS)"
         f"OTE({internal['START_PULSE']});"
     )
     assert memory_rung.text == (
