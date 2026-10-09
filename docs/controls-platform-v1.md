@@ -92,7 +92,8 @@ The V1 product release qualifies these exact standard IDs:
 - `conveyor-v1`
 - `valve-v1`
 
-Each standard pins the required command/status contract, generated output
+Each standard pins the required command/status contract, required physical
+feedback signals, status-to-feedback mapping, command semantics, generated output
 surface, minimum permissive/interlock/fault/alarm coverage, fault-status contract,
 alarm-source policy, historian policy, and qualified faceplate. Interlocks and
 faults are modeled separately: every fault is also an interlock so an active
@@ -110,12 +111,18 @@ Company rules include explicit checks such as:
 - `CTRL-E500` explicit alarm source binding;
 - `CTRL-W500` operator response guidance;
 - `CTRL-E600` structured assertion requirement for HIGH/CRITICAL requirements;
-- `CTRL-E700` unique logical I/O mapping.
+- `CTRL-E700` unique logical I/O mapping;
+- `CTRL-E120` required physical feedback coverage;
+- `CTRL-E405` explicit command semantics;
+- `CTRL-W710` staged I/O mapping completeness before release qualification.
 
 The authoring model also supports controller network metadata, equipment
 `area`, `safety_zone`, and explicit staged I/O mappings. Physical I/O
 addresses are metadata only; generated standard logic does not write physical
-addresses directly.
+addresses directly. Staging may proceed with incomplete I/O mapping so engineers
+can review logic early, but external release qualification fails closed until
+every required feedback signal and every generated output has an explicit I/O
+mapping.
 
 ## Structured requirements
 
@@ -174,6 +181,14 @@ The generator emits bounded RLL using the supported deterministic instruction
 surface and does not create `.ACD` files. It never asks an LLM to invent ladder
 logic.
 
+For Motor/VFD/Conveyor standards, the primary run request uses one-writer
+STOP-dominant seal-in logic. Loss of a permissive or activation of an interlock
+drops the request; clearing the condition does not restore a dropped request
+without a new primary command. `RUNNING` is not inferred from the command
+output: it is driven by the required `RUN_FB` feedback signal. Valve `OPEN`
+and `CLOSED` status similarly use required `OPEN_FB`/`CLOSED_FB` feedback
+rather than assuming commanded position equals physical position.
+
 Generated projects are re-imported through
 `devagent.plc.safe_analysis.analyze_rockwell_l5x`. Controls independently
 projects the authoring IR into the expected canonical PLC semantic surface and
@@ -214,9 +229,10 @@ execution_status = NOT_RUN
 execution_owner  = CONTROLS_ENGINEER
 ```
 
-Generated cases cover standard positive paths, permissive loss, interlock/fault
-activation, stop/opposite-command inhibition, reset where applicable,
-PLC/HMI alarm bindings, and explicit structured requirement assertions.
+Generated cases cover standard positive paths, seal-in hold/drop behavior,
+permissive loss, interlock/fault activation, stop/opposite-command inhibition,
+physical feedback-to-status behavior, reset where applicable, PLC/HMI alarm
+bindings, and explicit structured requirement assertions.
 
 The built-in simulation is a **model-only** consistency check. It is not Logix
 Echo, HIL, a real controller, process physics, or machine-safety validation.
@@ -418,6 +434,7 @@ CONTROLS_IR_ROUNDTRIP=PASS
 IGNITION_BINDING_COHERENCE=PASS
 FAT_GENERATION=PASS
 MODEL_SIMULATION=PASS
+RELEASE_IO_MAPPING=PASS_OR_REVIEW_REQUIRED
 UNQUALIFIED_DYNAMIC_PASS=0
 PRODUCTION_DEPLOYMENT=NOT_PERFORMED
 ```
@@ -427,6 +444,7 @@ The external release-handoff gate additionally requires:
 ```text
 STUDIO5000_IMPORT_EXPORT_SEMANTICS=PASS
 IGNITION_IMPORT_EXPORT_SEMANTICS=PASS
+RELEASE_IO_MAPPING=PASS
 QUALIFIED_RUNTIME_BACKEND=PASS
 SIGNED_RUNTIME_RESULTS=PASS
 SIGNED_INTEGRATED_CONTROLS_FAT=PASS
