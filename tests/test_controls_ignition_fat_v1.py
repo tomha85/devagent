@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import copy
 
-from devagent.controls.fat import generate_controls_fat, run_model_simulation
+from devagent.controls.fat import (
+    evaluate_standard_state,
+    generate_controls_fat,
+    run_model_simulation,
+)
 from devagent.controls.ignition import (
     generate_ignition_payloads,
     ignition_binding_check,
@@ -116,3 +120,39 @@ def test_ignition_semantic_projection_is_order_independent() -> None:
         reordered[name].reverse()
 
     assert normalize_ignition_projection(reordered) == expected
+
+
+def test_nonfault_interlock_inhibits_run_without_asserting_faulted() -> None:
+    ir = _ir()
+    item = ir.equipment[0]
+    inputs = {
+        "COMMAND.START": True,
+        "COMMAND.STOP": False,
+        "COMMAND.RESET": False,
+        "SIGNAL.SAFE": True,
+        "SIGNAL.GUARD_OPEN": True,
+        "SIGNAL.DRIVE_FAULT": False,
+    }
+
+    state = evaluate_standard_state(item, inputs)
+
+    assert state["OUTPUT.RUN"] is False
+    assert state["STATUS.FAULTED"] is False
+
+
+def test_explicit_fault_inhibits_run_and_asserts_faulted() -> None:
+    ir = _ir()
+    item = ir.equipment[0]
+    inputs = {
+        "COMMAND.START": True,
+        "COMMAND.STOP": False,
+        "COMMAND.RESET": False,
+        "SIGNAL.SAFE": True,
+        "SIGNAL.GUARD_OPEN": False,
+        "SIGNAL.DRIVE_FAULT": True,
+    }
+
+    state = evaluate_standard_state(item, inputs)
+
+    assert state["OUTPUT.RUN"] is False
+    assert state["STATUS.FAULTED"] is True
