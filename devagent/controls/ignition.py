@@ -8,7 +8,7 @@ from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import equipment_symbol_map
 
 IGNITION_STAGING_SCHEMA = "devagent-ignition-staging-v2"
-IGNITION_GENERATOR_VERSION = "1.2.0"
+IGNITION_GENERATOR_VERSION = "1.3.0"
 
 
 def _equipment_instance(
@@ -27,6 +27,11 @@ def _equipment_instance(
         "safety_zone": item.safety_zone,
         "faceplate": item.hmi.faceplate,
         "historian_enabled": item.hmi.historian,
+        "command_model": STANDARDS[item.standard].command_model,
+        "status_signal_map": {
+            status_member: signal_name
+            for status_member, signal_name in STANDARDS[item.standard].status_signal_map
+        },
         "permissives": list(item.permissives),
         "interlocks": list(item.interlocks),
         "faults": list(item.faults),
@@ -63,6 +68,12 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
                 "equipment_type": standard.equipment_type,
                 "required_commands": list(standard.required_commands),
                 "required_status": list(standard.required_status),
+                "required_feedback_signals": list(standard.required_feedback_signals),
+                "status_signal_map": {
+                    status_member: signal_name
+                    for status_member, signal_name in standard.status_signal_map
+                },
+                "command_model": standard.command_model,
                 "generated_outputs": list(standard.generated_outputs),
                 "default_faceplate": standard.default_faceplate,
                 "min_permissives": standard.min_permissives,
