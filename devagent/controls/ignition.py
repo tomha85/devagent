@@ -4,14 +4,17 @@ from typing import Any
 
 from devagent.controls.catalog import STANDARDS
 from devagent.controls.ir import ControlsIR, controls_ir_sha256
-from devagent.controls.models import EquipmentSpec
+from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import equipment_symbol_map
 
-IGNITION_STAGING_SCHEMA = "devagent-ignition-staging-v1"
-IGNITION_GENERATOR_VERSION = "1.0.0"
+IGNITION_STAGING_SCHEMA = "devagent-ignition-staging-v2"
+IGNITION_GENERATOR_VERSION = "1.1.0"
 
 
-def _equipment_instance(item: EquipmentSpec) -> dict[str, Any]:
+def _equipment_instance(
+    item: EquipmentSpec,
+    controller: ControllerSpec,
+) -> dict[str, Any]:
     symbols = equipment_symbol_map(item)
     return {
         "id": item.id,
@@ -19,6 +22,9 @@ def _equipment_instance(item: EquipmentSpec) -> dict[str, Any]:
         "type": item.type,
         "standard": item.standard,
         "controller": item.controller,
+        "controller_network": controller.network,
+        "area": item.area,
+        "safety_zone": item.safety_zone,
         "faceplate": item.hmi.faceplate,
         "historian_enabled": item.hmi.historian,
         "plc_tags": {
@@ -27,11 +33,23 @@ def _equipment_instance(item: EquipmentSpec) -> dict[str, Any]:
             "status": dict(symbols["status"]),
             "outputs": dict(symbols["outputs"]),
         },
+        "io": [
+            {
+                "member": mapping.member,
+                "direction": mapping.direction,
+                "address": mapping.address,
+            }
+            for mapping in item.io
+        ],
     }
 
 
 def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
-    instances = [_equipment_instance(item) for item in ir.equipment]
+    controllers = {item.id: item for item in ir.controllers}
+    instances = [
+        _equipment_instance(item, controllers[item.controller])
+        for item in ir.equipment
+    ]
 
     definitions = []
     for standard_id in sorted({item.standard for item in ir.equipment}):
@@ -44,12 +62,19 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
                 "required_status": list(standard.required_status),
                 "generated_outputs": list(standard.generated_outputs),
                 "default_faceplate": standard.default_faceplate,
+                "min_permissives": standard.min_permissives,
+                "min_interlocks": standard.min_interlocks,
+                "min_alarms": standard.min_alarms,
+                "fault_status_member": standard.fault_status_member,
+                "alarm_source_policy": standard.alarm_source_policy,
+                "historian_policy": standard.historian_policy,
             }
         )
 
     alarms: list[dict[str, Any]] = []
     history: list[dict[str, Any]] = []
     views: list[dict[str, Any]] = []
+    navigation: list[dict[str, Any]] = []
     for item in ir.equipment:
         symbols = equipment_symbol_map(item)
         signal_tags = dict(symbols["signals"])
@@ -65,6 +90,7 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
                 {
                     "id": alarm.id,
                     "equipment_id": item.id,
+                    "area": item.area,
                     "priority": alarm.priority,
                     "operator_response": alarm.operator_response,
                     "source_signal": alarm.source_signal,
@@ -76,6 +102,7 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
             history.extend(
                 {
                     "equipment_id": item.id,
+                    "area": item.area,
                     "member": member,
                     "plc_tag": tag,
                     "policy": "ON_CHANGE",
@@ -86,8 +113,17 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
             views.append(
                 {
                     "equipment_id": item.id,
+                    "area": item.area,
                     "faceplate": item.hmi.faceplate,
                     "instance_path": f"Equipment/{item.id}",
+                }
+            )
+            navigation.append(
+                {
+                    "equipment_id": item.id,
+                    "area": item.area,
+                    "target": f"Equipment/{item.id}",
+                    "view": item.hmi.faceplate,
                 }
             )
 
@@ -105,21 +141,37 @@ def generate_ignition_payloads(ir: ControlsIR) -> dict[str, dict[str, Any]]:
         "alarms.json": {**common, "alarms": sorted(alarms, key=lambda value: value["id"])},
         "history.json": {
             **common,
-            "history": sorted(history, key=lambda value: (value["equipment_id"], value["member"])),
+            "history": sorted(
+                history,
+                key=lambda value: (value["equipment_id"], value["member"]),
+            ),
         },
         "views.json": {
             **common,
             "views": sorted(views, key=lambda value: value["equipment_id"]),
         },
+        "navigation.json": {
+            **common,
+            "navigation": sorted(
+                navigation,
+                key=lambda value: (value["area"] or "", value["equipment_id"]),
+            ),
+        },
     }
 
 
-def ignition_binding_check(ir: ControlsIR, payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def ignition_binding_check(
+    ir: ControlsIR,
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     known_plc_tags: set[str] = set()
+    known_equipment = {item.id for item in ir.equipment}
     for item in ir.equipment:
         symbols = equipment_symbol_map(item)
         for category in ("signals", "commands", "status", "outputs"):
-            known_plc_tags.update(str(value) for value in dict(symbols[category]).values())
+            known_plc_tags.update(
+                str(value) for value in dict(symbols[category]).values()
+            )
 
     unbound = [
         alarm["id"]
@@ -132,16 +184,30 @@ def ignition_binding_check(ir: ControlsIR, payloads: dict[str, dict[str, Any]]) 
         if item["plc_tag"] not in known_plc_tags
     ]
     unknown_instance_tags: list[str] = []
+    unknown_navigation = [
+        item["equipment_id"]
+        for item in payloads["navigation.json"]["navigation"]
+        if item["equipment_id"] not in known_equipment
+    ]
     for instance in payloads["equipment.json"]["instances"]:
         for category in instance["plc_tags"].values():
             for tag in category.values():
                 if tag not in known_plc_tags:
                     unknown_instance_tags.append(tag)
 
-    passed = not unbound and not unknown_history and not unknown_instance_tags
+    passed = (
+        not unbound
+        and not unknown_history
+        and not unknown_instance_tags
+        and not unknown_navigation
+    )
     return {
+        "schema": "devagent-controls-ignition-binding-v2",
         "status": "PASS" if passed else "FAIL",
         "unbound_alarms": sorted(unbound),
         "unknown_history_tags": sorted(set(unknown_history)),
         "unknown_instance_tags": sorted(set(unknown_instance_tags)),
+        "unknown_navigation_equipment": sorted(set(unknown_navigation)),
+        "gateway_import_validation": "NOT_RUN",
+        "gateway_deployment_performed": False,
     }
