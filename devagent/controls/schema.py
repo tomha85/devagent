@@ -325,7 +325,7 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
     item = _object(raw, where)
     required = {
         "id", "type", "standard", "controller", "signals", "commands", "status",
-        "permissives", "interlocks", "alarms", "hmi", "requirements",
+        "permissives", "interlocks", "faults", "alarms", "hmi", "requirements",
     }
     allowed = {*required, "area", "safety_zone", "io"}
     _fields(item, where=where, required=required, allowed=allowed)
@@ -349,13 +349,25 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
     commands = _parse_commands(item["commands"], f"{where}.commands")
     permissives = _symbol_list(item["permissives"], f"{where}.permissives")
     interlocks = _symbol_list(item["interlocks"], f"{where}.interlocks")
+    faults = _symbol_list(item["faults"], f"{where}.faults")
     signal_set = set(signals)
-    for category, references in (("permissives", permissives), ("interlocks", interlocks)):
+    for category, references in (
+        ("permissives", permissives),
+        ("interlocks", interlocks),
+        ("faults", faults),
+    ):
         unknown = sorted(set(references) - signal_set)
         if unknown:
             raise ControlSpecError(
                 f"{where}.{category} references undeclared signal(s): {', '.join(unknown)}"
             )
+
+    fault_not_interlock = sorted(set(faults) - set(interlocks))
+    if fault_not_interlock:
+        raise ControlSpecError(
+            f"{where}.faults must also be declared as interlocks so active faults "
+            "cannot bypass generated inhibit logic: " + ", ".join(fault_not_interlock)
+        )
 
     alarms_raw = item["alarms"]
     if not isinstance(alarms_raw, list):
@@ -443,6 +455,7 @@ def _parse_equipment(raw: Any, index: int) -> EquipmentSpec:
         status=status,
         permissives=permissives,
         interlocks=interlocks,
+        faults=faults,
         alarms=alarms,
         hmi=_parse_hmi(item["hmi"], f"{where}.hmi"),
         requirements=requirements,
