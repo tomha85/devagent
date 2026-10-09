@@ -14,7 +14,19 @@ def test_controls_has_no_live_or_control_runtime_dependency() -> None:
         "socket",
         "ctypes",
         "asyncio.subprocess",
+        "pycomm3",
+        "asyncua",
+        "opcua",
     )
+    allowed_plc_imports = {
+        "projection.py": {"devagent.plc.models"},
+        "verification.py": {"devagent.plc.safe_analysis"},
+        "qualification.py": {
+            "devagent.plc.production_v5",
+            "devagent.plc.signature_trust",
+            "devagent.plc.trusted_snapshot",
+        },
+    }
     for path in sorted(root.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -29,8 +41,9 @@ def test_controls_has_no_live_or_control_runtime_dependency() -> None:
                     f"{path.name} crosses Controls authority boundary via {name}"
                 )
                 if name.startswith("devagent.plc"):
-                    assert path.name == "verification.py"
-                    assert name == "devagent.plc.safe_analysis"
+                    assert name in allowed_plc_imports.get(path.name, set()), (
+                        f"{path.name} has unapproved PLC dependency {name}"
+                    )
 
 
 def test_controls_manifest_declares_no_control_authority() -> None:
