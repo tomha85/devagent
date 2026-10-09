@@ -25,6 +25,8 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
                 {
                     "id": f"ALM_{equipment_id}_OVERLOAD",
                     "priority": "HIGH",
+                    "description": "Equipment alarm.",
+                    "on_delay_ms": 0,
                     "operator_response": "Inspect overload.",
                     "source_signal": "OVERLOAD",
                 }
@@ -48,6 +50,8 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
                 {
                     "id": f"ALM_{equipment_id}_FAULT",
                     "priority": "HIGH",
+                    "description": "Equipment alarm.",
+                    "on_delay_ms": 0,
                     "operator_response": "Inspect drive fault.",
                     "source_signal": "DRIVE_FAULT",
                 }
@@ -71,6 +75,8 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
                 {
                     "id": f"ALM_{equipment_id}_FAULT",
                     "priority": "HIGH",
+                    "description": "Equipment alarm.",
+                    "on_delay_ms": 0,
                     "operator_response": "Inspect conveyor fault.",
                     "source_signal": "DRIVE_FAULT",
                 }
@@ -94,6 +100,8 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
                 {
                     "id": f"ALM_{equipment_id}_BLOCKED",
                     "priority": "MEDIUM",
+                    "description": "Equipment alarm.",
+                    "on_delay_ms": 0,
                     "operator_response": "Inspect valve obstruction.",
                     "source_signal": "BLOCKED",
                 }
