@@ -9,7 +9,7 @@ from devagent.plc.safe_analysis import analyze_rockwell_l5x
 def _spec():
     return parse_control_system_payload(
         {
-            "schema": "devagent-controls-spec-v1",
+            "schema": "devagent-controls-spec-v2",
             "project_id": "PACK01",
             "controllers": [
                 {"id": "PLC_PACK_01", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
