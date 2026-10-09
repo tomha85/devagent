@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from devagent.controls.build import build_controls_spec
+from devagent.controls.ignition import ignition_semantic_projection
 from devagent.controls.qualification import qualify_controls_build
 from devagent.controls.schema import parse_control_system_payload
 from devagent.plc.production_v5 import run_production_verification_v5
@@ -171,6 +172,41 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
             "imported_at": "2026-10-08T18:06:00Z",
         },
     )
+    ignition_payloads = {
+        name: json.loads((build / "ignition" / name).read_text(encoding="utf-8"))
+        for name in (
+            "udts.json",
+            "equipment.json",
+            "alarms.json",
+            "history.json",
+            "views.json",
+            "navigation.json",
+        )
+    }
+    ignition_projection = ignition_semantic_projection(ignition_payloads)
+    ignition_projection_sha = hashlib.sha256(
+        json.dumps(
+            ignition_projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    _signed_json(
+        evidence / "ignition-gateway-export.json",
+        private,
+        {
+            "schema": "devagent-controls-ignition-gateway-export-evidence-v1",
+            "status": "PASS",
+            "controls_ir_sha256": manifest["controls_ir_sha256"],
+            "gateway_version": "8.1",
+            "adapter": "test-normalized-gateway-export",
+            "adapter_version": "1.0.0",
+            "exported_at": "2026-10-08T18:06:30Z",
+            "projection": ignition_projection,
+            "projection_sha256": ignition_projection_sha,
+        },
+    )
 
     requirements = build / "requirements" / "by-controller" / "PLC1.json"
     static = run_production_verification_v5(
@@ -246,11 +282,50 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
         approval_payload,
     )
 
+    fat_plan_path = build / "tests" / "fat-plan.json"
+    fat_plan = json.loads(fat_plan_path.read_text(encoding="utf-8"))
+    runtime_bindings = {
+        "PLC1": {
+            "backend_id": dynamic.execution_backend_id,
+            "execution_results_sha256": dynamic.execution_results_sha256,
+            "verification_context_sha256": dynamic.verification_context_sha256,
+        }
+    }
+    _signed_json(
+        evidence / "controls-fat-results.json",
+        private,
+        {
+            "schema": "devagent-controls-fat-results-v1",
+            "status": "PASS",
+            "controls_ir_sha256": manifest["controls_ir_sha256"],
+            "generation_manifest_sha256": hashlib.sha256(
+                (build / "generation-manifest.json").read_bytes()
+            ).hexdigest(),
+            "fat_plan_sha256": hashlib.sha256(fat_plan_path.read_bytes()).hexdigest(),
+            "runtime_bindings": runtime_bindings,
+            "run_id": "CONTROLS-FAT-001",
+            "executed_at": "2026-10-08T18:20:00Z",
+            "results": [
+                {
+                    "test_id": case["id"],
+                    "status": "PASS",
+                    "observed": "Expected integrated PLC/HMI behavior observed",
+                    "timestamp": "2026-10-08T18:20:00Z",
+                    "evidence": [f"trace://controls/{case['id']}"],
+                }
+                for case in fat_plan["cases"]
+            ],
+        },
+    )
+
     qualified = qualify_controls_build(build, evidence)
 
     assert qualified["status"] == "APPROVED_FOR_RELEASE_HANDOFF"
     assert qualified["studio5000"][0]["status"] == "PASS"
     assert qualified["ignition_gateway"]["status"] == "PASS"
+    assert qualified["ignition_gateway"]["semantic_gateway_export_reimport"] == "PASS"
+    assert qualified["integrated_fat"]["status"] == "PASS"
+    assert qualified["integrated_fat"]["tests_total"] > 0
     assert qualified["runtime"][0]["readiness"] == "APPROVED_FOR_RELEASE"
     assert qualified["production_release_ready"] is True
     assert qualified["production_deployment_performed"] is False
