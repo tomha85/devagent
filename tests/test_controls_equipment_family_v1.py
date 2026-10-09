@@ -103,7 +103,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
 @pytest.mark.parametrize("kind", ["MOTOR", "VFD", "CONVEYOR", "VALVE"])
 def test_each_v1_equipment_family_builds_and_roundtrips(kind: str, tmp_path) -> None:
     payload = {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": f"{kind}_PROJECT",
         "controllers": [
             {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
@@ -126,7 +126,7 @@ def test_each_v1_equipment_family_builds_and_roundtrips(kind: str, tmp_path) -> 
 
 def test_multi_controller_project_builds_independent_verified_artifacts(tmp_path) -> None:
     payload = {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "MULTI_CONTROLLER",
         "controllers": [
             {"id": "PLC_A", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
@@ -147,7 +147,7 @@ def test_multi_controller_project_builds_independent_verified_artifacts(tmp_path
 
 def test_unqualified_vendor_generation_fails_closed(tmp_path) -> None:
     payload = {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "SIEMENS_FUTURE",
         "controllers": [
             {"id": "PLC1", "vendor": "SIEMENS", "platform": "S7-1500"}
