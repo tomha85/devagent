@@ -65,6 +65,10 @@ def _timestamp(value: Any, *, field: str) -> str:
     return text
 
 
+def _timestamp_value(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _signed_snapshot(
     path: Path,
     *,
@@ -280,6 +284,10 @@ def _ignition_gateway_qualification(
         export_metadata.get("exported_at"),
         field="Ignition Gateway exported_at",
     )
+    if _timestamp_value(exported_at) < _timestamp_value(imported_at):
+        raise ControlsQualificationError(
+            "Ignition Gateway exported_at cannot precede imported_at"
+        )
     raw_projection = export_metadata.get("projection")
     if not isinstance(raw_projection, dict):
         raise ControlsQualificationError(
@@ -743,6 +751,17 @@ def qualify_controls_build(
         },
     )
 
+    fat_time = _timestamp_value(integrated_fat_result["executed_at"])
+    vendor_times = [
+        *(_timestamp_value(item["imported_at"]) for item in studio_results),
+        _timestamp_value(ignition_result["exported_at"]),
+    ]
+    if vendor_times and fat_time < max(vendor_times):
+        raise ControlsQualificationError(
+            "integrated Controls FAT execution cannot precede qualified vendor "
+            "import/export evidence"
+        )
+
     external_vendor_ready = (
         all(item["status"] == "PASS" for item in studio_results)
         and ignition_result["status"] == "PASS"
@@ -775,6 +794,19 @@ def qualify_controls_build(
         manifest=manifest,
         approval_context_sha256=approval_context_sha256,
     )
+    if engineering_approval["status"] == "APPROVED":
+        if (
+            engineering_approval["approved_by"].strip().casefold()
+            == integrated_fat_result["executed_by"].strip().casefold()
+        ):
+            raise ControlsQualificationError(
+                "build-wide engineering approver must be independent of the "
+                "integrated FAT executor"
+            )
+        if _timestamp_value(engineering_approval["approved_at"]) < fat_time:
+            raise ControlsQualificationError(
+                "build-wide engineering approval cannot precede integrated FAT execution"
+            )
     approved = (
         runtime_ready
         and controller_approvals_complete
@@ -803,6 +835,9 @@ def qualify_controls_build(
         "approval_context": approval_context,
         "approval_context_sha256": approval_context_sha256,
         "engineering_approval": engineering_approval,
+        "separation_of_duties": (
+            "PASS" if engineering_approval["status"] == "APPROVED" else "PENDING"
+        ),
         "human_engineering_approval_required": True,
         "production_release_ready": approved,
         "production_deployment_performed": False,
