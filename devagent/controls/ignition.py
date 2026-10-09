@@ -211,3 +211,39 @@ def ignition_binding_check(
         "gateway_import_validation": "NOT_RUN",
         "gateway_deployment_performed": False,
     }
+
+
+def ignition_semantic_projection(
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Return the normalized semantic surface that a Gateway export adapter must prove.
+
+    This intentionally excludes generator bookkeeping fields and contains only the
+    engineering meaning that must survive staging import/export.
+    """
+
+    required = {
+        "udts.json",
+        "equipment.json",
+        "alarms.json",
+        "history.json",
+        "views.json",
+        "navigation.json",
+    }
+    missing = sorted(required - set(payloads))
+    if missing:
+        raise ValueError(
+            "Ignition semantic projection is missing staging payload(s): "
+            + ", ".join(missing)
+        )
+
+    projection = {
+        "schema": "devagent-controls-ignition-semantic-projection-v1",
+        "udt_definitions": payloads["udts.json"]["udt_definitions"],
+        "instances": payloads["equipment.json"]["instances"],
+        "alarms": payloads["alarms.json"]["alarms"],
+        "history": payloads["history.json"]["history"],
+        "views": payloads["views.json"]["views"],
+        "navigation": payloads["navigation.json"]["navigation"],
+    }
+    return projection
