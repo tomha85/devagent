@@ -109,7 +109,9 @@ def normalized_spec_payload(spec: ControlSystemSpec) -> dict[str, Any]:
                 "alarms": [
                     {
                         "id": alarm.id,
+                        "description": alarm.description,
                         "priority": alarm.priority,
+                        "on_delay_ms": alarm.on_delay_ms,
                         "operator_response": alarm.operator_response,
                         "source_signal": alarm.source_signal,
                     }
