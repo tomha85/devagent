@@ -217,9 +217,11 @@ def _equipment_rules(item: EquipmentSpec) -> list[ControlsRuleResult]:
 
 
 def evaluate_controls_rules(spec: ControlSystemSpec) -> tuple[ControlsRuleResult, ...]:
+    """Evaluate company rules in canonical order independent of author input order."""
+
     results: list[ControlsRuleResult] = []
     assigned = {item.controller for item in spec.equipment}
-    for controller in spec.controllers:
+    for controller in sorted(spec.controllers, key=lambda value: value.id):
         results.append(
             _result(
                 "CTRL-E020",
@@ -229,9 +231,14 @@ def evaluate_controls_rules(spec: ControlSystemSpec) -> tuple[ControlsRuleResult
                 "Controller has no assigned equipment; empty generated projects are prohibited.",
             )
         )
-    for item in spec.equipment:
+    for item in sorted(spec.equipment, key=lambda value: value.id):
         results.extend(_equipment_rules(item))
-    return tuple(results)
+    return tuple(
+        sorted(
+            results,
+            key=lambda value: (value.subject, value.id, value.status, value.summary),
+        )
+    )
 
 
 def rules_pass(results: tuple[ControlsRuleResult, ...]) -> bool:
