@@ -92,7 +92,7 @@ def _equipment(kind: str, equipment_id: str, controller: str) -> dict:
             "controller": controller,
             "signals": ["PROCESS_OK", "BLOCKED", "OPEN_FB", "CLOSED_FB"],
             "commands": {"OPEN": True, "CLOSE": True},
-            "status": ["OPEN", "CLOSED"],
+            "status": ["READY", "OPEN", "CLOSED", "FAULTED"],
             "permissives": ["PROCESS_OK"],
             "interlocks": ["BLOCKED"],
             "faults": ["BLOCKED"],
