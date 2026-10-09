@@ -99,3 +99,25 @@ def test_entrypoint_routes_controls_catalog(capsys) -> None:
     assert '"devagent-controls-catalog-v2"' in output
     assert '"conveyor-v1"' in output
     assert '"motor-v1"' in output
+
+
+def test_entrypoint_routes_controls_diff(tmp_path, capsys) -> None:
+    baseline_spec = _write_spec(tmp_path)
+    baseline_build = tmp_path / "baseline-build"
+    assert main(
+        ["controls", "build", str(baseline_spec), "--output-dir", str(baseline_build)]
+    ) == 0
+    capsys.readouterr()
+
+    candidate_payload = json.loads(baseline_spec.read_text(encoding="utf-8"))
+    candidate_payload["equipment"][0]["hmi"]["historian"] = False
+    candidate_spec = tmp_path / "candidate.json"
+    candidate_spec.write_text(json.dumps(candidate_payload), encoding="utf-8")
+
+    assert main(
+        ["controls", "diff", str(baseline_build), str(candidate_spec)]
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["schema"] == "devagent-controls-spec-diff-v1"
+    assert output["changed"] is True
+    assert output["change_count"] >= 1
