@@ -20,7 +20,7 @@ def _write_spec(tmp_path):
     path.write_text(
         json.dumps(
             {
-                "schema": "devagent-controls-spec-v1",
+                "schema": "devagent-controls-spec-v2",
                 "project_id": "PACK01",
                 "controllers": [
                     {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
@@ -114,7 +114,7 @@ def test_verifier_detects_post_build_tampering(tmp_path) -> None:
 
 def test_controller_names_that_collide_after_rockwell_normalization_fail_closed(tmp_path) -> None:
     payload = {
-        "schema": "devagent-controls-spec-v1",
+        "schema": "devagent-controls-spec-v2",
         "project_id": "COLLISION_TEST",
         "controllers": [
             {"id": "PLC-1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"},
