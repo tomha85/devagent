@@ -11,7 +11,7 @@ from devagent.controls.ir import ControlsIR
 from devagent.controls.models import ControllerSpec, EquipmentSpec
 from devagent.controls.symbols import controller_symbol, equipment_symbol_map
 
-ROCKWELL_GENERATOR_VERSION = "1.4.0"
+ROCKWELL_GENERATOR_VERSION = "1.5.0"
 ROCKWELL_SCHEMA_REVISION = "1.0"
 ROCKWELL_SOFTWARE_REVISION = "36.00"
 ROCKWELL_REFERENCE_REPOSITORY = "RockwellAutomation/ra-logix-cicd"
@@ -170,7 +170,17 @@ def _restart_safe_primary_rungs(
     pulse = GeneratedRung(
         equipment_id=equipment.id,
         purpose="PRIMARY_EDGE_PULSE",
-        text=f"XIC({commands[primary]})XIO({prev_tag})OTE({pulse_tag});",
+        # S:FS is a Rockwell status keyword (not a tag). Blocking the first
+        # normal scan prevents a retained/held primary command from producing
+        # a startup edge after Run-mode entry. The following memory rung still
+        # captures the held command, so later scans cannot recreate the edge
+        # until the command first returns false.
+        text=(
+            f"XIC({commands[primary]})"
+            f"XIO({prev_tag})"
+            "XIO(S:FS)"
+            f"OTE({pulse_tag});"
+        ),
         output_tag=pulse_tag,
     )
     memory = GeneratedRung(
