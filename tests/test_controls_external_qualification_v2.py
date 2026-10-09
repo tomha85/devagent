@@ -168,6 +168,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
             "status": "PASS",
             "controls_ir_sha256": manifest["controls_ir_sha256"],
             "artifact_sha256": ignition_hashes,
+            "gateway_id": "PACKAGING-GW-TEST",
             "gateway_version": "8.1",
             "imported_at": "2026-10-08T18:06:00Z",
         },
@@ -199,6 +200,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
             "schema": "devagent-controls-ignition-gateway-export-evidence-v1",
             "status": "PASS",
             "controls_ir_sha256": manifest["controls_ir_sha256"],
+            "gateway_id": "PACKAGING-GW-TEST",
             "gateway_version": "8.1",
             "adapter": "test-normalized-gateway-export",
             "adapter_version": "1.0.0",
@@ -304,6 +306,8 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
             "fat_plan_sha256": hashlib.sha256(fat_plan_path.read_bytes()).hexdigest(),
             "runtime_bindings": runtime_bindings,
             "run_id": "CONTROLS-FAT-001",
+            "executed_by": "Controls FAT Engineer",
+            "environment_id": "PACKAGING-HIL-01",
             "executed_at": "2026-10-08T18:20:00Z",
             "results": [
                 {
