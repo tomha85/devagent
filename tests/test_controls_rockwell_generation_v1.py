@@ -28,6 +28,7 @@ def _spec():
                     "status": ["READY", "RUNNING", "FAULTED"],
                     "permissives": ["SAFETY_OK", "DOWNSTREAM_READY"],
                     "interlocks": ["GUARD_OPEN", "DRIVE_FAULT"],
+                    "faults": ["DRIVE_FAULT"],
                     "alarms": [
                         {
                             "id": "ALM_DRIVE_FAULT",
