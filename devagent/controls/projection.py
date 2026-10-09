@@ -36,8 +36,15 @@ def expected_plc_projection(ir: ControlsIR, controller: ControllerSpec) -> dict[
 
     for item in equipment:
         symbols = equipment_symbol_map(item)
-        for category in ("signals", "commands", "status", "outputs"):
+        for category in ("signals", "commands", "status", "outputs", "internal"):
             for logical_name, tag_name in sorted(dict(symbols[category]).items()):
+                logical_kind = {
+                    "signals": "SIGNAL",
+                    "commands": "COMMAND",
+                    "status": "STATUS",
+                    "outputs": "OUTPUT",
+                    "internal": "INTERNAL",
+                }[category]
                 tags.append(
                     {
                         "name": str(tag_name),
@@ -46,7 +53,7 @@ def expected_plc_projection(ir: ControlsIR, controller: ControllerSpec) -> dict[
                             "Read/Write" if category == "commands" else "Read Only"
                         ),
                         "equipment_id": item.id,
-                        "logical_ref": f"{category[:-1].upper()}.{logical_name}",
+                        "logical_ref": f"{logical_kind}.{logical_name}",
                     }
                 )
 
