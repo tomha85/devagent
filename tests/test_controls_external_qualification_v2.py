@@ -332,6 +332,7 @@ def test_signed_vendor_runtime_and_human_approval_close_external_loop(tmp_path: 
                     "status": "PASS",
                     "observed": "Expected integrated PLC/HMI behavior observed",
                     "observed_value": case["expected_value"],
+                    "observed_after_ms": case.get("evaluation_delay_ms", 0),
                     "timestamp": "2026-10-08T18:20:00Z",
                     "evidence": [f"trace://controls/{case['id']}"],
                 }
