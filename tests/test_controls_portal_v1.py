@@ -8,7 +8,7 @@ def _payload():
         "schema": "devagent-controls-spec-v2",
         "project_id": "CELL01",
         "controllers": [
-            {"id": "PLC1", "vendor": "ROCKWELL", "platform": "COMPACTLOGIX"}
+            {"id": "PLC1", "vendor": "ROCKWELL", "platform": "CONTROLLOGIX"}
         ],
         "equipment": [
             {
