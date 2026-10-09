@@ -7,7 +7,7 @@ from devagent.controls.catalog import get_standard
 from devagent.controls.ir import ControlsIR
 from devagent.controls.models import EquipmentSpec, RequirementSpec
 
-FAT_GENERATOR_VERSION = "2.4.0"
+FAT_GENERATOR_VERSION = "2.5.0"
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class ControlsFATCase:
     expected_value: bool
     requirement_ids: tuple[str, ...]
     prior_state: tuple[tuple[str, bool], ...] = ()
+    evaluation_delay_ms: int = 0
     execution_status: str = "NOT_RUN"
     method: str = "DETERMINISTIC_STANDARD_MODEL"
 
@@ -58,6 +59,7 @@ def _case(
     expected: bool,
     requirement_ids: tuple[str, ...] = (),
     prior_state: dict[str, bool] | None = None,
+    evaluation_delay_ms: int = 0,
     method: str = "DETERMINISTIC_STANDARD_MODEL",
 ) -> ControlsFATCase:
     return ControlsFATCase(
@@ -70,6 +72,7 @@ def _case(
         expected_value=expected,
         requirement_ids=tuple(sorted(requirement_ids)),
         prior_state=tuple(sorted((prior_state or {}).items())),
+        evaluation_delay_ms=evaluation_delay_ms,
         method=method,
     )
 
@@ -327,6 +330,7 @@ def generate_equipment_fat(item: EquipmentSpec) -> tuple[ControlsFATCase, ...]:
                 inputs=alarm_inputs,
                 expected_output=f"ALARM.{alarm.id}",
                 expected=True,
+                evaluation_delay_ms=alarm.on_delay_ms,
                 method="PLC_HMI_BINDING_MODEL",
             )
         )
@@ -486,6 +490,7 @@ def fat_payload(cases: tuple[ControlsFATCase, ...]) -> dict[str, Any]:
                 "expected_value": case.expected_value,
                 "requirement_ids": list(case.requirement_ids),
                 "prior_state": dict(case.prior_state),
+                "evaluation_delay_ms": case.evaluation_delay_ms,
                 "execution_status": case.execution_status,
                 "method": case.method,
             }
